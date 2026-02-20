@@ -70,11 +70,14 @@ class GiteaProvider(ProviderInterface):
         full_diff = self.get_pr_diff(owner, repo, pr_number)
         hunks = parse_unified_diff(full_diff)
         lines: list[str] = []
+        headers_emitted = False
         for hunk in hunks:
             if hunk.path != file_path:
                 continue
-            lines.append(f"--- a/{hunk.path}")
-            lines.append(f"+++ b/{hunk.path}")
+            if not headers_emitted:
+                lines.append(f"--- a/{hunk.path}")
+                lines.append(f"+++ b/{hunk.path}")
+                headers_emitted = True
             lines.append(
                 f"@@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},{hunk.new_count} @@"
             )
@@ -185,18 +188,28 @@ class GiteaProvider(ProviderInterface):
         return result
 
     def resolve_comment(self, owner: str, repo: str, comment_id: str) -> None:
-        """Mark comment as resolved via PATCH if Gitea supports it."""
-        self._patch(
-            f"/repos/{owner}/{repo}/pulls/comments/{comment_id}",
-            {"resolved": True},
-        )
+        """Mark comment as resolved. Gitea does not support updating PR review comments; no-op."""
+        try:
+            self._patch(
+                f"/repos/{owner}/{repo}/pulls/comments/{comment_id}",
+                {"resolved": True},
+            )
+        except httpx.HTTPStatusError as e:
+            # Gitea API does not support PATCH on PR review comments (typically 404/405)
+            # No-op for runtime safety if called despite capabilities() returning False
+            pass
 
     def unresolve_comment(self, owner: str, repo: str, comment_id: str) -> None:
-        """Mark comment as unresolved."""
-        self._patch(
-            f"/repos/{owner}/{repo}/pulls/comments/{comment_id}",
-            {"resolved": False},
-        )
+        """Mark comment as unresolved. Gitea does not support updating PR review comments; no-op."""
+        try:
+            self._patch(
+                f"/repos/{owner}/{repo}/pulls/comments/{comment_id}",
+                {"resolved": False},
+            )
+        except httpx.HTTPStatusError as e:
+            # Gitea API does not support PATCH on PR review comments (typically 404/405)
+            # No-op for runtime safety if called despite capabilities() returning False
+            pass
 
     def post_pr_summary_comment(
         self, owner: str, repo: str, pr_number: int, body: str
@@ -208,5 +221,5 @@ class GiteaProvider(ProviderInterface):
         )
 
     def capabilities(self) -> ProviderCapabilities:
-        """Gitea may support resolved status; check API. Conservative: True for resolvable."""
-        return ProviderCapabilities(resolvable_comments=True, supports_suggestions=False)
+        """Return provider capability flags. Gitea does not support resolving/unresolving PR review comments."""
+        return ProviderCapabilities(resolvable_comments=False, supports_suggestions=False)

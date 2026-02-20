@@ -27,5 +27,5 @@ def build_fingerprint(
     parts = [path, content_hash_val, issue_code]
     if anchor is not None:
         parts.append(normalize_anchor(anchor))
-    raw = hashlib.sha256(":".join(parts).encode("utf-8")).hexdigest()
+    raw = hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()
     return raw[:24]

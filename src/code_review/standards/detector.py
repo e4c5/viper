@@ -82,9 +82,8 @@ def _extract_python_frameworks(content: str) -> list[str]:
 def _extract_java_frameworks(content: str) -> list[str]:
     """Extract Java/Spring deps from pom.xml or build.gradle content."""
     found: list[str] = []
-    content_lower = content.lower()
     for fw in _JAVA_FRAMEWORKS:
-        if fw in content_lower and fw not in found:
+        if fw not in found and re.search(rf"(?<!-)\b{re.escape(fw)}(?:-|\b)", content, re.IGNORECASE):
             found.append(fw)
     return found
 

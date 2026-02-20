@@ -29,6 +29,8 @@ def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
     current_new_start = 0
     current_new_count = 0
     current_lines: list[tuple[str, int | None, int | None]] = []
+    old_ln = 0
+    new_ln = 0
     hunk_header = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
     for line in diff_text.splitlines():
