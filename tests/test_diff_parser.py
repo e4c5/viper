@@ -51,6 +51,20 @@ def test_iter_new_lines_includes_blank_lines():
     assert items == [("foo.py", 2, ""), ("foo.py", 3, "z")]
 
 
+def test_parse_path_starting_with_b():
+    """Path b/bar.py must not be corrupted by stripping leading 'b' chars."""
+    diff = """diff --git a/b/bar.py b/b/bar.py
+--- a/b/bar.py
++++ b/b/bar.py
+@@ -1,1 +1,2 @@
+ x
++y
+"""
+    hunks = parse_unified_diff(diff)
+    assert len(hunks) == 1
+    assert hunks[0].path == "b/bar.py"
+
+
 def test_parse_multi_file():
     diff = """diff --git a/a.py b/a.py
 --- a/a.py

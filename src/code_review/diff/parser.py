@@ -48,7 +48,7 @@ def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
             # Parse path: "diff --git a/foo.py b/foo.py" -> use new file path (b/)
             parts = line.split()
             if len(parts) >= 4:
-                current_path = parts[3].lstrip("b/")
+                current_path = parts[3].removeprefix("b/")
             continue
 
         if line.startswith("--- ") or line.startswith("+++ "):

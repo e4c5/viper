@@ -103,6 +103,7 @@ def test_get_pr_diff_for_file(mock_client):
     full_diff = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py\n@@ -1,2 +1,3 @@\n x\n+y\n z"
     mock_resp = MagicMock()
     mock_resp.text = full_diff
+    mock_resp.headers = {}
     mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
 
     p = GiteaProvider("https://gitea.example.com", "tok")

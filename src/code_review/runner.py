@@ -1,5 +1,7 @@
 """ADK Runner setup and programmatic invocation for code review."""
 
+import uuid
+
 from google.genai import types
 
 from code_review.agent import create_review_agent
@@ -10,7 +12,6 @@ from code_review.standards import detect_from_paths, get_review_standards
 
 APP_NAME = "code_review"
 USER_ID = "reviewer"
-SESSION_ID = "pr_review"
 
 
 def run_review(owner: str, repo: str, pr_number: int, head_sha: str = "") -> None:
@@ -33,11 +34,12 @@ def run_review(owner: str, repo: str, pr_number: int, head_sha: str = "") -> Non
 
     agent = create_review_agent(provider, review_standards)
 
+    session_id = f"{owner}_{repo}_{pr_number}_{uuid.uuid4().hex[:12]}"
     session_service = InMemorySessionService()
     session_service.create_session_sync(
         app_name=APP_NAME,
         user_id=USER_ID,
-        session_id=SESSION_ID,
+        session_id=session_id,
     )
 
     runner = Runner(
@@ -54,7 +56,7 @@ def run_review(owner: str, repo: str, pr_number: int, head_sha: str = "") -> Non
 
     for event in runner.run(
         user_id=USER_ID,
-        session_id=SESSION_ID,
+        session_id=session_id,
         new_message=content,
     ):
         if event.is_final_response() and event.content and event.content.parts:

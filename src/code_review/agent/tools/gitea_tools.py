@@ -52,7 +52,13 @@ def create_gitea_tools(provider: ProviderInterface) -> list[Callable]:
         return [f.model_dump() for f in files]
 
     def post_review_comment(
-        owner: str, repo: str, pr_number: int, path: str, line: int, body: str
+        owner: str,
+        repo: str,
+        pr_number: int,
+        path: str,
+        line: int,
+        body: str,
+        head_sha: str = "",
     ) -> str:
         """Post an inline review comment on a specific line.
 
@@ -63,11 +69,14 @@ def create_gitea_tools(provider: ProviderInterface) -> list[Callable]:
             path: File path.
             line: Line number (1-based).
             body: Comment body. Use [Critical], [Suggestion], or [Info] prefix.
+            head_sha: Optional head commit SHA for the PR.
 
         Returns:
             Confirmation message.
         """
-        provider.post_review_comments(owner, repo, pr_number, [(path, line, body)])
+        provider.post_review_comments(
+            owner, repo, pr_number, [(path, line, body)], head_sha=head_sha
+        )
         return f"Posted comment on {path}:{line}"
 
     def get_existing_review_comments(owner: str, repo: str, pr_number: int) -> list[dict]:

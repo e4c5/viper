@@ -70,7 +70,6 @@ class GiteaProvider(ProviderInterface):
         for hunk in hunks:
             if hunk.path != file_path:
                 continue
-            in_file = True
             lines.append(f"--- a/{hunk.path}")
             lines.append(f"+++ b/{hunk.path}")
             lines.append(
@@ -81,8 +80,10 @@ class GiteaProvider(ProviderInterface):
                     lines.append(" " + content)
                 elif new_ln is not None:
                     lines.append("+" + content)
-                else:
+                elif old_ln is not None:
                     lines.append("-" + content)
+                else:
+                    lines.append("\\" + content)
         return "\n".join(lines) if lines else ""
 
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
@@ -153,6 +154,8 @@ class GiteaProvider(ProviderInterface):
             "event": "COMMENT",
             "comments": review_comments,
         }
+        if head_sha:
+            payload["commit_id"] = head_sha
         self._post(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews", payload)
 
     def get_existing_review_comments(

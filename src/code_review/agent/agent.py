@@ -1,8 +1,15 @@
 """ADK agent definition for code review."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from code_review.agent.tools.gitea_tools import create_gitea_tools
 from code_review.models import get_configured_model
 from code_review.providers.base import ProviderInterface
+
+if TYPE_CHECKING:
+    from google.adk.agents import Agent
 
 # Base instruction; review_standards fragment is appended by runner
 BASE_INSTRUCTION = """
@@ -17,7 +24,7 @@ Use post_review_comment for each finding: path, line, and body with [Critical]/[
 def create_review_agent(
     provider: ProviderInterface,
     review_standards: str = "",
-) -> "Agent":
+) -> Agent:
     """Create the code review LlmAgent with tools and instruction."""
     from google.adk.agents import Agent
 

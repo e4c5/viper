@@ -1,5 +1,6 @@
 """Language and framework detection from file paths and content."""
 
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Literal
@@ -71,9 +72,9 @@ def _extract_python_frameworks(content: str) -> list[str]:
         pkg = line.split("==")[0].split(">=")[0].split("[")[0].strip()
         if pkg in _PYTHON_FRAMEWORKS:
             found.append(pkg)
-        # pyproject.toml: "django" or django = "^4.0"
+        # pyproject.toml: "django" or django = "^4.0" (match as standalone token, not e.g. my-django-app)
         for fw in _PYTHON_FRAMEWORKS:
-            if fw in line and fw not in found:
+            if fw not in found and re.search(rf"(?<!-)\b{re.escape(fw)}\b(?!-)", line):
                 found.append(fw)
     return found
 
