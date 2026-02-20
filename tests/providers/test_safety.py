@@ -9,15 +9,17 @@ def test_truncate_repo_content_under_limit():
 
 
 def test_truncate_repo_content_over_limit():
+    max_bytes = 16 * 1024
     content = "a" * (20 * 1024)
-    result = truncate_repo_content(content, max_bytes=16 * 1024)
+    result = truncate_repo_content(content, max_bytes=max_bytes)
     assert result.endswith(TRUNCATE_SUFFIX)
-    assert len(result.encode("utf-8")) <= 16 * 1024 + len(TRUNCATE_SUFFIX.encode("utf-8"))
+    assert len(result.encode("utf-8")) <= max_bytes
 
 
 def test_truncate_repo_content_utf8_boundary():
-    # Multi-byte chars: 3 bytes each, so 5 chars = 15 bytes
-    content = "\u00e9" * 6000  # 18000 bytes
-    result = truncate_repo_content(content, max_bytes=100)
+    # Multi-byte chars (é = 2 bytes); errors="ignore" drops incomplete trailing bytes
+    max_bytes = 100
+    content = "\u00e9" * 6000  # 12000 bytes
+    result = truncate_repo_content(content, max_bytes=max_bytes)
     assert result.endswith(TRUNCATE_SUFFIX)
-    assert len(result.encode("utf-8")) <= 100 + len(TRUNCATE_SUFFIX.encode("utf-8"))
+    assert len(result.encode("utf-8")) <= max_bytes

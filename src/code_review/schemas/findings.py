@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class FindingV1(BaseModel):
@@ -19,6 +19,14 @@ class FindingV1(BaseModel):
     category: str | None = Field(default=None, description="e.g. Correctness, Security, Style; use NeedsVerification for uncertainty")
     anchor: str | None = Field(default=None, description="Optional anchor text for stable positioning when lines shift")
     fingerprint_hint: str | None = Field(default=None, description="Code span or anchor text to help runner fingerprinting")
+
+    @model_validator(mode="after")
+    def end_line_not_less_than_line(self) -> "FindingV1":
+        if self.end_line is not None and self.end_line < self.line:
+            raise ValueError(
+                f"end_line ({self.end_line}) must be >= line ({self.line})"
+            )
+        return self
 
     def get_body(self) -> str:
         """Comment body; use body if set else message."""

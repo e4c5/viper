@@ -194,7 +194,7 @@ class GiteaProvider(ProviderInterface):
                 f"/repos/{owner}/{repo}/pulls/comments/{comment_id}",
                 {"resolved": True},
             )
-        except httpx.HTTPStatusError as e:
+        except httpx.HTTPStatusError:
             # Gitea API does not support PATCH on PR review comments (typically 404/405)
             # No-op for runtime safety if called despite capabilities() returning False
             pass
@@ -206,7 +206,7 @@ class GiteaProvider(ProviderInterface):
                 f"/repos/{owner}/{repo}/pulls/comments/{comment_id}",
                 {"resolved": False},
             )
-        except httpx.HTTPStatusError as e:
+        except httpx.HTTPStatusError:
             # Gitea API does not support PATCH on PR review comments (typically 404/405)
             # No-op for runtime safety if called despite capabilities() returning False
             pass

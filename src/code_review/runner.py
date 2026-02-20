@@ -182,6 +182,11 @@ def run_review(
             print(f"{f.path}:{f.line} [{f.severity}] {f.get_body()}")
 
     if not dry_run and to_post:
+        if not head_sha:
+            raise ValueError(
+                "head_sha is required when posting comments (dry_run=False). "
+                "Provide head_sha or use --dry-run to skip posting."
+            )
         comments = [
             (f.path, f.line, _finding_to_comment_body(f)) for f in to_post
         ]

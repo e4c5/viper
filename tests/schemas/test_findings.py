@@ -57,3 +57,15 @@ def test_finding_v1_line_ge_1():
             code="x",
             message="x",
         )
+
+
+def test_finding_v1_end_line_not_less_than_line():
+    with pytest.raises(ValueError, match="end_line.*must be >= line"):
+        FindingV1(
+            path="x.py",
+            line=5,
+            end_line=2,
+            severity="suggestion",
+            code="x",
+            message="Invalid range",
+        )

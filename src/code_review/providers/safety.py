@@ -16,5 +16,5 @@ def truncate_repo_content(content: str, max_bytes: int = 16 * 1024) -> str:
     take = max_bytes - len(suffix_bytes)
     if take <= 0:
         return TRUNCATE_SUFFIX.strip()
-    truncated = encoded[:take].decode("utf-8", errors="replace")
+    truncated = encoded[:take].decode("utf-8", errors="ignore")
     return truncated + TRUNCATE_SUFFIX
