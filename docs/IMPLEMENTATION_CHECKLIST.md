@@ -63,7 +63,7 @@ Derived from the AI Code Review Agent plan. Mark items with `[x]` when complete.
 ### 1.5 Diff Parser
 - [x] `parse_unified_diff()` — hunks, old/new line maps
 - [x] `DiffHunk(path, old_start, old_count, new_start, new_count, lines)`
-- [ ] Commentable positions: map `(path, line_in_new_file)` to hunk index and API-specific coordinates
+- [x] Commentable positions: map `(path, line_in_new_file)` to hunk index and API-specific coordinates
 - [ ] Provider adapters convert internal representation to SCM API payload
 
 ### 1.6 ADK Tools (agent tools)
@@ -87,12 +87,12 @@ Derived from the AI Code Review Agent plan. Mark items with `[x]` when complete.
 - [x] Creates provider, detects language, gets review standards
 - [x] Creates agent, runs Runner.run()
 - [x] Runner fetches existing comments and builds ignore list (not agent)
-- [ ] Runner invokes agent with pre-chunked diff when over token budget
+- [x] Runner invokes agent with pre-chunked diff when over token budget
 - [x] Runner parses agent structured output (FindingV1)
 - [x] Runner filters findings against ignore list
 - [x] Runner posts via provider (not agent)
-- [ ] Token budget check via LLM_CONTEXT_WINDOW
-- [ ] File-by-file loop when diff exceeds threshold
+- [x] Token budget check via LLM_CONTEXT_WINDOW
+- [x] File-by-file loop when diff exceeds threshold
 - [x] Structured output validation; re-ask on parse failure; fail gracefully (invalid items skipped)
 
 ### 1.9 Schemas (FindingV1)
@@ -120,7 +120,7 @@ Derived from the AI Code Review Agent plan. Mark items with `[x]` when complete.
 ### 1.12 Repo-Content Safety (Section 1.9)
 - [x] Max size per file (e.g. 16KB); truncate or reject
 - [x] Explicit delimiter when truncated: `--- (truncated, max size exceeded)`
-- [ ] System instruction immutable; repo content cannot override tool rules
+- [x] System instruction immutable; repo content cannot override tool rules
 
 ### 1.13 CLI (__main__.py)
 - [x] `code-review review --owner --repo --pr [--head-sha]`
@@ -134,10 +134,10 @@ Derived from the AI Code Review Agent plan. Mark items with `[x]` when complete.
 - [x] `tests/test_runner_findings.py` (parse findings, ignore set)
 - [x] `tests/diff/test_parser.py` (or test_diff_parser.py)
 - [x] `tests/test_runner.py` (basic)
-- [ ] `tests/standards/test_detector.py` — extensions, frameworks, confidence
-- [ ] `tests/models/test_model_factory.py` — get_configured_model per provider
-- [ ] `tests/tools/test_scm_tools.py` — tools call provider correctly
-- [ ] `tests/agent/test_runner.py` — file-by-file, ignore list, posts net-new
+- [x] `tests/standards/test_detector.py` — extensions, frameworks, confidence
+- [x] `tests/models/test_model_factory.py` — get_configured_model per provider
+- [x] `tests/tools/test_scm_tools.py` — tools call provider correctly
+- [x] `tests/test_runner.py` — ignore list, posts net-new (mocked run)
 
 ---
 

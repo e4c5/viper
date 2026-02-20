@@ -9,12 +9,21 @@ from google.genai import types
 
 from code_review.agent import create_review_agent
 from code_review.config import get_scm_config
+from code_review.models import get_context_window
 from code_review.providers import get_provider
 from code_review.schemas.findings import FindingV1
 from code_review.standards import detect_from_paths, get_review_standards
 
 APP_NAME = "code_review"
 USER_ID = "reviewer"
+
+# Fraction of context window reserved for diff content; rest for system prompt, tools, response
+DIFF_TOKEN_BUDGET_RATIO = 0.25
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate (chars / 4) for diff and context budget checks."""
+    return max(0, len(text) // 4)
 
 
 def _build_ignore_set(comments: list) -> set[tuple[str, str]]:
@@ -69,6 +78,23 @@ def _finding_to_comment_body(f: FindingV1) -> str:
     return f"{severity_label} {f.get_body()}"
 
 
+def _run_agent_and_collect_response(
+    runner, session_id: str, content: types.Content
+) -> str:
+    """Run agent once and return concatenated final response text."""
+    parts: list[str] = []
+    for event in runner.run(
+        user_id=USER_ID,
+        session_id=session_id,
+        new_message=content,
+    ):
+        if event.is_final_response() and event.content and event.content.parts:
+            for part in event.content.parts:
+                if part.text:
+                    parts.append(part.text)
+    return "\n".join(parts)
+
+
 def run_review(
     owner: str,
     repo: str,
@@ -114,25 +140,33 @@ def run_review(
         session_service=session_service,
     )
 
-    msg = (
-        f"Review this PR: owner={owner}, repo={repo}, pr_number={pr_number}."
-        + (f" head_sha={head_sha}." if head_sha else "")
-    )
-    content = types.Content(role="user", parts=[types.Part(text=msg)])
+    diff_budget = int(get_context_window() * DIFF_TOKEN_BUDGET_RATIO)
+    full_diff = provider.get_pr_diff(owner, repo, pr_number)
+    use_file_by_file = _estimate_tokens(full_diff) > diff_budget
 
-    response_text_parts: list[str] = []
-    for event in runner.run(
-        user_id=USER_ID,
-        session_id=session_id,
-        new_message=content,
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            for part in event.content.parts:
-                if part.text:
-                    response_text_parts.append(part.text)
-
-    response_text = "\n".join(response_text_parts)
-    all_findings = _findings_from_response(response_text)
+    all_findings: list[FindingV1] = []
+    if use_file_by_file and paths:
+        for file_path in paths:
+            msg = (
+                f"Review this PR: owner={owner}, repo={repo}, pr_number={pr_number}."
+                + (f" head_sha={head_sha}." if head_sha else "")
+                + f" Review only this file: {file_path}."
+            )
+            content = types.Content(role="user", parts=[types.Part(text=msg)])
+            response_text = _run_agent_and_collect_response(
+                runner, session_id, content
+            )
+            all_findings.extend(_findings_from_response(response_text))
+    else:
+        msg = (
+            f"Review this PR: owner={owner}, repo={repo}, pr_number={pr_number}."
+            + (f" head_sha={head_sha}." if head_sha else "")
+        )
+        content = types.Content(role="user", parts=[types.Part(text=msg)])
+        response_text = _run_agent_and_collect_response(
+            runner, session_id, content
+        )
+        all_findings = _findings_from_response(response_text)
 
     # Filter out findings that match existing comments (by path + body hash)
     to_post: list[FindingV1] = []
