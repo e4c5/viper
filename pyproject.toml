@@ -51,6 +51,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["e2e: E2E tests (require Docker + Gitea, run with RUN_E2E=1)"]
 
 [tool.ruff]
 line-length = 100

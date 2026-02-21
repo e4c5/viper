@@ -64,7 +64,7 @@ Derived from the AI Code Review Agent plan. Mark items with `[x]` when complete.
 - [x] `parse_unified_diff()` — hunks, old/new line maps
 - [x] `DiffHunk(path, old_start, old_count, new_start, new_count, lines)`
 - [x] Commentable positions: map `(path, line_in_new_file)` to hunk index and API-specific coordinates
-- [ ] Provider adapters convert internal representation to SCM API payload
+- [x] Provider adapters convert internal representation to SCM API payload (`InlineComment` in providers/base.py; Gitea converts to API payload)
 
 ### 1.6 ADK Tools (agent tools)
 - [x] `get_pr_diff`
@@ -107,8 +107,8 @@ Derived from the AI Code Review Agent plan. Mark items with `[x]` when complete.
 - [x] Path signals → framework (requirements.txt, package.json, go.mod, pom.xml, etc.)
 - [x] detect_from_paths(paths)
 - [x] detect_from_paths_and_content(paths, content_by_path)
-- [ ] Confidence as 0.0–1.0 with thresholds
-- [ ] Monorepo mode: detect per file and per folder root
+- [x] Confidence as 0.0–1.0 with thresholds (confidence_score + CONFIDENCE_THRESHOLD_* in detector)
+- [x] Monorepo mode: detect per file and per folder root (`detect_from_paths_per_folder_root` in detector)
 
 ### 1.11 Prompts
 - [x] Base prompt: role, categories, severity levels, comment format
@@ -231,36 +231,36 @@ Derived from the AI Code Review Agent plan. Mark items with `[x]` when complete.
 
 ## Phase 5: Integration Testing
 
-- [ ] E2E: Docker Compose up; seed Gitea; create PR; run agent; assert comments
-- [ ] Golden tests: sample diffs + expected position mapping
-- [ ] Rate limiting / retries: mocked 429 and transient failures
-- [ ] Large PR fixture: validate chunking; no duplicate posts across file-by-file runs
+- [x] E2E: Docker Compose up; seed Gitea; create PR; run agent; assert comments (tests/e2e/test_docker_gitea_e2e.py; run with RUN_E2E=1)
+- [x] Golden tests: sample diffs + expected position mapping (`tests/diff/test_golden_diff_position.py`)
+- [x] Rate limiting / retries: mocked 429 and transient failures (GiteaProvider retry on 429/5xx; tests/providers/test_rate_limit_retry.py)
+- [x] Large PR fixture: validate chunking; no duplicate posts across file-by-file runs (tests/runner/test_large_pr_chunking.py)
 
 ---
 
 ## Phase 6: Provider Extensibility
 
 ### 6.1 GitHub Provider
-- [ ] `providers/github.py` implements ProviderInterface
-- [ ] GET /repos/.../pulls/{n} with Accept: application/vnd.github.v3.diff
-- [ ] GET /repos/.../contents/{path}?ref={ref}
-- [ ] GET /repos/.../pulls/{n}/files
-- [ ] POST /repos/.../pulls/{n}/reviews (comments array)
-- [ ] GET /repos/.../pulls/{n}/comments
-- [ ] get_provider() supports "github"
-- [ ] tests/providers/test_github.py (mocked HTTP)
+- [x] `providers/github.py` implements ProviderInterface
+- [x] GET /repos/.../pulls/{n} with Accept: application/vnd.github.v3.diff
+- [x] GET /repos/.../contents/{path}?ref={ref}
+- [x] GET /repos/.../pulls/{n}/files
+- [x] POST /repos/.../pulls/{n}/reviews (comments array)
+- [x] GET /repos/.../pulls/{n}/comments
+- [x] get_provider() supports "github"
+- [x] tests/providers/test_github.py (mocked HTTP)
 
 ### 6.2 GitLab Provider
-- [ ] providers/gitlab.py
-- [ ] tests/providers/test_gitlab.py
+- [x] providers/gitlab.py
+- [x] tests/providers/test_gitlab.py
 
 ### 6.3 Bitbucket Provider
-- [ ] providers/bitbucket.py
-- [ ] tests/providers/test_bitbucket.py
+- [x] providers/bitbucket.py
+- [x] tests/providers/test_bitbucket.py
 
 ### 6.4 Provider-Neutral Model
-- [ ] Inline, file-level, PR-level comment types
-- [ ] capabilities() per provider for suggested-change blocks (GitLab/GitHub)
+- [x] Inline, file-level, PR-level comment types (InlineComment + post_pr_summary_comment)
+- [x] capabilities() per provider for suggested-change blocks (GitLab/GitHub); InlineComment.suggested_patch optional
 
 ---
 
@@ -274,9 +274,11 @@ Derived from the AI Code Review Agent plan. Mark items with `[x]` when complete.
 | config.py | Done (add github to SCM_PROVIDER) |
 | models.py | Done |
 | runner.py | Partial |
-| providers/base.py | Partial (missing resolve_comment, get_pr_diff_for_file, get_file_lines, etc.) |
+| providers/base.py | Done (ProviderCapabilities, InlineComment with suggested_patch) |
 | providers/gitea.py | Done |
-| providers/github.py | Not started |
+| providers/github.py | Done |
+| providers/gitlab.py | Done |
+| providers/bitbucket.py | Done |
 | standards/detector.py | Done |
 | standards/prompts/ | Done |
 | schemas/findings.py | Done |

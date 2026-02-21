@@ -1,0 +1,258 @@
+"""GitLab API provider (merge requests = MR, project id = owner/repo URL-encoded)."""
+
+from typing import Any
+from urllib.parse import quote
+
+import httpx
+
+from code_review.diff.parser import parse_unified_diff
+from code_review.providers.safety import truncate_repo_content
+from code_review.providers.base import (
+    FileInfo,
+    InlineComment,
+    PRInfo,
+    ProviderCapabilities,
+    ProviderInterface,
+    ReviewComment,
+)
+
+MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
+
+
+def _project_id(owner: str, repo: str) -> str:
+    """URL-encoded project path for GitLab API."""
+    return quote(f"{owner}/{repo}", safe="")
+
+
+class GitLabProvider(ProviderInterface):
+    """GitLab API client for MR diff, file content, and discussion comments."""
+
+    def __init__(self, base_url: str, token: str, timeout: float = 30.0):
+        self._base_url = base_url.rstrip("/")
+        self._token = token
+        self._timeout = timeout
+
+    def _headers(self) -> dict[str, str]:
+        return {"PRIVATE-TOKEN": self._token}
+
+    def _path(self, owner: str, repo: str, *parts: str) -> str:
+        proj = _project_id(owner, repo)
+        return f"{self._base_url}/projects/{proj}/" + "/".join(parts)
+
+    def _get(self, path: str) -> Any:
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.get(path, headers=self._headers())
+            r.raise_for_status()
+            if r.headers.get("content-type", "").startswith("application/json"):
+                return r.json()
+            return r.text
+
+    def _get_raw(self, path: str) -> bytes:
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.get(path, headers=self._headers())
+            r.raise_for_status()
+            return r.content
+
+    def _post(self, path: str, json: dict) -> Any:
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.post(path, headers=self._headers(), json=json)
+            r.raise_for_status()
+            return r.json() if r.content else None
+
+    def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
+        """Return unified diff by concatenating MR diffs."""
+        path = self._path(owner, repo, "merge_requests", str(pr_number), "diffs")
+        data = self._get(path)
+        if not isinstance(data, list):
+            return ""
+        parts: list[str] = []
+        for d in data:
+            new_path = d.get("new_path") or d.get("old_path") or ""
+            old_path = d.get("old_path") or new_path
+            diff = d.get("diff") or ""
+            if diff:
+                parts.append(f"diff --git a/{old_path} b/{new_path}")
+                parts.append(diff)
+        return "\n".join(parts)
+
+    def get_pr_diff_for_file(
+        self, owner: str, repo: str, pr_number: int, file_path: str
+    ) -> str:
+        """Return diff for a single file from full diff."""
+        full_diff = self.get_pr_diff(owner, repo, pr_number)
+        hunks = parse_unified_diff(full_diff)
+        lines: list[str] = []
+        headers_emitted = False
+        for hunk in hunks:
+            if hunk.path != file_path:
+                continue
+            if not headers_emitted:
+                lines.append(f"--- a/{hunk.path}")
+                lines.append(f"+++ b/{hunk.path}")
+                headers_emitted = True
+            lines.append(
+                f"@@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},{hunk.new_count} @@"
+            )
+            for content, old_ln, new_ln in hunk.lines:
+                if old_ln is not None and new_ln is not None:
+                    lines.append(" " + content)
+                elif new_ln is not None:
+                    lines.append("+" + content)
+                elif old_ln is not None:
+                    lines.append("-" + content)
+                else:
+                    lines.append("\\" + content)
+        return "\n".join(lines) if lines else ""
+
+    def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
+        """Return file content at ref (raw endpoint)."""
+        proj = _project_id(owner, repo)
+        encoded_path = quote(path, safe="")
+        url = f"{self._base_url}/projects/{proj}/repository/files/{encoded_path}/raw"
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.get(url, headers=self._headers(), params={"ref": ref})
+            r.raise_for_status()
+            raw = r.content.decode("utf-8", errors="replace")
+            return truncate_repo_content(raw, max_bytes=MAX_REPO_FILE_BYTES)
+
+    def get_file_lines(
+        self,
+        owner: str,
+        repo: str,
+        ref: str,
+        path: str,
+        start_line: int,
+        end_line: int,
+    ) -> str:
+        """Return lines start_line..end_line (1-based inclusive) from file at ref."""
+        content = self.get_file_content(owner, repo, ref, path)
+        lines = content.splitlines()
+        if start_line < 1 or end_line < start_line:
+            return ""
+        start_idx = start_line - 1
+        end_idx = min(end_line, len(lines))
+        return "\n".join(lines[start_idx:end_idx])
+
+    def get_pr_files(self, owner: str, repo: str, pr_number: int) -> list[FileInfo]:
+        """Return list of changed files from MR diffs."""
+        path = self._path(owner, repo, "merge_requests", str(pr_number), "diffs")
+        data = self._get(path)
+        if not isinstance(data, list):
+            return []
+        result: list[FileInfo] = []
+        for d in data:
+            new_path = d.get("new_path") or d.get("old_path") or ""
+            if not new_path:
+                continue
+            status = "added" if d.get("new_file") else "removed" if d.get("deleted_file") else "modified"
+            result.append(
+                FileInfo(path=new_path, status=status, additions=0, deletions=0)
+            )
+        return result
+
+    def _get_mr_diff_refs(self, owner: str, repo: str, pr_number: int) -> dict | None:
+        """Fetch MR to get diff_refs (base_sha, head_sha, start_sha) for positioning comments."""
+        path = self._path(owner, repo, "merge_requests", str(pr_number))
+        data = self._get(path)
+        if isinstance(data, dict) and "diff_refs" in data:
+            return data["diff_refs"]
+        return None
+
+    def post_review_comments(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        comments: list[InlineComment],
+        head_sha: str = "",
+    ) -> None:
+        """Post inline comments as MR discussions with position (requires diff_refs from MR)."""
+        if not comments:
+            return
+        diff_refs = self._get_mr_diff_refs(owner, repo, pr_number)
+        if not diff_refs:
+            # Fallback: post as MR-level note (no line position)
+            for c in comments:
+                self._post(
+                    self._path(owner, repo, "merge_requests", str(pr_number), "notes"),
+                    {"body": f"**{c.path}:L{c.line}**\n\n{c.body}"},
+                )
+            return
+        base_sha = diff_refs.get("base_sha") or ""
+        start_sha = diff_refs.get("start_sha") or base_sha
+        head_sha_val = head_sha or diff_refs.get("head_sha") or ""
+        for c in comments:
+            position = {
+                "base_sha": base_sha,
+                "start_sha": start_sha,
+                "head_sha": head_sha_val,
+                "position_type": "text",
+                "new_path": c.path,
+                "new_line": c.line,
+                "old_path": c.path,
+                "old_line": c.line,
+            }
+            self._post(
+                self._path(owner, repo, "merge_requests", str(pr_number), "discussions"),
+                {"body": c.body, "position": position},
+            )
+
+    def get_existing_review_comments(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[ReviewComment]:
+        """Return existing MR discussion notes that are DiffNotes (inline)."""
+        path = self._path(owner, repo, "merge_requests", str(pr_number), "discussions")
+        data = self._get(path)
+        if not isinstance(data, list):
+            return []
+        result: list[ReviewComment] = []
+        for disc in data:
+            notes = disc.get("notes") or []
+            for n in notes:
+                if n.get("type") != "DiffNote":
+                    continue
+                pos = n.get("position") or {}
+                result.append(
+                    ReviewComment(
+                        id=str(n.get("id", "")),
+                        path=pos.get("new_path") or pos.get("old_path") or "",
+                        line=int(pos.get("new_line") or pos.get("old_line") or 0),
+                        body=n.get("body", ""),
+                        resolved=bool(n.get("resolved", False)),
+                    )
+                )
+        return result
+
+    def resolve_comment(self, owner: str, repo: str, comment_id: str) -> None:
+        """Resolve a discussion thread (GitLab: resolve note in discussion). Not implemented per-note."""
+        pass
+
+    def post_pr_summary_comment(
+        self, owner: str, repo: str, pr_number: int, body: str
+    ) -> None:
+        """Post MR-level note (no position)."""
+        self._post(
+            self._path(owner, repo, "merge_requests", str(pr_number), "notes"),
+            {"body": body},
+        )
+
+    def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
+        """Return MR title and labels for skip-review check."""
+        try:
+            path = self._path(owner, repo, "merge_requests", str(pr_number))
+            data = self._get(path)
+            if not isinstance(data, dict):
+                return None
+            title = data.get("title", "") or ""
+            labels_raw = data.get("labels") or []
+            labels = [
+                lb.get("name", lb) if isinstance(lb, dict) else str(lb)
+                for lb in labels_raw
+            ]
+            return PRInfo(title=title, labels=labels)
+        except Exception:
+            return None
+
+    def capabilities(self) -> ProviderCapabilities:
+        """GitLab supports resolvable threads and suggestion blocks."""
+        return ProviderCapabilities(resolvable_comments=True, supports_suggestions=True)

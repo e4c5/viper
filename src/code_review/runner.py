@@ -22,6 +22,7 @@ from code_review.formatters.comment import finding_to_comment_body
 from code_review.models import get_context_window
 from code_review import observability
 from code_review.providers import get_provider
+from code_review.providers.base import InlineComment
 from code_review.schemas.findings import FindingV1
 from code_review.standards import detect_from_paths, get_review_standards
 
@@ -363,14 +364,16 @@ def run_review(
         run_id = _build_idempotency_key(
             cfg, llm_cfg, owner, repo, pr_number, head_sha
         )
-        comments = []
+        comments: list[InlineComment] = []
         for f, fp in to_post:
             body = finding_to_comment_body(f)
             if fp:
                 body = format_comment_body_with_marker(
                     body, fp, AGENT_VERSION, run_id=run_id
                 )
-            comments.append((f.path, f.line, body))
+            comments.append(
+                InlineComment(path=f.path, line=f.line, body=body, end_line=f.end_line)
+            )
         try:
             provider.post_review_comments(
                 owner, repo, pr_number, comments, head_sha=head_sha
@@ -386,13 +389,13 @@ def run_review(
                 )
         except Exception:
             # Batch failed (e.g. one position invalid); post one-by-one, degrade to PR-level on failure
-            for (_, _), (path, line, body) in zip(to_post, comments, strict=True):
+            for c in comments:
                 try:
                     provider.post_review_comment(
-                        owner, repo, pr_number, path, line, body, head_sha=head_sha
+                        owner, repo, pr_number, c.path, c.line, c.body, head_sha=head_sha
                     )
                 except Exception:
-                    summary_body = f"**{path}:{line}**\n\n{body}"
+                    summary_body = f"**{c.path}:{c.line}**\n\n{c.body}"
                     try:
                         provider.post_pr_summary_comment(
                             owner, repo, pr_number, summary_body
@@ -400,7 +403,7 @@ def run_review(
                     except Exception as e:
                         logger.error(
                             "post_pr_summary_comment failed owner=%s repo=%s pr_number=%s path=%s line=%s: %s",
-                            owner, repo, pr_number, path, line, e,
+                            owner, repo, pr_number, c.path, c.line, e,
                             exc_info=True,
                         )
 

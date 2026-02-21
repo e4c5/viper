@@ -116,8 +116,9 @@ def create_gitea_tools(provider: ProviderInterface) -> list[Callable]:
         Returns:
             Confirmation message.
         """
+        from code_review.providers.base import InlineComment
         provider.post_review_comments(
-            owner, repo, pr_number, [(path, line, body)], head_sha=head_sha
+            owner, repo, pr_number, [InlineComment(path=path, line=line, body=body)], head_sha=head_sha
         )
         return f"Posted comment on {path}:{line}"
 

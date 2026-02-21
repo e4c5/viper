@@ -2,7 +2,26 @@
 
 import pytest
 
-from code_review.standards import detect_from_paths, detect_from_paths_and_content
+from code_review.standards.detector import (
+    CONFIDENCE_THRESHOLD_HIGH,
+    CONFIDENCE_THRESHOLD_MEDIUM,
+    _confidence_from_score,
+)
+from code_review.standards import (
+    detect_from_paths,
+    detect_from_paths_and_content,
+    detect_from_paths_per_folder_root,
+)
+
+
+def test_confidence_thresholds():
+    """Confidence literal from numeric score (0.0-1.0)."""
+    assert _confidence_from_score(0.0) == "low"
+    assert _confidence_from_score(0.4) == "low"
+    assert _confidence_from_score(CONFIDENCE_THRESHOLD_MEDIUM) == "medium"
+    assert _confidence_from_score(0.7) == "medium"
+    assert _confidence_from_score(CONFIDENCE_THRESHOLD_HIGH) == "high"
+    assert _confidence_from_score(1.0) == "high"
 
 
 def test_detect_from_paths_empty():
@@ -10,6 +29,7 @@ def test_detect_from_paths_empty():
     assert out.language == "unknown"
     assert out.framework is None
     assert out.confidence == "low"
+    assert out.confidence_score == 0.0
 
 
 def test_detect_from_paths_extension_python():
@@ -42,6 +62,7 @@ def test_detect_from_paths_confidence_high():
     out = detect_from_paths(paths)
     assert out.language == "python"
     assert out.confidence == "high"
+    assert out.confidence_score >= CONFIDENCE_THRESHOLD_HIGH
 
 
 def test_detect_from_paths_and_content_python_framework():
@@ -75,3 +96,43 @@ def test_detect_from_paths_unknown_extension():
     assert out.language == "unknown"
     assert out.framework is None
     assert out.confidence == "low"
+    assert out.confidence_score == 0.0
+
+
+def test_detect_from_paths_confidence_score_in_range():
+    """confidence_score is always 0.0-1.0."""
+    for paths in [["a.py"], ["a.py", "b.py"], ["a.py", "b.py", "c.py"], ["a.ts", "b.ts"]]:
+        out = detect_from_paths(paths)
+        assert 0.0 <= out.confidence_score <= 1.0
+
+
+def test_detect_from_paths_per_folder_root_monorepo():
+    """Monorepo: per-folder-root detection when config files present."""
+    paths = [
+        "pkg-python/requirements.txt",
+        "pkg-python/app/main.py",
+        "pkg-go/go.mod",
+        "pkg-go/cmd/server.go",
+    ]
+    result = detect_from_paths_per_folder_root(paths)
+    assert "" not in result or result[""].language in ("unknown", "python", "go")
+    # Should have at least one folder root (pkg-python or pkg-go)
+    by_root = {k: v for k, v in result.items() if k}
+    assert len(by_root) >= 1
+    if "pkg-python" in by_root:
+        assert by_root["pkg-python"].language == "python"
+    if "pkg-go" in by_root:
+        assert by_root["pkg-go"].language == "go"
+
+
+def test_detect_from_paths_per_folder_root_single_root():
+    """All paths at repo root -> single entry for ''."""
+    paths = ["foo.py", "bar.py"]
+    result = detect_from_paths_per_folder_root(paths)
+    assert list(result.keys()) == [""]
+    assert result[""].language == "python"
+
+
+def test_detect_from_paths_per_folder_root_empty():
+    """Empty paths -> empty dict."""
+    assert detect_from_paths_per_folder_root([]) == {}

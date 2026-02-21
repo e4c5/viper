@@ -70,9 +70,10 @@ def test_post_review_comment_calls_provider_with_head_sha():
     post_review_comment = next(
         t for t in tools if t.__name__ == "post_review_comment"
     )
+    from code_review.providers.base import InlineComment
     post_review_comment("o", "r", 2, "x.py", 10, "body", head_sha="abc")
     provider.post_review_comments.assert_called_once_with(
-        "o", "r", 2, [("x.py", 10, "body")], head_sha="abc"
+        "o", "r", 2, [InlineComment(path="x.py", line=10, body="body")], head_sha="abc"
     )
 
 

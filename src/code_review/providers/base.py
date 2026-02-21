@@ -6,7 +6,11 @@ from pydantic import BaseModel, Field
 
 
 class ProviderCapabilities(BaseModel):
-    """Provider capability flags for branching behavior."""
+    """
+    Provider capability flags for branching behavior.
+    - resolvable_comments: provider supports marking comments as resolved (e.g. GitLab).
+    - supports_suggestions: provider supports suggested-change / code suggestion blocks (e.g. GitHub, GitLab).
+    """
 
     resolvable_comments: bool = False
     supports_suggestions: bool = False
@@ -36,6 +40,21 @@ class ReviewComment(BaseModel):
     line: int
     body: str
     resolved: bool = False
+
+
+class InlineComment(BaseModel):
+    """
+    Provider-neutral inline review comment. Runner builds these from findings;
+    each provider converts to its SCM API shape (inline, file-level, or PR-level fallback).
+    When capabilities().supports_suggestions is True, providers may render suggested_patch
+    as a suggestion block (e.g. GitHub/GitLab).
+    """
+
+    path: str
+    line: int = Field(..., ge=1, description="Line in new file (1-based)")
+    body: str
+    end_line: int | None = Field(default=None, ge=1, description="Optional end line for multi-line comments")
+    suggested_patch: str | None = Field(default=None, description="Optional suggested code change; used when provider supports_suggestions")
 
 
 class ProviderInterface(ABC):
@@ -82,10 +101,10 @@ class ProviderInterface(ABC):
         owner: str,
         repo: str,
         pr_number: int,
-        comments: list[tuple[str, int, str]],
+        comments: list[InlineComment],
         head_sha: str = "",
     ) -> None:
-        """Post inline comments. Each tuple is (path, line, body)."""
+        """Post inline comments. Accepts internal InlineComment; provider converts to SCM API payload."""
         ...
 
     def post_review_comment(
@@ -100,7 +119,7 @@ class ProviderInterface(ABC):
     ) -> None:
         """Post a single inline comment. Default: call post_review_comments with one item."""
         self.post_review_comments(
-            owner, repo, pr_number, [(path, line, body)], head_sha=head_sha
+            owner, repo, pr_number, [InlineComment(path=path, line=line, body=body)], head_sha=head_sha
         )
 
     @abstractmethod

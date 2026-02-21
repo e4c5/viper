@@ -86,7 +86,7 @@ def test_run_review_ignore_list_and_posts_net_new(
     call_args = provider.post_review_comments.call_args
     comments = call_args[0][3]
     assert len(comments) == 1
-    body = comments[0][2]
+    body = comments[0].body
     assert "[Suggestion] Net new finding." in body
     assert "code-review-agent:" in body and "fingerprint=" in body
     assert call_args[1]["head_sha"] == "abc123"

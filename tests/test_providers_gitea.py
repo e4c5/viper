@@ -23,7 +23,7 @@ def test_get_pr_diff(mock_client):
     mock_resp = MagicMock()
     mock_resp.text = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py"
     mock_resp.headers = {}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+    mock_client.return_value.__enter__.return_value.request.return_value = mock_resp
 
     p = GiteaProvider("https://gitea.example.com", "tok")
     diff = p.get_pr_diff("owner", "repo", 1)
@@ -36,7 +36,7 @@ def test_get_file_content(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {"content": content_b64}
     mock_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+    mock_client.return_value.__enter__.return_value.request.return_value = mock_resp
 
     p = GiteaProvider("https://gitea.example.com", "tok")
     content = p.get_file_content("owner", "repo", "main", "foo.py")
@@ -51,7 +51,7 @@ def test_get_pr_files(mock_client):
         {"filename": "bar.go", "status": "added", "additions": 10, "deletions": 0},
     ]
     mock_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+    mock_client.return_value.__enter__.return_value.request.return_value = mock_resp
 
     p = GiteaProvider("https://gitea.example.com", "tok")
     files = p.get_pr_files("owner", "repo", 1)
@@ -67,16 +67,17 @@ def test_post_review_comments(mock_client):
     mock_post = MagicMock()
     mock_post.raise_for_status = MagicMock()
     mock_post.content = b""
-    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+    mock_client.return_value.__enter__.return_value.request.return_value = mock_post
 
+    from code_review.providers.base import InlineComment
     p = GiteaProvider("https://gitea.example.com", "tok")
     p.post_review_comments(
         "owner", "repo", 1,
-        [("foo.py", 10, "[Critical] Bug here")],
+        [InlineComment(path="foo.py", line=10, body="[Critical] Bug here")],
         head_sha="abc123",
     )
-    call_args = mock_client.return_value.__enter__.return_value.post.call_args
-    assert call_args[0][0].endswith("/reviews")
+    call_args = mock_client.return_value.__enter__.return_value.request.call_args
+    assert call_args[0][1].endswith("/reviews")  # url is second positional arg
     payload = call_args[1]["json"]
     assert payload["comments"] == [{"path": "foo.py", "body": "[Critical] Bug here", "line": 10}]
     assert payload["commit_id"] == "abc123"
@@ -90,7 +91,7 @@ def test_get_existing_review_comments(mock_client):
         {"id": 2, "path": "bar.py", "line": 5, "body": "[Info] Nit", "resolved": True},
     ]
     mock_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+    mock_client.return_value.__enter__.return_value.request.return_value = mock_resp
 
     p = GiteaProvider("https://gitea.example.com", "tok")
     comments = p.get_existing_review_comments("owner", "repo", 1)
@@ -105,7 +106,7 @@ def test_get_pr_diff_for_file(mock_client):
     mock_resp = MagicMock()
     mock_resp.text = full_diff
     mock_resp.headers = {}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+    mock_client.return_value.__enter__.return_value.request.return_value = mock_resp
 
     p = GiteaProvider("https://gitea.example.com", "tok")
     diff = p.get_pr_diff_for_file("owner", "repo", 1, "foo.py")
@@ -125,7 +126,7 @@ def test_get_pr_diff_for_file_multi_hunk_single_header(mock_client):
     mock_resp = MagicMock()
     mock_resp.text = full_diff
     mock_resp.headers = {}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+    mock_client.return_value.__enter__.return_value.request.return_value = mock_resp
 
     p = GiteaProvider("https://gitea.example.com", "tok")
     diff = p.get_pr_diff_for_file("owner", "repo", 1, "foo.py")
@@ -140,7 +141,7 @@ def test_get_file_lines(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {"content": content_b64}
     mock_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+    mock_client.return_value.__enter__.return_value.request.return_value = mock_resp
 
     p = GiteaProvider("https://gitea.example.com", "tok")
     lines = p.get_file_lines("owner", "repo", "main", "foo.py", 2, 3)
@@ -152,12 +153,12 @@ def test_post_pr_summary_comment(mock_client):
     mock_post = MagicMock()
     mock_post.raise_for_status = MagicMock()
     mock_post.content = b""
-    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+    mock_client.return_value.__enter__.return_value.request.return_value = mock_post
 
     p = GiteaProvider("https://gitea.example.com", "tok")
     p.post_pr_summary_comment("owner", "repo", 1, "Summary: 2 Critical, 1 Suggestion")
-    call_args = mock_client.return_value.__enter__.return_value.post.call_args
-    assert "/issues/1/comments" in call_args[0][0]
+    call_args = mock_client.return_value.__enter__.return_value.request.call_args
+    assert "/issues/1/comments" in call_args[0][1]  # url is second positional arg
     assert call_args[1]["json"]["body"] == "Summary: 2 Critical, 1 Suggestion"
 
 

@@ -8,6 +8,20 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+# Confidence thresholds: numeric 0.0-1.0 -> literal (plan: define thresholds and write tests)
+CONFIDENCE_THRESHOLD_HIGH = 0.8
+CONFIDENCE_THRESHOLD_MEDIUM = 0.5
+
+
+def _confidence_from_score(score: float) -> Literal["high", "medium", "low"]:
+    """Map numeric confidence 0.0-1.0 to literal using thresholds."""
+    if score >= CONFIDENCE_THRESHOLD_HIGH:
+        return "high"
+    if score >= CONFIDENCE_THRESHOLD_MEDIUM:
+        return "medium"
+    return "low"
+
+
 class DetectedContext(BaseModel):
     """Result of language/framework detection."""
 
@@ -15,6 +29,12 @@ class DetectedContext(BaseModel):
     framework: str | None = Field(default=None, description="Detected framework (e.g. django, fastapi)")
     confidence: Literal["high", "medium", "low"] = Field(
         ..., description="Confidence based on signal strength"
+    )
+    confidence_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Numeric confidence 0.0-1.0 for thresholds",
     )
 
 
@@ -91,9 +111,12 @@ def _extract_java_frameworks(content: str) -> list[str]:
 def detect_from_paths(paths: list[str]) -> DetectedContext:
     """
     Infer language and framework from file paths only.
+    Returns confidence_score in 0.0-1.0; confidence literal from thresholds.
     """
     if not paths:
-        return DetectedContext(language="unknown", framework=None, confidence="low")
+        return DetectedContext(
+            language="unknown", framework=None, confidence="low", confidence_score=0.0
+        )
 
     path_set = {_normalize_path(p) for p in paths}
     lang_counts: Counter[str] = Counter()
@@ -114,21 +137,27 @@ def detect_from_paths(paths: list[str]) -> DetectedContext:
             lang_counts[_EXT_LANGUAGE[ext]] += 1
 
     if not lang_counts:
-        return DetectedContext(language="unknown", framework=None, confidence="low")
+        return DetectedContext(
+            language="unknown", framework=None, confidence="low", confidence_score=0.0
+        )
 
     primary_lang = lang_counts.most_common(1)[0][0]
+    primary_count = lang_counts[primary_lang]
     secondary = lang_counts.most_common(2)
+    # Numeric score: tie -> 0.5, 3+ files -> 0.9, 1-2 -> 0.6
     if len(secondary) >= 2 and secondary[0][1] == secondary[1][1]:
-        confidence: Literal["high", "medium", "low"] = "medium"
-    elif secondary[0][1] >= 3:
-        confidence = "high"
-    elif secondary[0][1] >= 1:
-        confidence = "medium"
+        score = 0.5
+    elif primary_count >= 3:
+        score = 0.9
+    elif primary_count >= 1:
+        score = 0.6
     else:
-        confidence = "low"
-
+        score = 0.0
+    confidence = _confidence_from_score(score)
     framework = fw_candidates[0] if fw_candidates else None
-    return DetectedContext(language=primary_lang, framework=framework, confidence=confidence)
+    return DetectedContext(
+        language=primary_lang, framework=framework, confidence=confidence, confidence_score=score
+    )
 
 
 def detect_from_paths_and_content(
@@ -157,7 +186,60 @@ def detect_from_paths_and_content(
                     fw_candidates.append(fw)
 
     framework = fw_candidates[0] if fw_candidates else base.framework
-    confidence = base.confidence
+    score = base.confidence_score
     if fw_candidates and base.confidence == "low":
-        confidence = "medium"
-    return DetectedContext(language=base.language, framework=framework, confidence=confidence)
+        score = max(score, CONFIDENCE_THRESHOLD_MEDIUM)
+    confidence = _confidence_from_score(score)
+    return DetectedContext(
+        language=base.language, framework=framework, confidence=confidence, confidence_score=score
+    )
+
+
+def _folder_roots_from_paths(paths: list[str]) -> set[str]:
+    """Return folder roots: dirname of any path whose basename is a config file (package.json, go.mod, etc.)."""
+    roots: set[str] = set()
+    for p in paths:
+        norm = _normalize_path(p)
+        name = Path(norm).name
+        if name in _PATH_SIGNALS:
+            root = str(Path(norm).parent)
+            if root == ".":
+                root = ""
+            roots.add(root)
+    return roots
+
+
+def detect_from_paths_per_folder_root(paths: list[str]) -> dict[str, DetectedContext]:
+    """
+    Monorepo mode: run detection per folder root (nearest package.json, go.mod, pom.xml, etc.).
+    Paths are grouped by the longest matching folder root; paths under no config dir go to "".
+    Returns dict mapping folder_root -> DetectedContext.
+    """
+    if not paths:
+        return {}
+    path_list = [_normalize_path(p) for p in paths]
+    roots = _folder_roots_from_paths(path_list)
+    roots.add("")  # repo root always exists as fallback
+    # Sort roots by length descending so we match longest prefix first
+    sorted_roots = sorted(roots, key=lambda r: len(r), reverse=True)
+
+    groups: dict[str, list[str]] = {r: [] for r in sorted_roots}
+    for p in path_list:
+        assigned = False
+        for root in sorted_roots:
+            if root == "":
+                groups[""].append(p)
+                assigned = True
+                break
+            if p == root or p.startswith(root + "/"):
+                groups[root].append(p)
+                assigned = True
+                break
+        if not assigned:
+            groups[""].append(p)
+
+    return {
+        root: detect_from_paths(group)
+        for root, group in groups.items()
+        if group
+    }
