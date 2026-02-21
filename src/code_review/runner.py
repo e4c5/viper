@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import re
 import uuid
 
@@ -24,6 +25,7 @@ from code_review.standards import detect_from_paths, get_review_standards
 APP_NAME = "code_review"
 USER_ID = "reviewer"
 AGENT_VERSION = getattr(code_review, "__version__", "0.1.0")
+logger = logging.getLogger(__name__)
 
 # Fraction of context window reserved for diff content; rest for system prompt, tools, response
 DIFF_TOKEN_BUDGET_RATIO = 0.25
@@ -35,19 +37,18 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _build_idempotency_key(
-    provider_name: str,
+    scm_cfg,
+    llm_cfg,
     owner: str,
     repo: str,
     pr_number: int,
     head_sha: str,
 ) -> str:
     """Idempotency key: same key => same run already done for this PR/head/config."""
-    scm = get_scm_config()
-    llm = get_llm_config()
     config_hash = hashlib.sha256(
-        f"{scm.provider}:{scm.url}:{llm.provider}:{llm.model}".encode()
+        f"{scm_cfg.provider}:{scm_cfg.url}:{llm_cfg.provider}:{llm_cfg.model}".encode()
     ).hexdigest()[:16]
-    return f"{provider_name}/{owner}/{repo}/pr/{pr_number}/head/{head_sha}/agent/{AGENT_VERSION}/config/{config_hash}"
+    return f"{scm_cfg.provider}/{owner}/{repo}/pr/{pr_number}/head/{head_sha}/agent/{AGENT_VERSION}/config/{config_hash}"
 
 
 def _idempotency_key_seen_in_comments(comments: list, key: str) -> bool:
@@ -87,7 +88,12 @@ def _get_file_lines_by_path(provider, owner: str, repo: str, ref: str, paths: li
         try:
             content = provider.get_file_content(owner, repo, ref, p)
             out[p] = content.splitlines()
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "get_file_content failed for path=%s owner=%s repo=%s ref=%s: %s",
+                p, owner, repo, ref, e,
+                exc_info=True,
+            )
             out[p] = []
     return out
 
@@ -180,6 +186,7 @@ def run_review(
     from google.adk.sessions import InMemorySessionService
 
     cfg = get_scm_config()
+    llm_cfg = get_llm_config()
     provider = get_provider(cfg.provider, cfg.url, cfg.token)
 
     # Skip review if PR has skip label or title contains skip pattern (e.g. [skip-review])
@@ -206,7 +213,7 @@ def run_review(
     # Idempotency: skip if we already ran for this PR/head/config (run id in comment marker)
     if head_sha:
         run_id = _build_idempotency_key(
-            cfg.provider, owner, repo, pr_number, head_sha
+            cfg, llm_cfg, owner, repo, pr_number, head_sha
         )
         if _idempotency_key_seen_in_comments(existing_dicts, run_id):
             return []
@@ -261,7 +268,7 @@ def run_review(
         all_findings = _findings_from_response(response_text)
 
     # Filter out findings that match existing comments (by path + body_hash or path + fingerprint)
-    to_post: list[FindingV1] = []
+    to_post: list[tuple[FindingV1, str]] = []
     unique_paths = list(dict.fromkeys(f.path for f in all_findings))
     file_lines_by_path = (
         _get_file_lines_by_path(provider, owner, repo, head_sha, unique_paths)
@@ -294,7 +301,7 @@ def run_review(
                 "Provide head_sha or use --dry-run to skip posting."
             )
         run_id = _build_idempotency_key(
-            cfg.provider, owner, repo, pr_number, head_sha
+            cfg, llm_cfg, owner, repo, pr_number, head_sha
         )
         comments = []
         for f, fp in to_post:
@@ -310,7 +317,7 @@ def run_review(
             )
         except Exception:
             # Batch failed (e.g. one position invalid); post one-by-one, degrade to PR-level on failure
-            for (f, _), (path, line, body) in zip(to_post, comments):
+            for (_, _), (path, line, body) in zip(to_post, comments, strict=True):
                 try:
                     provider.post_review_comment(
                         owner, repo, pr_number, path, line, body, head_sha=head_sha
@@ -321,7 +328,11 @@ def run_review(
                         provider.post_pr_summary_comment(
                             owner, repo, pr_number, summary_body
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.error(
+                            "post_pr_summary_comment failed owner=%s repo=%s pr_number=%s path=%s line=%s: %s",
+                            owner, repo, pr_number, path, line, e,
+                            exc_info=True,
+                        )
 
     return [f for f, _ in to_post]

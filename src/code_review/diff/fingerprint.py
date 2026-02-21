@@ -31,6 +31,9 @@ def surrounding_content_hash(
     """
     if not file_lines or line_1based < 1:
         return content_hash("")
+    # Line beyond file length: intentionally same as empty context for stability.
+    if line_1based > len(file_lines):
+        return content_hash("")
     start_idx = max(0, (line_1based - 1) - window)
     end_idx = min(len(file_lines), (line_1based - 1) + window + 1)
     span = "\n".join(file_lines[start_idx:end_idx])

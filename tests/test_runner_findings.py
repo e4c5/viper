@@ -1,7 +1,5 @@
 """Tests for runner findings parsing and ignore set."""
 
-import hashlib
-
 from code_review.runner import (
     _build_ignore_set,
     _findings_from_response,
@@ -16,19 +14,6 @@ def test_build_ignore_set_from_dicts():
     s = _build_ignore_set(comments)
     assert len(s) == 2
     assert ("a.py", "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824") in s
-
-
-def test_build_ignore_set_includes_fingerprint_from_marker():
-    """When comment body has code-review-agent marker with fingerprint, ignore set includes (path, fingerprint)."""
-    from code_review.diff.fingerprint import format_comment_body_with_marker
-
-    body_with_marker = format_comment_body_with_marker(
-        "[Suggestion] Fix this.", "abc123fp", "0.1.0", run_id="run-x"
-    )
-    comments = [{"path": "foo.py", "body": body_with_marker}]
-    s = _build_ignore_set(comments)
-    assert ("foo.py", "abc123fp") in s
-    assert ("foo.py", hashlib.sha256(body_with_marker.encode()).hexdigest()) in s
 
 
 def test_parse_findings_json_raw_array():

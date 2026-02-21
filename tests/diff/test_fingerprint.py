@@ -31,6 +31,13 @@ def test_surrounding_content_hash():
     assert surrounding_content_hash(lines, 1, 2) == content_hash("a\nb\nc")
 
 
+def test_surrounding_content_hash_line_beyond_file_length():
+    """When line_1based > len(file_lines), returns content_hash('') for stability."""
+    lines = ["a", "b"]
+    assert surrounding_content_hash(lines, 10, window=2) == content_hash("")
+    assert surrounding_content_hash(lines, 3, window=0) == content_hash("")
+
+
 def test_build_fingerprint():
     fp = build_fingerprint("p.py", "chash", "unused-var", anchor="x = 1")
     assert len(fp) == 24

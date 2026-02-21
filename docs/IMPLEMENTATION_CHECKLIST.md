@@ -209,7 +209,7 @@ Derived from the AI Code Review Agent plan. Mark items with `[x]` when complete.
 ## Phase 4: Comment Format and UX
 
 ### 4.1 Comment Structure
-- [ ] Hidden marker: `<!-- code-review-agent:fingerprint=...;version=... -->`
+- [x] Hidden marker: `<!-- code-review-agent:fingerprint=...;version=... -->` (implemented in Phase 2: see `src/code_review/diff/fingerprint.py` and runner integration when posting comments)
 - [ ] Body: [Critical]/[Suggestion]/[Info] prefix
 - [ ] Location: path, line (or range)
 

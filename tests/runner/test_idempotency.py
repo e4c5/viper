@@ -16,7 +16,9 @@ def test_build_idempotency_key_format(mock_scm, mock_llm):
         provider="gitea", url="https://gitea.example.com", token="x"
     )
     mock_llm.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
-    key = _build_idempotency_key("gitea", "o", "r", 1, "abc123")
+    key = _build_idempotency_key(
+        mock_scm.return_value, mock_llm.return_value, "o", "r", 1, "abc123"
+    )
     assert "gitea/o/r/pr/1/head/abc123" in key
     assert "agent/" in key
     assert "config/" in key
@@ -40,7 +42,6 @@ def test_run_review_skips_when_idempotency_key_seen(
 ):
     """When existing comment contains run=<current_key>, run_review returns [] without running agent."""
     from code_review.providers.base import FileInfo
-    from code_review.runner import _build_idempotency_key
 
     mock_get_scm_config.return_value = MagicMock(
         provider="gitea", url="https://x.com", token="x"
@@ -50,7 +51,11 @@ def test_run_review_skips_when_idempotency_key_seen(
     provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
     provider.get_pr_diff.return_value = "diff"
     provider.get_file_content.return_value = "x"
-    run_id = _build_idempotency_key("gitea", "o", "r", 1, "abc123")
+    run_id = _build_idempotency_key(
+        mock_get_scm_config.return_value,
+        mock_get_llm_config.return_value,
+        "o", "r", 1, "abc123",
+    )
     body_with_run = f"<!-- code-review-agent:fingerprint=x;version=0.1.0;run={run_id} -->\n\nOld."
     provider.get_existing_review_comments.return_value = [
         MagicMock(
