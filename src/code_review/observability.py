@@ -105,10 +105,19 @@ def _init_otel() -> bool:
                 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
                     OTLPSpanExporter,
                 )
-                exporter = OTLPSpanExporter(endpoint=endpoint)
-                _otel_tracer_provider = TracerProvider()
-                _otel_tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
-                trace.set_tracer_provider(_otel_tracer_provider)
+                current = trace.get_tracer_provider()
+                # Only set our provider when no application-level provider exists
+                # (i.e. current is the default proxy or no-op, not an SDK/app provider).
+                _cls = type(current)
+                _is_default = (
+                    _cls.__name__ in ("ProxyTracerProvider", "NoOpTracerProvider", "_DefaultTracerProvider")
+                    and (_cls.__module__ or "").startswith("opentelemetry.trace")
+                )
+                if _is_default:
+                    exporter = OTLPSpanExporter(endpoint=endpoint)
+                    _otel_tracer_provider = TracerProvider()
+                    _otel_tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+                    trace.set_tracer_provider(_otel_tracer_provider)
             except ImportError:
                 pass
         # Use global provider (ours or app's); get_tracer works with no-op if none set

@@ -116,19 +116,27 @@ class BitbucketProvider(ProviderInterface):
         return "\n".join(lines[start_idx:end_idx])
 
     def get_pr_files(self, owner: str, repo: str, pr_number: int) -> list[FileInfo]:
-        """Return list of changed files from PR diffstat."""
-        path = self._path(owner, repo, "pullrequests", str(pr_number), "diffstat")
-        data = self._get(path)
-        if not isinstance(data, dict) or "values" not in data:
-            return []
+        """Return list of changed files from PR diffstat (paginated)."""
+        url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "diffstat")
         result: list[FileInfo] = []
-        for f in data["values"]:
-            # Bitbucket diffstat: new.path or old.path
-            file_path = (f.get("new") or {}).get("path") or (f.get("old") or {}).get("path") or ""
-            if not file_path:
-                continue
-            status = "removed" if f.get("status") == "removed" else "added" if f.get("status") == "added" else "modified"
-            result.append(FileInfo(path=file_path, status=status, additions=0, deletions=0))
+        while url:
+            data = self._get(url)
+            if not isinstance(data, dict):
+                break
+            values = data.get("values")
+            if isinstance(values, list):
+                for f in values:
+                    if not isinstance(f, dict):
+                        continue
+                    file_path = (f.get("new") or {}).get("path") or (f.get("old") or {}).get("path") or ""
+                    if not file_path:
+                        continue
+                    status = "removed" if f.get("status") == "removed" else "added" if f.get("status") == "added" else "modified"
+                    result.append(FileInfo(path=file_path, status=status, additions=0, deletions=0))
+            next_url = data.get("next")
+            if not next_url or not isinstance(next_url, str):
+                break
+            url = next_url.strip() or None
         return result
 
     def post_review_comments(
@@ -144,33 +152,42 @@ class BitbucketProvider(ProviderInterface):
         for c in comments:
             payload: dict[str, Any] = {
                 "content": {"raw": c.body},
-                "inline": {"path": c.path, "from": c.line, "to": c.line},
+                "inline": {"path": c.path, "from": c.line, "to": c.end_line if c.end_line is not None else c.line},
             }
             self._post(path, payload)
 
     def get_existing_review_comments(
         self, owner: str, repo: str, pr_number: int
     ) -> list[ReviewComment]:
-        """Return existing PR comments (inline and non-inline)."""
-        path = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
-        data = self._get(path)
-        if not isinstance(data, dict) or "values" not in data:
-            return []
+        """Return existing PR comments (inline and non-inline; paginated)."""
+        url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
         result: list[ReviewComment] = []
-        for c in data["values"]:
-            inline = c.get("inline") or {}
-            path_str = inline.get("path") or ""
-            line = int(inline.get("to") or inline.get("from") or 0)
-            body = (c.get("content") or {}).get("raw") or ""
-            result.append(
-                ReviewComment(
-                    id=str(c.get("id", "")),
-                    path=path_str,
-                    line=line,
-                    body=body,
-                    resolved=False,
-                )
-            )
+        while url:
+            data = self._get(url)
+            if not isinstance(data, dict):
+                break
+            values = data.get("values")
+            if isinstance(values, list):
+                for c in values:
+                    if not isinstance(c, dict):
+                        continue
+                    inline = c.get("inline") or {}
+                    path_str = inline.get("path") or ""
+                    line = int(inline.get("to") or inline.get("from") or 0)
+                    body = (c.get("content") or {}).get("raw") or ""
+                    result.append(
+                        ReviewComment(
+                            id=str(c.get("id", "")),
+                            path=path_str,
+                            line=line,
+                            body=body,
+                            resolved=False,
+                        )
+                    )
+            next_url = data.get("next")
+            if not next_url or not isinstance(next_url, str):
+                break
+            url = next_url.strip() or None
         return result
 
     def post_pr_summary_comment(

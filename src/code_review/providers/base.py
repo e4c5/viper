@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ProviderCapabilities(BaseModel):
@@ -55,6 +55,14 @@ class InlineComment(BaseModel):
     body: str
     end_line: int | None = Field(default=None, ge=1, description="Optional end line for multi-line comments")
     suggested_patch: str | None = Field(default=None, description="Optional suggested code change; used when provider supports_suggestions")
+
+    @model_validator(mode="after")
+    def end_line_not_less_than_line(self) -> "InlineComment":
+        if self.end_line is not None and self.end_line < self.line:
+            raise ValueError(
+                f"end_line ({self.end_line}) must be >= line ({self.line})"
+            )
+        return self
 
 
 class ProviderInterface(ABC):
