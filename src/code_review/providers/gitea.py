@@ -10,6 +10,7 @@ from code_review.providers.safety import truncate_repo_content
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 from code_review.providers.base import (
     FileInfo,
+    PRInfo,
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
@@ -219,6 +220,22 @@ class GiteaProvider(ProviderInterface):
             f"/repos/{owner}/{repo}/issues/{pr_number}/comments",
             {"body": body},
         )
+
+    def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
+        """Return PR title and labels for skip-review check."""
+        try:
+            data = self._get(f"/repos/{owner}/{repo}/pulls/{pr_number}")
+            if not isinstance(data, dict):
+                return None
+            title = data.get("title", "") or ""
+            labels_raw = data.get("labels") or []
+            labels = [
+                lb.get("name", lb) if isinstance(lb, dict) else str(lb)
+                for lb in labels_raw
+            ]
+            return PRInfo(title=title, labels=labels)
+        except Exception:
+            return None
 
     def capabilities(self) -> ProviderCapabilities:
         """Return provider capability flags. Gitea does not support resolving/unresolving PR review comments."""

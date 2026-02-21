@@ -2,6 +2,7 @@
 
 from code_review.providers.base import (
     FileInfo,
+    PRInfo,
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
@@ -19,6 +20,7 @@ def get_provider(name: str, base_url: str, token: str) -> ProviderInterface:
 __all__ = [
     "FileInfo",
     "GiteaProvider",
+    "PRInfo",
     "ProviderCapabilities",
     "ProviderInterface",
     "ReviewComment",

@@ -1,0 +1,44 @@
+// Pipeline example: code review on PR. Set SCM_* and LLM_* via parameters or Gitea webhook.
+// Agent runs as one-shot container: docker run --rm code-review-agent review
+// Build agent image from repo root: docker build -t code-review-agent -f docker/Dockerfile.agent .
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'SCM_OWNER', description: 'Repo owner')
+        string(name: 'SCM_REPO', description: 'Repo name')
+        string(name: 'SCM_PR_NUM', description: 'PR number')
+        string(name: 'SCM_HEAD_SHA', description: 'Head commit SHA')
+        string(name: 'LLM_PROVIDER', defaultValue: 'gemini', description: 'LLM provider')
+        string(name: 'LLM_MODEL', defaultValue: 'gemini-2.5-flash', description: 'LLM model')
+        string(name: 'COMPOSE_PROJECT_NAME', defaultValue: 'code-review', description: 'Docker Compose project name for agent network; set env COMPOSE_PROJECT_NAME or use -p when starting compose')
+    }
+
+    stages {
+        stage('Code Review') {
+            steps {
+                script {
+                    def image = 'code-review-agent'
+                    def projectName = env.COMPOSE_PROJECT_NAME ?: params.COMPOSE_PROJECT_NAME
+                    def network = "${projectName}_code-review-net"
+                    // SCM_TOKEN and GOOGLE_API_KEY: must be in Jenkins env (e.g. withCredentials); passed through via -e VAR (no interpolation)
+                    sh """
+                        docker run --rm --network ${network} \
+                            -e SCM_PROVIDER=gitea \
+                            -e SCM_URL=http://gitea:3000 \
+                            -e SCM_TOKEN \
+                            -e SCM_OWNER=${params.SCM_OWNER} \
+                            -e SCM_REPO=${params.SCM_REPO} \
+                            -e SCM_PR_NUM=${params.SCM_PR_NUM} \
+                            -e SCM_HEAD_SHA=${params.SCM_HEAD_SHA} \
+                            -e LLM_PROVIDER=${params.LLM_PROVIDER} \
+                            -e LLM_MODEL=${params.LLM_MODEL} \
+                            -e GOOGLE_API_KEY \
+                            ${image} review --owner ${params.SCM_OWNER} --repo ${params.SCM_REPO} --pr ${params.SCM_PR_NUM} --head-sha ${params.SCM_HEAD_SHA}
+                    """
+                }
+            }
+        }
+    }
+}

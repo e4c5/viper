@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from code_review.agent import create_review_agent
-from code_review.providers.base import FileInfo
+from code_review.providers.base import FileInfo, PRInfo
 
 
 class MockProvider:
@@ -23,6 +23,9 @@ class MockProvider:
 
     def get_existing_review_comments(self, owner, repo, pr_number):
         return []
+
+    def get_pr_info(self, owner, repo, pr_number):
+        return None
 
 
 def test_create_review_agent():
@@ -79,7 +82,9 @@ def test_run_review_ignore_list_and_posts_net_new(
     call_args = provider.post_review_comments.call_args
     comments = call_args[0][3]
     assert len(comments) == 1
-    assert comments[0][2] == "[Suggestion] Net new finding."
+    body = comments[0][2]
+    assert "[Suggestion] Net new finding." in body
+    assert "code-review-agent:" in body and "fingerprint=" in body
     assert call_args[1]["head_sha"] == "abc123"
 
 
@@ -116,3 +121,35 @@ def test_run_review_raises_when_posting_without_head_sha(
         with pytest.raises(ValueError, match="head_sha is required when posting"):
             run_review("o", "r", 1, head_sha="", dry_run=False)
     provider.post_review_comments.assert_not_called()
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_skips_when_pr_has_skip_label(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    """When PR has skip-review label (or title pattern), run_review returns [] without running agent."""
+    from code_review.runner import run_review
+
+    mock_get_scm_config.return_value = MagicMock(
+        provider="gitea",
+        url="https://x.com",
+        token="x",
+        skip_label="skip-review",
+        skip_title_pattern="[skip-review]",
+    )
+    provider = MagicMock()
+    provider.get_pr_info.return_value = PRInfo(
+        title="WIP: do not merge",
+        labels=["skip-review", "wip"],
+    )
+    mock_get_provider.return_value = provider
+    mock_get_context_window.return_value = 1_000_000
+
+    result = run_review("o", "r", 1, head_sha="abc")
+
+    assert result == []
+    provider.get_pr_info.assert_called_once_with("o", "r", 1)
+    provider.get_pr_files.assert_not_called()
+    provider.get_existing_review_comments.assert_not_called()

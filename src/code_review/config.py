@@ -21,6 +21,14 @@ class SCMConfig(BaseSettings):
     head_sha: str = Field(default="", description="Head commit SHA")
     base_sha: str = Field(default="", description="Base commit SHA")
     event: str = Field(default="", description="Webhook event: opened/synchronize/reopened")
+    skip_label: str = Field(
+        default="skip-review",
+        description="If PR has this label, skip review (empty to disable)",
+    )
+    skip_title_pattern: str = Field(
+        default="[skip-review]",
+        description="If PR title contains this substring, skip review (empty to disable)",
+    )
 
 
 class LLMConfig(BaseSettings):

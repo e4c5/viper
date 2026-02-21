@@ -1,0 +1,21 @@
+# Code review agent image: run as one-shot job (e.g. from Jenkins).
+# Build: docker build -t code-review-agent -f docker/Dockerfile.agent .
+# Run:  docker run --rm -e SCM_* -e LLM_* code-review-agent review --owner O --repo R --pr N --head-sha SHA
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install deps and package (no dev deps)
+COPY pyproject.toml ./
+COPY src ./src/
+RUN pip install --no-cache-dir -e .
+
+# Run as unprivileged user
+RUN adduser --disabled-password --gecos "" --uid 1000 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+# No long-running process; Jenkins (or other CI) invokes: code-review review
+ENTRYPOINT ["code-review"]
+CMD ["review"]

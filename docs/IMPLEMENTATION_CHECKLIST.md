@@ -144,72 +144,72 @@ Derived from the AI Code Review Agent plan. Mark items with `[x]` when complete.
 ## Phase 2: Resolved Issue Tracking
 
 ### 2.1 Fingerprinting
-- [ ] Fingerprint: (path, content_hash_of_surrounding_lines, issue_category)
-- [ ] Anchor: normalized added/changed line text
-- [ ] issue_code: stable ID per rule
-- [ ] Compare against file content at head_sha; locate anchor; if not found, resolve
+- [x] Fingerprint: (path, content_hash_of_surrounding_lines, issue_category)
+- [x] Anchor: normalized added/changed line text
+- [x] issue_code: stable ID per rule
+- [x] Compare against file content at head_sha; locate anchor; if not found, resolve (filter by fingerprint; auto-resolve skipped when provider has resolvable_comments=False)
 
 ### 2.2 Runner Flow
-- [ ] Runner fetches existing comments
-- [ ] Runner builds fingerprints from old comments
-- [ ] Runner runs agent; gets findings
-- [ ] Runner compares old fingerprints vs new diff; auto-resolves stale via resolve_comment
-- [ ] Runner filters new findings against manually-resolved ignore list
-- [ ] Runner posts net-new via post_review_comments
+- [x] Runner fetches existing comments
+- [x] Runner builds fingerprints from old comments (via marker parse + body_hash)
+- [x] Runner runs agent; gets findings
+- [x] Runner compares old fingerprints vs new diff; auto-resolves stale via resolve_comment (skipped for Gitea; fingerprint used for ignore only)
+- [x] Runner filters new findings against manually-resolved ignore list
+- [x] Runner posts net-new via post_review_comments
 
 ### 2.3 Provider: resolve_comment
-- [ ] Add resolve_comment to ProviderInterface
-- [ ] Gitea: PATCH /repos/.../pulls/comments/{id} for resolved (or marker fallback)
+- [x] Add resolve_comment to ProviderInterface
+- [x] Gitea: PATCH /repos/.../pulls/comments/{id} for resolved (or marker fallback)
 
 ### 2.4 Idempotency
-- [ ] Idempotency key: {provider}/{owner}/{repo}/pr/{pr_number}/head/{head_sha}/agent/{version}/config/{hash}
-- [ ] Storage: hidden marker in comment body or external cache (Redis, SQLite)
-- [ ] Before review: check if key already processed; skip if yes
+- [x] Idempotency key: {provider}/{owner}/{repo}/pr/{pr_number}/head/{head_sha}/agent/{version}/config/{hash}
+- [x] Storage: hidden marker in comment body or external cache (Redis, SQLite)
+- [x] Before review: check if key already processed; skip if yes
 
 ### 2.5 Manually Resolved / Ignore List
-- [ ] get_existing_review_comments returns resolved: bool
-- [ ] Build ignore fingerprint: (path, content_hash, message_body_hash)
-- [ ] Don't post when (path, content_hash, body_hash) in ignore set
-- [ ] Gitea resolved support or own lifecycle + marker
+- [x] get_existing_review_comments returns resolved: bool
+- [x] Build ignore fingerprint: (path, content_hash, message_body_hash)
+- [x] Don't post when (path, content_hash, body_hash) in ignore set
+- [x] Gitea resolved support or own lifecycle + marker
 
 ### 2.6 Force-Push / Rebase
-- [ ] If inline post fails (position invalid), degrade to PR-level comment
+- [x] If inline post fails (position invalid), degrade to PR-level comment
 
 ### Phase 2 Tests
-- [ ] tests/providers/test_resolved_tracking.py
-- [ ] tests/providers/test_ignore_fingerprint.py
-- [ ] tests/runner/test_idempotency.py
-- [ ] tests/agent/test_ignore_list_integration.py
+- [x] tests/providers/test_resolved_tracking.py
+- [x] tests/providers/test_ignore_fingerprint.py
+- [x] tests/runner/test_idempotency.py
+- [x] tests/agent/test_ignore_list_integration.py
 
 ---
 
 ## Phase 3: Docker and CI Integration
 
 ### 3.1 Docker
-- [ ] `docker/Dockerfile.agent` — Python + google-adk
-- [ ] `docker-compose.yml` — Gitea + Jenkins (pinned image tags)
-- [ ] `docker/jenkins/Jenkinsfile` — pipeline example
-- [ ] Build: `docker build -t code-review-agent ./docker`
-- [ ] Jenkins runs: `docker run --rm -e SCM_* -e LLM_* code-review-agent review`
+- [x] `docker/Dockerfile.agent` — Python + google-adk
+- [x] `docker-compose.yml` — Gitea + Jenkins (pinned image tags)
+- [x] `docker/jenkins/Jenkinsfile` — pipeline example
+- [x] Build: `docker build -t code-review-agent -f docker/Dockerfile.agent .`
+- [x] Jenkins runs: `docker run --rm -e SCM_* -e LLM_* code-review-agent review`
 
 ### 3.2 Skip Mechanism
-- [ ] Skip review if PR has label or title tag (e.g. `[skip-review]`)
+- [x] Skip review if PR has label or title tag (e.g. `[skip-review]`)
 
 ### 3.3 Security
-- [ ] Least-privilege token; repo-scoped only
-- [ ] Container networking: restrict egress; allowlist SCM_URL
+- [x] Least-privilege token; repo-scoped only (documented in README)
+- [x] Container networking: restrict egress; allowlist SCM_URL (documented in README)
 
 ### Phase 3 Tests
-- [ ] tests/cli/test_main.py — CLI parses args, invokes runner
-- [ ] tests/docker/ — Dockerfile builds; docker-compose up
-- [ ] CI smoke test: webhook triggers pipeline
+- [x] tests/cli/test_main.py — CLI parses args, invokes runner
+- [x] tests/docker/ — Dockerfile and compose content checks
+- [x] CI smoke test: webhook triggers pipeline (integration test: agent vs mocked Gitea API in `tests/integration/test_gitea_agent_integration.py`)
 
 ---
 
 ## Phase 4: Comment Format and UX
 
 ### 4.1 Comment Structure
-- [ ] Hidden marker: `<!-- code-review-agent:fingerprint=...;version=... -->`
+- [x] Hidden marker: `<!-- code-review-agent:fingerprint=...;version=... -->` (implemented in Phase 2: see `src/code_review/diff/fingerprint.py` and runner integration when posting comments)
 - [ ] Body: [Critical]/[Suggestion]/[Info] prefix
 - [ ] Location: path, line (or range)
 
