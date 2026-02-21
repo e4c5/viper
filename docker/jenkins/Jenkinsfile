@@ -19,6 +19,8 @@ pipeline {
             steps {
                 script {
                     def image = 'code-review-agent'
+                    // Must match docker-compose project name: runtime network is ${COMPOSE_PROJECT_NAME}_code-review-net.
+                    // Use default (name: code-review in docker-compose.yml) or run compose with -p code-review.
                     def network = 'code-review_code-review-net'
                     // SCM_TOKEN and GOOGLE_API_KEY: set in Jenkins env or use withCredentials
                     sh """

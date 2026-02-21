@@ -1,6 +1,9 @@
 # Gitea + Jenkins for local testing. Agent is NOT a service; run via:
-#   docker run --rm --network code-review_default -e SCM_* -e LLM_* code-review-agent review
+#   docker run --rm --network code-review_code-review-net -e SCM_* -e LLM_* code-review-agent review
 # Build agent image from repo root: docker build -t code-review-agent -f docker/Dockerfile.agent .
+# Network name uses project name "code-review" (set below); if you use -p othername, use othername_code-review-net.
+
+name: code-review
 
 services:
   gitea:

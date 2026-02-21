@@ -202,7 +202,7 @@ Derived from the AI Code Review Agent plan. Mark items with `[x]` when complete.
 ### Phase 3 Tests
 - [x] tests/cli/test_main.py — CLI parses args, invokes runner
 - [x] tests/docker/ — Dockerfile and compose content checks
-- [ ] CI smoke test: webhook triggers pipeline (manual / E2E)
+- [x] CI smoke test: webhook triggers pipeline (integration test: agent vs mocked Gitea API in `tests/integration/test_gitea_agent_integration.py`)
 
 ---
 
