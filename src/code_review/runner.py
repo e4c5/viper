@@ -283,7 +283,7 @@ def run_review(
 
     agent = create_review_agent(provider, review_standards, findings_only=True)
 
-    session_id = f"{owner}_{repo}_{pr_number}_{uuid.uuid4().hex[:12]}"
+    session_id = f"{owner}/{repo}/pr-{pr_number}/{uuid.uuid4().hex[:12]}"
     session_service = InMemorySessionService()
     session_service.create_session_sync(
         app_name=APP_NAME,
@@ -304,14 +304,23 @@ def run_review(
     all_findings: list[FindingV1] = []
     if use_file_by_file and paths:
         for file_path in paths:
+            # Create a fresh session per file: avoids accumulating prior-file context
+            # in the ADK session history, which would grow the context window linearly
+            # and waste tokens across files.
+            file_session_id = f"{owner}/{repo}/pr-{pr_number}/file/{uuid.uuid4().hex[:12]}"
+            session_service.create_session_sync(
+                app_name=APP_NAME,
+                user_id=USER_ID,
+                session_id=file_session_id,
+            )
             msg = (
                 f"Review this PR: owner={owner}, repo={repo}, pr_number={pr_number}."
                 + (f" head_sha={head_sha}." if head_sha else "")
-                + f" Review only this file: {file_path}."
+                + f" Review only this file: {file_path}. Use get_pr_diff_for_file to fetch its diff."
             )
             content = types.Content(role="user", parts=[types.Part(text=msg)])
             response_text = _run_agent_and_collect_response(
-                runner, session_id, content
+                runner, file_session_id, content
             )
             all_findings.extend(_findings_from_response(response_text))
     else:

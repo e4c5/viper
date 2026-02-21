@@ -4,6 +4,7 @@ from typing import Callable
 
 from code_review.agent.tools.review_helpers import detect_language_context
 from code_review.providers.base import ProviderInterface
+from code_review.providers.safety import truncate_repo_content
 
 
 def create_gitea_tools(provider: ProviderInterface) -> list[Callable]:
@@ -50,9 +51,9 @@ def create_gitea_tools(provider: ProviderInterface) -> list[Callable]:
             path: File path relative to repo root.
 
         Returns:
-            File content as string.
+            File content as string (truncated to 16 KB if oversized).
         """
-        return provider.get_file_content(owner, repo, ref, path)
+        return truncate_repo_content(provider.get_file_content(owner, repo, ref, path))
 
     def get_pr_files(owner: str, repo: str, pr_number: int) -> list[dict]:
         """List files changed in a pull request.
@@ -160,7 +161,7 @@ def create_findings_only_tools(provider: ProviderInterface) -> list[Callable]:
         return provider.get_pr_diff_for_file(owner, repo, pr_number, path)
 
     def get_file_content(owner: str, repo: str, ref: str, path: str) -> str:
-        return provider.get_file_content(owner, repo, ref, path)
+        return truncate_repo_content(provider.get_file_content(owner, repo, ref, path))
 
     def get_file_lines(
         owner: str, repo: str, ref: str, path: str, start_line: int, end_line: int
