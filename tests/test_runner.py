@@ -21,6 +21,9 @@ class MockProvider:
     def post_review_comments(self, *args, **kwargs):
         pass
 
+    def post_pr_summary_comment(self, owner, repo, pr_number, body):
+        pass
+
     def get_existing_review_comments(self, owner, repo, pr_number):
         return []
 
@@ -57,6 +60,7 @@ def test_run_review_ignore_list_and_posts_net_new(
         MagicMock(path="foo.py", body="[Critical] Duplicate finding.", model_dump=lambda: {"path": "foo.py", "body": "[Critical] Duplicate finding."}),
     ]
     provider.post_review_comments = MagicMock()
+    provider.post_pr_summary_comment = MagicMock()
     mock_get_provider.return_value = provider
     mock_get_context_window.return_value = 1_000_000
 
@@ -86,6 +90,12 @@ def test_run_review_ignore_list_and_posts_net_new(
     assert "[Suggestion] Net new finding." in body
     assert "code-review-agent:" in body and "fingerprint=" in body
     assert call_args[1]["head_sha"] == "abc123"
+
+    # Phase 4.2: PR summary comment posted after successful inline post
+    provider.post_pr_summary_comment.assert_called_once()
+    summary_body = provider.post_pr_summary_comment.call_args[0][3]
+    assert "1 Suggestion" in summary_body
+    assert "See inline comments above" in summary_body
 
 
 @patch("code_review.runner.get_context_window")

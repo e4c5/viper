@@ -210,22 +210,22 @@ Derived from the AI Code Review Agent plan. Mark items with `[x]` when complete.
 
 ### 4.1 Comment Structure
 - [x] Hidden marker: `<!-- code-review-agent:fingerprint=...;version=... -->` (implemented in Phase 2: see `src/code_review/diff/fingerprint.py` and runner integration when posting comments)
-- [ ] Body: [Critical]/[Suggestion]/[Info] prefix
-- [ ] Location: path, line (or range)
+- [x] Body: [Critical]/[Suggestion]/[Info] prefix (`src/code_review/formatters/comment.py`)
+- [x] Location: path, line (or range) — path and line in payload; range in body when end_line set
 
 ### 4.2 PR Summary Comment
-- [ ] PR-level summary: counts by severity; link to inline comments
+- [x] PR-level summary: counts by severity; link to inline comments (runner posts after successful inline post)
 
 ### 4.3 Observability
-- [ ] trace_id (UUID) per run
-- [ ] Structured logs (JSON or key-value)
-- [ ] Counters: PR size, files reviewed, tool calls, model latency, findings count, posts, resolves, retries
-- [ ] Optional: Prometheus, OpenTelemetry export
+- [x] trace_id (UUID) per run
+- [x] Structured logs (run_complete with trace_id, owner, repo, pr_number, files_count, findings_count, posts_count, duration_ms)
+- [x] Counters: PR size (files_count), findings count, posts; resolves/retries deferred
+- [x] Optional: Prometheus, OpenTelemetry export (`src/code_review/observability.py`; env CODE_REVIEW_METRICS=prometheus, CODE_REVIEW_TRACING=otel; pip install -e ".[observability]")
 
 ### Phase 4 Tests
-- [ ] tests/standards/test_prompts.py
-- [ ] tests/formatters/test_comment_format.py
-- [ ] tests/runner/test_observability.py
+- [x] tests/standards/test_prompts.py
+- [x] tests/formatters/test_comment_format.py
+- [x] tests/runner/test_observability.py
 
 ---
 

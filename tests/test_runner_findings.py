@@ -1,9 +1,9 @@
 """Tests for runner findings parsing and ignore set."""
 
+from code_review.formatters.comment import finding_to_comment_body
 from code_review.runner import (
     _build_ignore_set,
     _findings_from_response,
-    _finding_to_comment_body,
     _parse_findings_json,
 )
 from code_review.schemas.findings import FindingV1
@@ -47,5 +47,5 @@ def test_findings_from_response_invalid_skipped():
 
 def test_finding_to_comment_body():
     f = FindingV1(path="a.py", line=1, severity="suggestion", code="x", message="Do Y.")
-    body = _finding_to_comment_body(f)
+    body = finding_to_comment_body(f)
     assert body == "[Suggestion] Do Y."

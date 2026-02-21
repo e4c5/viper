@@ -58,6 +58,8 @@ def test_agent_vs_gitea_posts_findings_to_mocked_api(
     pr_path = re.compile(r"^/api/v1/repos/o/r/pulls/1$")
     contents_path = re.compile(r"^/api/v1/repos/o/r/contents/foo\.py")
     reviews_path = re.compile(r"^/api/v1/repos/o/r/pulls/1/reviews$")
+    # PR summary comment (Phase 4.2): Gitea uses issues/{pr}/comments
+    issues_comments_path = re.compile(r"^/api/v1/repos/o/r/issues/1/comments$")
 
     respx_mock.get(path__regex=comments_path).mock(return_value=httpx.Response(200, json=[]))
     respx_mock.get(path__regex=files_path).mock(
@@ -75,6 +77,7 @@ def test_agent_vs_gitea_posts_findings_to_mocked_api(
         )
     )
     post_review = respx_mock.post(path__regex=reviews_path).mock(return_value=httpx.Response(200, json={}))
+    post_summary = respx_mock.post(path__regex=issues_comments_path).mock(return_value=httpx.Response(200, json={}))
 
     mock_cfg.return_value = MagicMock(
         provider="gitea",
@@ -113,3 +116,10 @@ def test_agent_vs_gitea_posts_findings_to_mocked_api(
     assert payload["comments"][0]["line"] == 2
     assert "[Suggestion]" in payload["comments"][0]["body"]
     assert payload.get("commit_id") == head_sha
+
+    # Phase 4.2: PR summary comment posted after successful inline post
+    assert post_summary.called
+    summary_payload = json.loads(post_summary.calls[0].request.content.decode())
+    assert "body" in summary_payload
+    assert "1 Suggestion" in summary_payload["body"]
+    assert "See inline comments above" in summary_payload["body"]

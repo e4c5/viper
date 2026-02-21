@@ -51,6 +51,19 @@ If you run compose with a different project name (`docker compose -p myproject u
 - **Least-privilege token:** Use a bot account with repo-scoped (read + comment) permission only; avoid org-wide tokens.
 - **Container networking:** Run the agent container with restricted egress where possible (allowlist SCM_URL and LLM API endpoints). The agent is the only component that should call SCM APIs; avoid passing credentials to plugins that also talk to SCM.
 
+## Observability (optional)
+
+To export metrics and traces:
+
+```bash
+pip install -e ".[observability]"
+```
+
+- **Prometheus:** set `CODE_REVIEW_METRICS=prometheus` (or `CODE_REVIEW_PROMETHEUS=1`). Use `code_review.observability.get_prometheus_registry()` to expose a `/metrics` endpoint (e.g. with your WSGI/ASGI server).
+- **OpenTelemetry:** set `CODE_REVIEW_TRACING=otel` (or `CODE_REVIEW_OTEL=1`). Set `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) to export spans (e.g. `http://localhost:4318/v1/traces`).
+
+Metrics: `code_review_runs_total{outcome}`, `code_review_run_duration_seconds`, `code_review_findings_total`, `code_review_posts_total`. Spans: `run_review` with attributes (owner, repo, pr_number, files_count, findings_count, posts_count, duration_seconds).
+
 ## Development
 
 ```bash
