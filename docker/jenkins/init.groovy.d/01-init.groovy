@@ -4,8 +4,7 @@ import hudson.security.FullControlOnceLoggedInAuthorizationStrategy
 import com.cloudbees.plugins.credentials.CredentialsScope
 import com.cloudbees.plugins.credentials.SystemCredentialsProvider
 import com.cloudbees.plugins.credentials.domains.Domain
-import com.cloudbees.plugins.credentials.impl.StringCredentialsImpl
-import org.jenkinsci.plugins.plaincredentials.StringCredentials
+import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl
 import hudson.util.Secret
 
 def env = System.getenv()

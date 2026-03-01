@@ -28,20 +28,24 @@ pipeline {
                     def image = 'code-review-agent'
                     def projectName = env.COMPOSE_PROJECT_NAME ?: params.COMPOSE_PROJECT_NAME
                     def network = "${projectName}_code-review-net"
+                    def scmOwner = params.SCM_OWNER ?: env.SCM_OWNER
+                    def scmRepo = params.SCM_REPO ?: env.SCM_REPO
+                    def scmPrNum = params.SCM_PR_NUM ?: env.SCM_PR_NUM
+                    def scmHeadSha = params.SCM_HEAD_SHA ?: env.SCM_HEAD_SHA
                     // SCM_TOKEN and GOOGLE_API_KEY are injected via Jenkins credentials (environment {} above).
                     sh """
                         docker run --rm --network ${network} \
                             -e SCM_PROVIDER=gitea \
                             -e SCM_URL=http://gitea:3000 \
                             -e SCM_TOKEN \
-                            -e SCM_OWNER=${params.SCM_OWNER} \
-                            -e SCM_REPO=${params.SCM_REPO} \
-                            -e SCM_PR_NUM=${params.SCM_PR_NUM} \
-                            -e SCM_HEAD_SHA=${params.SCM_HEAD_SHA} \
+                            -e SCM_OWNER=${scmOwner} \
+                            -e SCM_REPO=${scmRepo} \
+                            -e SCM_PR_NUM=${scmPrNum} \
+                            -e SCM_HEAD_SHA=${scmHeadSha} \
                             -e LLM_PROVIDER=${params.LLM_PROVIDER} \
                             -e LLM_MODEL=${params.LLM_MODEL} \
                             -e GOOGLE_API_KEY \
-                            ${image} review --owner ${params.SCM_OWNER} --repo ${params.SCM_REPO} --pr ${params.SCM_PR_NUM} --head-sha ${params.SCM_HEAD_SHA}
+                            ${image} review --owner ${scmOwner} --repo ${scmRepo} --pr ${scmPrNum} --head-sha ${scmHeadSha}
                     """
                 }
             }
