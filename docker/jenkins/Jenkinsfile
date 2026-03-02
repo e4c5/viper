@@ -78,6 +78,8 @@ pipeline {
                         "USE_INLINE_AGENT=${useInlineAgent}",
                     ]) {
                         sh '''
+                            set -euo pipefail
+                            set -x
                             if [ "$USE_INLINE_AGENT" = "true" ] || [ "$USE_INLINE_AGENT" = "1" ]; then
                                 export SCM_PROVIDER=gitea SCM_URL=http://gitea:3000 SCM_TOKEN="$SCM_TOKEN"
                                 code-review --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA" --print-findings
@@ -103,6 +105,7 @@ pipeline {
                                     -e SCM_HEAD_SHA="$REVIEW_SCM_HEAD_SHA" \
                                     -e LLM_PROVIDER="$REVIEW_LLM_PROVIDER" \
                                     -e LLM_MODEL="$REVIEW_LLM_MODEL" \
+                                    -e PYTHONUNBUFFERED=1 \
                                     -e GOOGLE_API_KEY \
                                     "$REVIEW_IMAGE" --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA" --print-findings \
                                 || { echo "HINT: If using Podman and you see uid_map or 'Operation not permitted', set USE_INLINE_AGENT=true (see docs/QUICKSTART.md)."; exit 1; }
