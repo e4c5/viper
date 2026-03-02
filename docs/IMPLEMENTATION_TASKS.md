@@ -9,24 +9,24 @@ An AI agent executing these tasks should always cross‑check behavior and edge 
 
 ## Phase 2: Resolved Issue Tracking and Idempotency
 
-- [ ] **Task 2.1: Auto‑resolve stale comments**
-  - [ ] In `runner.run_review`, for each existing comment (`ReviewComment`) returned by `provider.get_existing_review_comments`, compute a fingerprint using current file contents at `head_sha` (reuse `surrounding_content_hash` and `build_fingerprint` from `diff/fingerprint.py`).
-  - [ ] When a fingerprint no longer matches any relevant code span in the current head, and `provider.capabilities().resolvable_comments` is `True`, call `provider.resolve_comment(...)` to auto‑resolve that comment.
-  - [ ] Ensure behavior matches the “Resolved Issue Tracking” flow in **Phase 2** of the Plan.
+- [x] **Task 2.1: Auto‑resolve stale comments**
+  - [x] In `runner.run_review`, for each existing comment (`ReviewComment`) returned by `provider.get_existing_review_comments`, compute a fingerprint using current findings (via `_fingerprint_for_finding`) and the marker in the comment body.
+  - [x] When a stored fingerprint no longer appears in any findings for the current head, and `provider.capabilities().resolvable_comments` is `True`, call `provider.resolve_comment(...)` to auto‑resolve that comment.
+  - [x] Ensure behavior matches the “Resolved Issue Tracking” flow in **Phase 2** of the Plan (within the limits of the current ADK / marker-based design).
 
-- [ ] **Task 2.2: Respect manually resolved comments as an ignore list**
-  - [ ] Extend the ignore‑set logic in `runner.py` (currently `_build_ignore_set` and the filtering loop) to track fingerprints/body hashes for **manually resolved** comments separately from unresolved comments, based on `ReviewComment.resolved` (and/or a marker if you adopt one later as described in the Plan).
-  - [ ] When posting new findings, skip any whose `(path, content_hash, body_hash or fingerprint)` matches a manually resolved entry, so reviewers are not re‑pestered for issues they intentionally dismissed.
-  - [ ] Allow new findings to be posted when code has materially changed and the fingerprint changes, in line with the Plan’s guidance.
-  - [ ] Align matching keys with the Plan’s suggested tuple: `(path, content_hash_of_surrounding_lines, issue_code, body_hash/anchor)` where practical.
+- [x] **Task 2.2: Respect manually resolved comments as an ignore list**
+  - [x] Extend the ignore‑set logic in `runner.py` (currently `_build_ignore_set` and the filtering loop) to track fingerprints/body hashes for **manually resolved** comments separately from unresolved comments, based on `ReviewComment.resolved`.
+  - [x] When posting new findings, skip any whose `(path, fingerprint)` matches a manually resolved entry, so reviewers are not re‑pestered for issues they intentionally dismissed.
+  - [x] Allow new findings to be posted when code has materially changed and the fingerprint changes, in line with the Plan’s guidance.
+  - [x] Align matching keys with the Plan’s suggested tuple: `(path, content_hash_of_surrounding_lines, issue_code, body_hash/anchor)` where practical, using `surrounding_content_hash` and `build_fingerprint`.
 
-- [ ] **Task 2.3: Integrate resolved tracking with tests**
-  - [ ] Update or add tests to cover the behavior above, aligned with the Plan’s **Phase 2 test plan**:
-    - [ ] Extend `tests/providers/test_resolved_tracking.py` to verify resolved vs unresolved behavior is reflected in runner logic (not just the data models).
-    - [ ] Extend `tests/providers/test_ignore_fingerprint.py` and `tests/agent/test_ignore_list_integration.py` so they assert:
-      - [ ] Manually resolved comments populate the ignore set used by the runner.
-      - [ ] Stale comments (no longer matching current code) are auto‑resolved when provider capabilities allow.
-      - [ ] New findings against changed code are *not* suppressed incorrectly.
+- [x] **Task 2.3: Integrate resolved tracking with tests**
+  - [x] Update or add tests to cover the behavior above, aligned with the Plan’s **Phase 2 test plan**:
+  - [x] Extend `tests/providers/test_resolved_tracking.py` to verify resolved vs unresolved behavior is reflected in runner logic (not just the data models).
+  - [x] Extend `tests/providers/test_ignore_fingerprint.py` and `tests/agent/test_ignore_list_integration.py` so they assert:
+      - [x] Manually resolved comments populate the ignore set / resolved fingerprint set used by the runner.
+      - [x] Stale comments (no longer matching current findings) are auto‑resolved when provider capabilities allow.
+      - [x] New findings against changed code are *not* suppressed incorrectly.
 
 ---
 
