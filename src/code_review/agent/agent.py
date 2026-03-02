@@ -56,6 +56,11 @@ def create_review_agent(
     else:
         tools = create_gitea_tools(provider)
         instruction = BASE_INSTRUCTION
+    # Debug mode: disable tool calls when LLM_DISABLE_TOOL_CALLS is set.
+    # This constructs the Agent without function tools so tests can exercise
+    # runner logic without invoking SCM-backed tools.
+    if getattr(llm_cfg, "disable_tool_calls", False):
+        tools = []
     if review_standards:
         instruction = instruction.rstrip() + "\n\n" + review_standards
 

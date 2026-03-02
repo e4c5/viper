@@ -260,6 +260,26 @@ def run_review(
     existing = provider.get_existing_review_comments(owner, repo, pr_number)
     existing_dicts = [c.model_dump() for c in existing]
     ignore_set = _build_ignore_set(existing_dicts)
+    # Track manually resolved comments separately for ignore and auto-resolve behavior.
+    resolved_comments = []
+    for c in existing:
+        # Only treat comments as resolved when the resolved attribute is a real
+        # boolean True (avoids MagicMock truthiness in tests).
+        resolved_flag = getattr(c, "resolved", False)
+        if isinstance(resolved_flag, bool) and resolved_flag:
+            resolved_comments.append(c)
+    resolved_body_set: set[tuple[str, str]] = set()
+    resolved_fp_set: set[tuple[str, str]] = set()
+    for c in resolved_comments:
+        path = getattr(c, "path", "") or ""
+        body = getattr(c, "body", "") or ""
+        if not path or not body:
+            continue
+        body_hash = hashlib.sha256(body.encode()).hexdigest()
+        resolved_body_set.add((path, body_hash))
+        parsed = parse_marker_from_comment_body(body)
+        if parsed.get("fingerprint"):
+            resolved_fp_set.add((path, parsed["fingerprint"]))
 
     # Idempotency: skip if we already ran for this PR/head/config (run id in comment marker)
     if head_sha:
@@ -345,15 +365,32 @@ def run_review(
     for f in all_findings:
         body = finding_to_comment_body(f)
         body_hash = hashlib.sha256(body.encode()).hexdigest()
-        if (f.path, body_hash) in ignore_set:
-            continue
+        # Compute fingerprint (when possible) before consulting resolved sets.
         if file_lines_by_path:
             fp = _fingerprint_for_finding(f, file_lines_by_path)
-            if (f.path, fp) in ignore_set:
-                continue
-            ignore_set.add((f.path, fp))
         else:
             fp = ""
+
+        # Manually resolved comments act as an ignore list keyed by fingerprint:
+        # if the fingerprint matches a resolved entry, skip reposting the same issue.
+        if fp and (f.path, fp) in resolved_fp_set:
+            continue
+
+        # For unresolved comments, use the combined ignore_set, but do not let
+        # manually-resolved body hashes suppress findings when the fingerprint
+        # (code anchor) has changed.
+        # For comments without markers (e.g. older runs or manual comments), we
+        # still use body-hash based dedupe so the basic "duplicate vs net-new"
+        # behavior (tested in test_run_review_ignore_list_and_posts_net_new)
+        # remains intact. Resolved-body entries are handled separately.
+        if (f.path, body_hash) in ignore_set and (f.path, body_hash) not in resolved_body_set:
+            continue
+        if fp and (f.path, fp) in ignore_set and (f.path, fp) not in resolved_fp_set:
+            continue
+
+        # Update ignore_set so subsequent duplicate findings in this run are filtered.
+        if fp:
+            ignore_set.add((f.path, fp))
         ignore_set.add((f.path, body_hash))
         to_post.append((f, fp))
 
@@ -362,6 +399,28 @@ def run_review(
             print(f"{f.path}:{f.line} [{f.severity}] {f.get_body()}")
 
     successful_post_count = 0
+    # Auto-resolve stale comments when the provider supports it and we are not in dry_run:
+    # if a comment's fingerprint marker is no longer present in any findings
+    # for this run, consider it stale and resolve it.
+    if provider.capabilities().resolvable_comments and head_sha and not dry_run:
+        new_fps = {fp for _, fp in to_post if fp}
+        for c in existing:
+            body = getattr(c, "body", "") or ""
+            parsed = parse_marker_from_comment_body(body)
+            fp_old = parsed.get("fingerprint")
+            if not fp_old or fp_old in new_fps:
+                continue
+            try:
+                provider.resolve_comment(owner, repo, c.id)
+            except Exception as e:
+                logger.warning(
+                    "resolve_comment failed owner=%s repo=%s pr_number=%s comment_id=%s: %s",
+                    owner,
+                    repo,
+                    pr_number,
+                    getattr(c, "id", ""),
+                    e,
+                )
     if not dry_run and to_post:
         if not head_sha:
             raise ValueError(

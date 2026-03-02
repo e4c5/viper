@@ -255,6 +255,9 @@ Configuration is read via **Pydantic Settings** in `config.py`; no `.env` file i
 | `LLM_TIMEOUT_SECONDS` | No | Per-request timeout (default 60.0) |
 | `LLM_MAX_RETRIES` | No | Max retries (default 3) |
 
+> **Note (timeouts & retries)**  
+> The current Google ADK Python APIs used by this project do not yet expose a straightforward way to wire `LLM_TIMEOUT_SECONDS` and `LLM_MAX_RETRIES` through to the underlying LLM client. These fields are therefore **configuration-only** for now and reserved for future use, as described in the Plan’s Phase 1 “Timeouts + retry” section.
+
 Provider-specific keys (used by ADK/LiteLLM, not by `config.py`): `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`; for Ollama, `OLLAMA_API_BASE` (default `http://localhost:11434`).
 
 ### 6.3 Observability

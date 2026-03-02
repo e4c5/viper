@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from code_review.agent import create_review_agent
-from code_review.providers.base import FileInfo, PRInfo
+from code_review.providers.base import FileInfo, PRInfo, ProviderCapabilities
 
 
 class MockProvider:
@@ -48,18 +48,32 @@ def test_run_review_ignore_list_and_posts_net_new(
     from code_review.runner import run_review
 
     mock_get_scm_config.return_value = MagicMock(
-        provider="gitea", url="https://x.com", token="x"
+        provider="gitea",
+        url="https://x.com",
+        token="x",
+        skip_label="",
+        skip_title_pattern="",
     )
-    provider = MagicMock(spec=MockProvider)
+    provider = MagicMock()
     provider.get_pr_files.return_value = [
         FileInfo(path="foo.py", status="modified"),
     ]
     provider.get_pr_diff.return_value = "diff"
     provider.get_file_content.return_value = "content"
+    # Existing comment body matches the fully formatted body the runner will
+    # generate for the duplicate finding, including severity prefix.
+    existing_body = "[Critical] Duplicate finding."
     provider.get_existing_review_comments.return_value = [
-        MagicMock(path="foo.py", body="[Critical] Duplicate finding.", model_dump=lambda: {"path": "foo.py", "body": "[Critical] Duplicate finding."}),
+        MagicMock(
+            path="foo.py",
+            body=existing_body,
+            model_dump=lambda: {"path": "foo.py", "body": existing_body},
+        ),
     ]
     provider.post_review_comments = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        resolvable_comments=False, supports_suggestions=False
+    )
     provider.post_pr_summary_comment = MagicMock()
     mock_get_provider.return_value = provider
     mock_get_context_window.return_value = 1_000_000
@@ -108,14 +122,21 @@ def test_run_review_raises_when_posting_without_head_sha(
     from code_review.runner import run_review
 
     mock_get_scm_config.return_value = MagicMock(
-        provider="gitea", url="https://x.com", token="x"
+        provider="gitea",
+        url="https://x.com",
+        token="x",
+        skip_label="",
+        skip_title_pattern="",
     )
-    provider = MagicMock(spec=MockProvider)
+    provider = MagicMock()
     provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
     provider.get_pr_diff.return_value = "diff"
     provider.get_file_content.return_value = "content"
     provider.get_existing_review_comments.return_value = []
     provider.post_review_comments = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        resolvable_comments=False, supports_suggestions=False
+    )
     mock_get_provider.return_value = provider
     mock_get_context_window.return_value = 1_000_000
 
