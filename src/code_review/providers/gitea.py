@@ -188,7 +188,14 @@ class GiteaProvider(ProviderInterface):
     ) -> list[ReviewComment]:
         """Return existing review comments. Gitea may not expose 'resolved' via API."""
         path = f"/repos/{owner}/{repo}/pulls/{pr_number}/comments"
-        data = self._get(path)
+        # Older Gitea versions (e.g. 1.21.x) do not expose this endpoint and return 404.
+        # Treat 404 as "no existing review comments" instead of failing the whole run.
+        try:
+            data = self._get(path)
+        except httpx.HTTPStatusError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                return []
+            raise
         if not isinstance(data, list):
             return []
         result: list[ReviewComment] = []

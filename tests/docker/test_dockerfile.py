@@ -40,5 +40,7 @@ def test_jenkinsfile_exists():
 def test_jenkinsfile_runs_agent():
     p = REPO_ROOT / "docker" / "jenkins" / "Jenkinsfile"
     content = p.read_text()
-    assert "docker run" in content
+    # Pipeline runs agent via container (docker or podman, possibly via runtime auto-detect)
     assert "review" in content
+    assert " run " in content
+    assert "docker" in content or "podman" in content or "runtime" in content

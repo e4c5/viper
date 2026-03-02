@@ -11,7 +11,7 @@ Get the code review agent running with Docker Compose (or Podman Compose), Gitea
 
 ---
 
-## 1. Start the stack
+## 1. Start the stack (Docker)
 
 From the **repository root** (the folder that contains `docker-compose.yml`):
 
@@ -21,21 +21,10 @@ From the **repository root** (the folder that contains `docker-compose.yml`):
 docker compose up -d --build
 ```
 
-**Podman:**
-
-```bash
-export XDG_RUNTIME_DIR=/run/user/$(id -u)
-systemctl --user start podman.socket
-export CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
-export CONTAINER_RUNTIME=podman
-ls -l "$CONTAINER_SOCKET"
-podman-compose up -d --build
-```
-
 - **Gitea**: http://localhost:3000  
 - **Jenkins**: http://localhost:8080  
 
-When using Podman, the Compose file mounts the Podman socket into the Jenkins container, and the `CONTAINER_RUNTIME` variable tells the pipeline to invoke `podman run` instead of `docker run`.
+For **Podman**, see `docs/QUICKSTART-podman.md` for rootless setup, inline mode, and troubleshooting.
 
 After changing the Jenkins image or Compose file, rebuild and restart the stack:
 
@@ -45,21 +34,6 @@ After changing the Jenkins image or Compose file, rebuild and restart the stack:
 docker compose down
 docker compose up -d --build
 ```
-
-**Podman:**
-
-```bash
-podman-compose down
-podman-compose up -d --build
-```
-
-If `podman.sock` does not exist after starting `podman.socket`, run:
-
-```bash
-podman system service --time=0 unix://$XDG_RUNTIME_DIR/podman/podman.sock
-```
-
----
 
 ## 2. Configure Gitea
 
@@ -106,6 +80,11 @@ docker build -t code-review-agent -f docker/Dockerfile.agent .
 ```bash
 podman build -t code-review-agent -f docker/Dockerfile.agent .
 ```
+
+### When to rebuild (and why it’s fast)
+
+- **Rebuild required** whenever you change code under `src/` or runtime dependencies in `pyproject.toml`, so that the `code-review-agent` image picks up those changes.
+- The `docker/Dockerfile.agent` is structured so that dependency metadata (`pyproject.toml`) is copied before the source tree; Docker can therefore **cache the expensive `pip install` layer**, and most code-only edits only invalidate the final layers, keeping rebuilds relatively fast.
 
 ---
 

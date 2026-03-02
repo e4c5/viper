@@ -41,6 +41,7 @@ services:
       JENKINS_ADMIN_USER: admin
       JENKINS_ADMIN_PASS: admin
       CONTAINER_RUNTIME: ${CONTAINER_RUNTIME:-docker}
+      USE_INLINE_AGENT: ${USE_INLINE_AGENT:-false}
       # Optional: seed credentials for local testing
       # SCM_TOKEN: your_gitea_token
       # GOOGLE_API_KEY: your_google_api_key
