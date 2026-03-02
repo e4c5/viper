@@ -41,6 +41,10 @@ pipeline {
                     def containerRuntime = env.CONTAINER_RUNTIME ?: 'docker'
                     def allowedActions = ['opened', 'synchronize']
 
+                    if (!env.SCM_TOKEN?.trim()) {
+                        error('SCM_TOKEN is empty. Configure Jenkins Secret text credentials with ID "SCM_TOKEN" (see README.md) before running this pipeline.')
+                    }
+
                     if (prAction && !allowedActions.contains(prAction)) {
                         currentBuild.description = "Skipped PR action: ${prAction}"
                         echo "Skipping PR action '${prAction}'. Allowed actions: ${allowedActions.join(', ')}."
@@ -92,7 +96,7 @@ pipeline {
                                 "$runtime" run --rm --network "$REVIEW_NETWORK" \
                                     -e SCM_PROVIDER=gitea \
                                     -e SCM_URL=http://gitea:3000 \
-                                    -e SCM_TOKEN \
+                                    -e SCM_TOKEN="$SCM_TOKEN" \
                                     -e SCM_OWNER="$REVIEW_SCM_OWNER" \
                                     -e SCM_REPO="$REVIEW_SCM_REPO" \
                                     -e SCM_PR_NUM="$REVIEW_SCM_PR_NUM" \
