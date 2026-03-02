@@ -81,6 +81,11 @@ docker build -t code-review-agent -f docker/Dockerfile.agent .
 podman build -t code-review-agent -f docker/Dockerfile.agent .
 ```
 
+### When to rebuild (and why it’s fast)
+
+- **Rebuild required** whenever you change code under `src/` or runtime dependencies in `pyproject.toml`, so that the `code-review-agent` image picks up those changes.
+- The `docker/Dockerfile.agent` is structured so that dependency metadata (`pyproject.toml`) is copied before the source tree; Docker can therefore **cache the expensive `pip install` layer**, and most code-only edits only invalidate the final layers, keeping rebuilds relatively fast.
+
 ---
 
 ## 5. Auto-trigger PR reviews (Gitea webhook → Jenkins)

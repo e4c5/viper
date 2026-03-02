@@ -7,8 +7,13 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Install deps and package (no dev deps)
+# Copy dependency metadata first (changes less often than source)
 COPY pyproject.toml ./
+
+# Copy source code (changes frequently)
 COPY src ./src/
+
+# Install package and dependencies; pip will reuse wheels between layers when possible
 RUN pip install --no-cache-dir -e .
 
 # Run as unprivileged user
