@@ -1,6 +1,8 @@
 // Pipeline example: code review on PR. Set SCM_* and LLM_* via parameters or Gitea webhook.
-// Agent runs as one-shot container: docker run --rm code-review-agent review
+// Agent runs as one-shot container: $CONTAINER_RUNTIME run --rm code-review-agent review
 // Build agent image from repo root: docker build -t code-review-agent -f docker/Dockerfile.agent .
+//   (or: podman build -t code-review-agent -f docker/Dockerfile.agent .)
+// Set CONTAINER_RUNTIME env var (default: docker) to use a different container runtime (e.g. podman).
 
 pipeline {
     agent any
@@ -36,7 +38,7 @@ pipeline {
                     def prAction = params.PR_ACTION ?: env.PR_ACTION
                     def llmProvider = params.LLM_PROVIDER ?: env.LLM_PROVIDER
                     def llmModel = params.LLM_MODEL ?: env.LLM_MODEL
-                    def containerRuntime = env.CONTAINER_RUNTIME ?: '/usr/bin/docker'
+                    def containerRuntime = env.CONTAINER_RUNTIME ?: 'docker'
                     def allowedActions = ['opened', 'synchronize']
 
                     if (prAction && !allowedActions.contains(prAction)) {

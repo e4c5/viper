@@ -1,12 +1,12 @@
-# Quick Start Guide (Docker Only)
+# Quick Start Guide
 
-Get the code review agent running with Docker Compose, Gitea, Jenkins, and auto-triggered PR reviews.
+Get the code review agent running with Docker Compose (or Podman Compose), Gitea, Jenkins, and auto-triggered PR reviews.
 
 ---
 
 ## Prerequisites
 
-- **Docker** and **Docker Compose**
+- **Docker** and **Docker Compose**, **or** **Podman** and **Podman Compose**
 - **LLM API key** (for example `GOOGLE_API_KEY`)
 
 ---
@@ -15,16 +15,19 @@ Get the code review agent running with Docker Compose, Gitea, Jenkins, and auto-
 
 From the **repository root** (the folder that contains `docker-compose.yml`):
 
+**Docker:**
+
 ```bash
 docker compose up -d --build
 ```
 
-If you use Podman Compose:
+**Podman:**
 
 ```bash
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 systemctl --user start podman.socket
 export CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
+export CONTAINER_RUNTIME=podman
 ls -l "$CONTAINER_SOCKET"
 podman-compose up -d --build
 ```
@@ -32,16 +35,18 @@ podman-compose up -d --build
 - **Gitea**: http://localhost:3000  
 - **Jenkins**: http://localhost:8080  
 
-If you use Podman, this setup mounts the Podman socket at `/var/run/docker.sock`, and the Docker CLI inside Jenkins talks to that socket.
+When using Podman, the Compose file mounts the Podman socket into the Jenkins container, and the `CONTAINER_RUNTIME` variable tells the pipeline to invoke `podman run` instead of `docker run`.
 
 After changing the Jenkins image or Compose file, rebuild and restart the stack:
+
+**Docker:**
 
 ```bash
 docker compose down
 docker compose up -d --build
 ```
 
-If you use Podman:
+**Podman:**
 
 ```bash
 podman-compose down
@@ -90,8 +95,16 @@ podman system service --time=0 unix://$XDG_RUNTIME_DIR/podman/podman.sock
 
 From the repository root:
 
+**Docker:**
+
 ```bash
 docker build -t code-review-agent -f docker/Dockerfile.agent .
+```
+
+**Podman:**
+
+```bash
+podman build -t code-review-agent -f docker/Dockerfile.agent .
 ```
 
 ---
