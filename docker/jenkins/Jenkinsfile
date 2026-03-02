@@ -1,8 +1,8 @@
 // Pipeline example: code review on PR. Set SCM_* and LLM_* via parameters or Gitea webhook.
-// Agent runs as one-shot container: $CONTAINER_RUNTIME run --rm code-review-agent review
+// Agent runs as one-shot container: <runtime> run --rm code-review-agent review
 // Build agent image from repo root: docker build -t code-review-agent -f docker/Dockerfile.agent .
 //   (or: podman build -t code-review-agent -f docker/Dockerfile.agent .)
-// Set CONTAINER_RUNTIME env var (default: docker) to use a different container runtime (e.g. podman).
+// Runtime: set CONTAINER_RUNTIME (e.g. podman) to force one; otherwise pipeline auto-detects docker or podman.
 
 pipeline {
     agent any
@@ -72,7 +72,18 @@ pipeline {
                         "REVIEW_LLM_MODEL=${llmModel}",
                     ]) {
                         sh '''
-                            "$CONTAINER_RUNTIME" run --rm --network "$REVIEW_NETWORK" \
+                            runtime="$CONTAINER_RUNTIME"
+                            if [ -z "$runtime" ] || ! command -v "$runtime" >/dev/null 2>&1; then
+                                if command -v docker >/dev/null 2>&1; then
+                                    runtime=docker
+                                elif command -v podman >/dev/null 2>&1; then
+                                    runtime=podman
+                                else
+                                    echo "ERROR: No container runtime found. Set CONTAINER_RUNTIME (e.g. podman) or install docker/podman in the Jenkins agent."
+                                    exit 1
+                                fi
+                            fi
+                            "$runtime" run --rm --network "$REVIEW_NETWORK" \
                                 -e SCM_PROVIDER=gitea \
                                 -e SCM_URL=http://gitea:3000 \
                                 -e SCM_TOKEN \

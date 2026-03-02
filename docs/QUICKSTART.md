@@ -35,7 +35,7 @@ podman-compose up -d --build
 - **Gitea**: http://localhost:3000  
 - **Jenkins**: http://localhost:8080  
 
-When using Podman, the Compose file mounts the Podman socket into the Jenkins container, and the `CONTAINER_RUNTIME` variable tells the pipeline to invoke `podman run` instead of `docker run`.
+When using Podman, the Compose file mounts the Podman socket into the Jenkins container. Set `CONTAINER_RUNTIME=podman` so the pipeline explicitly uses `podman run`; if you omit it, the pipeline will auto-detect and use `podman` when `docker` is not available.
 
 After changing the Jenkins image or Compose file, rebuild and restart the stack:
 
