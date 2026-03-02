@@ -399,10 +399,10 @@ def run_review(
             print(f"{f.path}:{f.line} [{f.severity}] {f.get_body()}")
 
     successful_post_count = 0
-    # Auto-resolve stale comments when the provider supports it:
+    # Auto-resolve stale comments when the provider supports it and we are not in dry_run:
     # if a comment's fingerprint marker is no longer present in any findings
     # for this run, consider it stale and resolve it.
-    if provider.capabilities().resolvable_comments and head_sha:
+    if provider.capabilities().resolvable_comments and head_sha and not dry_run:
         new_fps = {fp for _, fp in to_post if fp}
         for c in existing:
             body = getattr(c, "body", "") or ""

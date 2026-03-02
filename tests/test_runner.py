@@ -48,7 +48,11 @@ def test_run_review_ignore_list_and_posts_net_new(
     from code_review.runner import run_review
 
     mock_get_scm_config.return_value = MagicMock(
-        provider="gitea", url="https://x.com", token="x"
+        provider="gitea",
+        url="https://x.com",
+        token="x",
+        skip_label="",
+        skip_title_pattern="",
     )
     provider = MagicMock()
     provider.get_pr_files.return_value = [
@@ -118,7 +122,11 @@ def test_run_review_raises_when_posting_without_head_sha(
     from code_review.runner import run_review
 
     mock_get_scm_config.return_value = MagicMock(
-        provider="gitea", url="https://x.com", token="x"
+        provider="gitea",
+        url="https://x.com",
+        token="x",
+        skip_label="",
+        skip_title_pattern="",
     )
     provider = MagicMock()
     provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
