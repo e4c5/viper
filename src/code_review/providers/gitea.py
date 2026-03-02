@@ -188,7 +188,17 @@ class GiteaProvider(ProviderInterface):
     ) -> list[ReviewComment]:
         """Return existing review comments. Gitea may not expose 'resolved' via API."""
         path = f"/repos/{owner}/{repo}/pulls/{pr_number}/comments"
-        data = self._get(path)
+        # Older Gitea versions (e.g. 1.21.x) do not expose this endpoint and return 404.
+        # Treat 404 as "no existing review comments" instead of failing the whole run.
+        url = f"{self._base_url}/api/v1{path}"
+        r = self._request_with_retry("GET", url)
+        if r.status_code == 404:
+            return []
+        r.raise_for_status()
+        if r.headers.get("content-type", "").startswith("application/json"):
+            data = r.json()
+        else:
+            return []
         if not isinstance(data, list):
             return []
         result: list[ReviewComment] = []
