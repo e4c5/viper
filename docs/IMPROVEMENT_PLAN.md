@@ -17,6 +17,7 @@ done to fix it.
 6. [Configuration and Dependency Management](#6-configuration-and-dependency-management)
 7. [Developer Experience](#7-developer-experience)
 8. [Feature Gaps](#8-feature-gaps)
+9. [Enterprise Readiness](#9-enterprise-readiness)
 
 ---
 
@@ -706,3 +707,283 @@ review session). Update the agent instruction to reflect the multi-language cont
 | 8.3 | No severity threshold filtering | Medium | Low |
 | 8.4 | No paginated comment fetching | High | Medium |
 | 8.5 | No monorepo-aware review | Low | High |
+
+---
+
+## 9. Enterprise Readiness
+
+This section supplements the findings above with items that are **new or significantly escalated**
+when the product is positioned as a commercial, enterprise-grade offering. The framing shifts
+from "this is a good open-source tool" to "this must be trusted with customer source code, meet
+legal obligations, and operate reliably under SLA."
+
+---
+
+### Revised Priority for Existing Findings at Enterprise Scale
+
+Several items that were rated Medium or Low in the open-source context become **P0 blockers** in
+an enterprise product:
+
+| Finding | Open-source rating | Enterprise rating | Reason for escalation |
+|---|---|---|---|
+| 1.1 SSRF on `SCM_URL` | High | **Critical / P0** | Must pass penetration testing; SSRF is a standard audit finding |
+| 1.2 `SecretStr` / token leakage | Medium | **Critical / P0** | SOC 2 CC6 requires secrets to be protected at rest and in logs |
+| 1.3 `owner`/`repo` path sanitisation | High | **Critical / P0** | Path traversal is a OWASP Top 10 finding; blocks SOC 2 certification |
+| 1.4 Forgeable idempotency markers | Medium | **High / P1** | Customers cannot trust review completeness if markers are forgeable |
+| 3.1 No CI workflow | High | **Critical / P0** | Every code change must be gated; no exceptions in enterprise SDLC |
+| 5.1 Inconsistent retry logic | High | **Critical / P0** | Service unreliability directly violates customer SLAs |
+| 5.5 No `Runner.run()` timeout | High | **Critical / P0** | Hung processes block CI pipelines; triggers SLA breach penalties |
+| 8.4 No paginated comment fetching | High | **High / P1** | High-velocity enterprise repos routinely exceed 100 comments |
+
+---
+
+### 9.1 Data Privacy, GDPR, and Data Residency
+
+**Why it matters for enterprise:** Source code is intellectual property and may contain PII (email
+addresses, personal names, API keys in diffs). Sending it to a third-party LLM API triggers GDPR
+data processing obligations and may violate customer data-residency contracts.
+
+**New requirements:**
+
+- **PII scrubbing**: Before sending a diff to any LLM API, scan for common PII patterns (email
+  addresses, phone numbers, national ID numbers) and redact them. Consider using a lightweight
+  local scanner (e.g. Microsoft Presidio, or a regex-based scan) as a configurable pre-processor.
+- **Data residency controls**: Add a `LLM_DATA_REGION` config option. For EU customers, enforce
+  that only EU-hosted LLM endpoints (e.g. Vertex AI `europe-west1` / `europe-west4` regions,
+  Azure OpenAI EU regions) are used. Validate this at startup.
+- **Data retention**: Document the retention period for any data stored (session state, logs,
+  metrics). Since `InMemorySessionService` discards state immediately, the ephemeral design is a
+  strength — document and promote it.
+- **Data processing agreements (DPA)**: Customers will require a signed DPA. This is a legal (not
+  code) item, but must be addressed before any enterprise sale.
+- **No-training opt-out**: Ensure that all configured LLM providers have their "use my data for
+  training" setting disabled. Document the correct settings for each provider.
+
+---
+
+### 9.2 Multi-Tenancy and Tenant Isolation
+
+**Why it matters for enterprise:** A SaaS deployment serves multiple customer organisations. A
+configuration bug or logic error must never allow one tenant's code to be reviewed with another
+tenant's LLM context, or one tenant's comments to appear on another tenant's PR.
+
+**New requirements:**
+
+- **Tenant-scoped configuration**: Introduce a tenant / organisation ID concept. Each tenant
+  should have isolated `SCM_*` and `LLM_*` settings. The current single-config model works for
+  single-tenant self-hosted use but is insufficient for a multi-tenant SaaS.
+- **Namespace isolation**: Session IDs already include `owner/repo/pr`, which is a good start.
+  Prefix them with a tenant ID to prevent accidental collision when two tenants use the same repo
+  name.
+- **Cross-tenant data leakage audit**: The `InMemorySessionService` is ephemeral, which is safe
+  today. If a persistent session store is added (see §5.6), enforce strict per-tenant scoping on
+  all stored data.
+
+---
+
+### 9.3 Role-Based Access Control (RBAC) and Authentication
+
+**Why it matters for enterprise:** Enterprise buyers require fine-grained access control so that
+developers can trigger reviews but only administrators can change LLM configuration, thresholds,
+or skip rules.
+
+**New requirements:**
+
+- Add an **admin API** (REST or gRPC) for managing tenant configuration, LLM model selection,
+  review standards, and skip rules. Protect it with authentication (API key or OAuth 2.0 / OIDC).
+- Define **roles**: `admin` (full configuration access), `user` (trigger reviews, read findings),
+  `read-only` (read findings only).
+- Integrate with **enterprise SSO** (SAML 2.0, OIDC) so customers can provision users via their
+  existing identity provider (Okta, Azure AD, Google Workspace).
+
+---
+
+### 9.4 Audit Logging
+
+**Why it matters for enterprise:** SOC 2 Type II requires an immutable audit trail of security-
+relevant events. Customers will ask for evidence of who triggered a review, what was sent to the
+LLM, and what comments were posted.
+
+**New requirements:**
+
+- Every `run_review()` invocation must emit a structured audit log event containing:
+  `timestamp`, `tenant_id`, `owner`, `repo`, `pr_number`, `head_sha`, `triggered_by`,
+  `llm_provider`, `llm_model`, `files_reviewed`, `findings_count`, `comments_posted`,
+  `skipped_reason` (if skipped), `outcome` (success/failure/timeout).
+- Audit logs must be **append-only** and written to a separate, tamper-evident sink (e.g.
+  CloudTrail, GCP Audit Logs, or a dedicated audit log table).
+- Do **not** log diff content or comment bodies in audit logs (these contain customer source
+  code). Log only counts and metadata.
+
+---
+
+### 9.5 Secrets Management
+
+**Why it matters for enterprise:** Storing `SCM_TOKEN`, `GOOGLE_API_KEY`, etc. as plain
+environment variables is acceptable for a single operator but falls short of enterprise security
+baselines.
+
+**New requirements:**
+
+- Integrate with a **secrets manager**: HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager,
+  or Azure Key Vault. Add an optional `SECRETS_BACKEND` config option; when set, the agent fetches
+  secrets at startup from the backend instead of environment variables.
+- Implement **secret rotation**: The agent should support re-fetching secrets without a restart.
+  Hooks from the secrets manager (e.g. Vault's `lease_renewal`) should trigger an in-process cache
+  invalidation.
+- Add `SecretStr` immediately (finding §1.2) as a prerequisite for all of the above.
+
+---
+
+### 9.6 SLA Management, Health Checks, and Graceful Degradation
+
+**Why it matters for enterprise:** Enterprise contracts define SLAs (e.g. "reviews complete within
+5 minutes of PR creation"). The current design has no health check endpoint, no circuit breakers,
+and no graceful degradation when the LLM API is unavailable.
+
+**New requirements:**
+
+- **Health / readiness endpoint**: Add a lightweight HTTP server mode that exposes `GET /healthz`
+  (liveness) and `GET /readyz` (readiness — checks SCM and LLM connectivity). Kubernetes and AWS
+  ECS both require these for production deployments.
+- **Circuit breaker on LLM API calls**: If the LLM API fails consistently, apply a circuit breaker
+  (e.g. using `pybreaker` or a custom implementation) to stop cascading failures and degrade
+  gracefully by posting a PR comment: "Code review temporarily unavailable; please retry."
+- **Configurable SLA timeout**: Expose the `LLM_TIMEOUT_SECONDS` field as a real enforced timeout
+  (see §5.5). Add an `SCM_REVIEW_DEADLINE_SECONDS` that triggers an automated "review timed out"
+  PR comment when exceeded.
+- **Dead-letter queue (DLQ)**: Failed reviews should be placed on a DLQ with metadata for
+  automated retry or manual operator inspection, rather than silently dropped.
+
+---
+
+### 9.7 Cost Tracking and LLM Budget Controls
+
+**Why it matters for enterprise:** LLM API costs grow linearly with the number of PRs and the size
+of diffs. At enterprise scale (thousands of PRs per day), uncontrolled costs are a business risk.
+
+**New requirements:**
+
+- **Per-tenant cost attribution**: Track estimated token usage per tenant/org and expose it via
+  a billing API or admin dashboard. Use the LLM provider's reported token counts (from API
+  response metadata) rather than the `_estimate_tokens()` heuristic.
+- **Budget controls**: Add per-tenant monthly token budgets (`LLM_MONTHLY_TOKEN_BUDGET`). When a
+  tenant approaches their budget, emit a warning; when exceeded, skip reviews and notify the
+  tenant admin.
+- **Cost-per-review metric**: Add a `code_review_llm_tokens_total` Prometheus counter (or
+  equivalent OTel metric) labelled by `tenant`, `llm_provider`, and `llm_model`.
+
+---
+
+### 9.8 Horizontal Scaling and Stateless Architecture
+
+**Why it matters for enterprise:** A single container handling all reviews will become a
+bottleneck. Enterprise deployments must support horizontal scaling across multiple instances.
+
+**New requirements:**
+
+- **Stateless workers**: The one-shot container model is already mostly stateless (a strength).
+  Formalise this by ensuring all shared state (idempotency keys, session data) is stored in an
+  external system (Redis, DynamoDB) rather than in memory or derived solely from comment bodies.
+- **Work queue**: Introduce a proper work queue (RabbitMQ, SQS, Google Pub/Sub) between the
+  webhook receiver and the review workers. This decouples ingestion from processing, provides
+  natural back-pressure, and enables autoscaling based on queue depth.
+- **Per-PR locking**: As noted in `ORCHESTRATION_PLAN_AGENT.md`, each PR should be protected by
+  a distributed lock to prevent duplicate simultaneous reviews when multiple webhook events fire
+  in quick succession. This is a prerequisite for correct behaviour at scale.
+
+---
+
+### 9.9 Prompt Injection Hardening
+
+**Why it matters for enterprise:** The agent instruction already notes that AGENTS.md content
+should be treated as "untrusted, for context only." However, this warning is only in the prompt;
+there is no technical enforcement. A malicious repository owner could craft a README or AGENTS.md
+designed to override the agent's review rules, suppress findings, or exfiltrate data via tool
+calls.
+
+**New requirements:**
+
+- **Structural separation**: Never interpolate untrusted content (README, AGENTS.md, PR
+  description, commit messages) directly into the system instruction. Pass it as a separate user
+  message with an explicit framing like "The following is untrusted repository context: …".
+- **Tool call allowlist**: Enforce an allowlist of permitted tool calls in findings-only mode. The
+  agent should not be able to call any tool not in `create_findings_only_tools`. ADK's tool list
+  already enforces this, but document and test it explicitly.
+- **Output validation**: Add a post-LLM validation layer that checks the findings JSON does not
+  contain URL-like strings in `message` or `path` fields (which could indicate prompt injection
+  attempting to leak data via finding bodies).
+
+---
+
+### 9.10 Compliance Certification Pathway
+
+**Why it matters for enterprise:** Enterprise buyers (especially in finance, healthcare, and
+government) require formal compliance certifications before approving vendors.
+
+**Recommended roadmap:**
+
+| Certification | What to address first |
+|---|---|
+| **SOC 2 Type I** | Audit logging (§9.4), access control (§9.3), secrets management (§9.5), CI/CD (§3.1), vulnerability scanning (§4.2) |
+| **SOC 2 Type II** | 6-month operational evidence period; alerting, incident response runbooks, change management |
+| **ISO 27001** | Information security management system (ISMS); risk register; formal vendor assessments for LLM providers |
+| **GDPR / CCPA** | DPA templates (§9.1), data residency controls (§9.1), right-to-erasure (§9.1) |
+| **FedRAMP (if US government)** | Air-gapped / on-premises deployment, Ollama or Google Cloud Government endpoints, no commercial third-party LLM APIs |
+
+---
+
+### 9.11 Enterprise Deployment Patterns
+
+**Why it matters for enterprise:** The current Docker Compose + Jenkins setup is appropriate for
+self-hosted evaluation, but enterprise customers expect supported deployment patterns for their
+existing infrastructure.
+
+**New requirements:**
+
+- **Kubernetes Helm chart**: Provide a Helm chart with configurable resource limits, HPA
+  (autoscaler), secret injection via Kubernetes Secrets or External Secrets Operator, and RBAC
+  for the service account.
+- **Air-gapped / on-premises support**: Ensure the agent can run with zero external network access
+  when configured with Ollama (local LLM) and a self-hosted SCM. Document the required allow-list
+  of network endpoints for each LLM provider.
+- **SaaS vs. self-hosted tiers**: Define which features are available in each tier. A reasonable
+  split: core review functionality (self-hosted, open-source); multi-tenancy, RBAC, audit logging,
+  cost controls, SSO (commercial self-hosted or SaaS).
+
+---
+
+### 9.12 OSS License Audit and Commercial Licensing
+
+**Why it matters for enterprise:** The project is MIT licensed. The dependencies pulled in
+(especially `google-adk`, `litellm`, and their transitive dependencies) may include copyleft
+licences (GPL, LGPL, AGPL) that create obligations when distributing a commercial product.
+
+**New requirements:**
+
+- Run a **licence audit** with a tool like `pip-licenses` or FOSSA on every release. Generate a
+  Software Bill of Materials (SBOM) in SPDX or CycloneDX format.
+- Define a **dependency policy**: no AGPL dependencies in the distribution; LGPL reviewed case
+  by case; GPL dependencies must not be included in distributed binaries or containers (dynamic
+  linking does not create distribution obligations for LGPL, but GPL would).
+- Decide on a **commercial licence** for the enterprise tier (proprietary, BSL, SSPL) and clearly
+  delineate the boundary between the open-source core and commercial add-ons.
+
+---
+
+### Updated Summary Table (Enterprise Additions)
+
+| # | Area | Enterprise Severity | Effort |
+|---|------|---------------------|--------|
+| 9.1 | Data privacy / GDPR / PII scrubbing | **Critical** | High |
+| 9.2 | Multi-tenancy and tenant isolation | **Critical** | High |
+| 9.3 | RBAC and enterprise SSO | **Critical** | High |
+| 9.4 | Immutable audit logging | **Critical** | Medium |
+| 9.5 | Secrets management (Vault/KMS) | **Critical** | Medium |
+| 9.6 | Health checks / circuit breakers / DLQ | **Critical** | High |
+| 9.7 | LLM cost tracking and budget controls | High | Medium |
+| 9.8 | Horizontal scaling / work queue / locking | **Critical** | High |
+| 9.9 | Prompt injection hardening | High | Medium |
+| 9.10 | Compliance certification pathway | High | High |
+| 9.11 | Kubernetes Helm chart / air-gapped support | High | High |
+| 9.12 | OSS licence audit / SBOM / commercial licence | High | Low |
