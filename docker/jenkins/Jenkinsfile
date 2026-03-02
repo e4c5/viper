@@ -81,6 +81,7 @@ pipeline {
                             set -euo pipefail
                             if [ "$USE_INLINE_AGENT" = "true" ] || [ "$USE_INLINE_AGENT" = "1" ]; then
                                 export SCM_PROVIDER=gitea SCM_URL=http://gitea:3000 SCM_TOKEN="$SCM_TOKEN"
+                                export LLM_PROVIDER="$REVIEW_LLM_PROVIDER" LLM_MODEL="$REVIEW_LLM_MODEL"
                                 code-review --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA" --print-findings
                             else
                                 runtime="$CONTAINER_RUNTIME"

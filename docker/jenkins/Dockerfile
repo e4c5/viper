@@ -24,4 +24,5 @@ COPY docker/jenkins/init.groovy.d/ /usr/share/jenkins/ref/init.groovy.d/
 # Entrypoint fixes JENKINS_HOME ownership for rootless Podman, then runs Jenkins as jenkins user.
 COPY docker/jenkins/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+USER jenkins
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
