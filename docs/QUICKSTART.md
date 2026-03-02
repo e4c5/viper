@@ -22,14 +22,37 @@ docker compose up -d --build
 If you use Podman Compose:
 
 ```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+systemctl --user start podman.socket
 export CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
+ls -l "$CONTAINER_SOCKET"
 podman-compose up -d --build
 ```
 
 - **Gitea**: http://localhost:3000  
 - **Jenkins**: http://localhost:8080  
 
-If you use Podman, uncomment `CONTAINER_RUNTIME: podman` in [docker-compose.yml](/home/raditha/workspace/python/code-review/docker-compose.yml) before starting Jenkins.
+If you use Podman, this setup mounts the Podman socket at `/var/run/docker.sock`, and the Docker CLI inside Jenkins talks to that socket.
+
+After changing the Jenkins image or Compose file, rebuild and restart the stack:
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+If you use Podman:
+
+```bash
+podman-compose down
+podman-compose up -d --build
+```
+
+If `podman.sock` does not exist after starting `podman.socket`, run:
+
+```bash
+podman system service --time=0 unix://$XDG_RUNTIME_DIR/podman/podman.sock
+```
 
 ---
 

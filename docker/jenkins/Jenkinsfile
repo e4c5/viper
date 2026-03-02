@@ -34,7 +34,7 @@ pipeline {
                     def scmPrNum = params.SCM_PR_NUM ?: env.SCM_PR_NUM
                     def scmHeadSha = params.SCM_HEAD_SHA ?: env.SCM_HEAD_SHA
                     def prAction = params.PR_ACTION ?: env.PR_ACTION
-                    def containerRuntime = env.CONTAINER_RUNTIME ?: 'docker'
+                    def containerRuntime = env.CONTAINER_RUNTIME ?: '/usr/bin/docker'
                     def allowedActions = ['opened', 'synchronize']
 
                     if (prAction && !allowedActions.contains(prAction)) {
