@@ -32,10 +32,13 @@ services:
       - "50000:50000"
     volumes:
       - jenkins_home:/var/jenkins_home
+      - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     environment:
-      JAVA_OPTS: -Djenkins.install.runSetupWizard=false
+      JAVA_OPTS: -Djenkins.install.runSetupWizard=false -Dhudson.model.ParametersAction.safeParameters=jenkins-generic-webhook-trigger-plugin_uuid
       JENKINS_ADMIN_USER: admin
       JENKINS_ADMIN_PASS: admin
+      # Podman users only: set runtime to podman (Docker users do not need this)
+      CONTAINER_RUNTIME: podman
       # Optional: seed credentials for local testing
       # SCM_TOKEN: your_gitea_token
       # GOOGLE_API_KEY: your_google_api_key

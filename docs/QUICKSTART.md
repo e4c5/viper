@@ -28,6 +28,13 @@ podman-compose up -d --build
 - **Gitea**: http://localhost:3000  
 - **Jenkins**: http://localhost:8080  
 
+**Note (Docker vs Podman):**
+- Docker users: no changes needed.
+- Podman users: set `CONTAINER_SOCKET` to your rootless Podman socket before starting:
+  - Example: `export CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock`
+  - Then run `podman-compose up -d --build`
+- Podman users only: uncomment `CONTAINER_RUNTIME: podman` in `docker-compose.yml` so Jenkins uses Podman instead of Docker.
+
 ---
 
 ## 2. Configure Gitea

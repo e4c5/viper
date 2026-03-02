@@ -10,6 +10,11 @@ Two short paths for testing during development: **Docker** and **non-Docker**.
    ```bash
    docker compose up -d --build
    ```
+   Podman users should set the socket path first:
+   ```bash
+   export CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
+   podman-compose up -d --build
+   ```
 2. Configure Gitea and Jenkins using **Quick Start** (includes the webhook setup):
    - See **[Quick Start Guide (Docker Only)](QUICKSTART.md)**.
 3. Trigger a review:
