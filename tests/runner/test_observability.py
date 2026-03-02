@@ -35,7 +35,8 @@ def test_run_review_emits_trace_id_and_run_complete(
     mock_context_window.return_value = 1_000_000
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"suggestion",' '"code":"x","message":"Fix."}]'
+        '[{"path":"foo.py","line":1,"severity":"suggestion","code":"x",'
+        '"message":"Fix."}]'
     )
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True

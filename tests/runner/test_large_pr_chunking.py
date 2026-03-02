@@ -48,12 +48,13 @@ def test_large_pr_file_by_file_no_duplicate_posts(
         text = new_message.parts[0].text if new_message.parts else ""
         if "Review only this file: a.py" in text:
             findings = (
-                '[{"path":"a.py","line":1,"severity":"suggestion",'
-                '"code":"x","message":"Fix a."}]'
+                '[{"path":"a.py","line":1,"severity":"suggestion","code":"x",'
+                '"message":"Fix a."}]'
             )
         elif "Review only this file: b.py" in text:
             findings = (
-                '[{"path":"b.py","line":2,"severity":"info",' '"code":"y","message":"Fix b."}]'
+                '[{"path":"b.py","line":2,"severity":"info","code":"y",'
+                '"message":"Fix b."}]'
             )
         else:
             findings = "[]"

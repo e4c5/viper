@@ -141,7 +141,8 @@ def test_run_review_raises_when_posting_without_head_sha(
     mock_get_context_window.return_value = 1_000_000
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"suggestion",' '"code":"x","message":"Fix."}]'
+        '[{"path":"foo.py","line":1,"severity":"suggestion","code":"x",'
+        '"message":"Fix."}]'
     )
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
@@ -293,7 +294,8 @@ def test_run_review_uses_file_by_file_mode_when_diff_exceeds_budget(
     mock_get_context_window.return_value = 16
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"suggestion",' '"code":"x","message":"Fix."}]'
+        '[{"path":"foo.py","line":1,"severity":"suggestion","code":"x",'
+        '"message":"Fix."}]'
     )
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
