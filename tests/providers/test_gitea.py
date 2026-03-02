@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from code_review.providers import FileInfo, GiteaProvider, ReviewComment, get_provider
+from code_review.providers import GiteaProvider, get_provider
 
 
 def test_get_provider():

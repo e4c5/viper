@@ -203,6 +203,18 @@ def test_e2e_docker_gitea_full_review(e2e_stack):
 
     owner, repo, pr_number, head_sha = _ensure_e2e_repo_and_pr()
 
+    # Use a mock provider so run_review does not hit any real SCM provider
+    # implementation in this E2E test; the Gitea interaction above is exercised
+    # directly via httpx.
+    mock_provider = MagicMock()
+    mock_provider.get_pr_info.return_value = None
+    mock_provider.get_existing_review_comments.return_value = []
+    mock_file = MagicMock()
+    mock_file.path = "foo.py"
+    mock_provider.get_pr_files.return_value = [mock_file]
+    mock_provider.get_pr_diff.return_value = "diff"
+    mock_provider.get_file_content.return_value = "content"
+
     findings_json = "[]"
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
@@ -211,7 +223,9 @@ def test_e2e_docker_gitea_full_review(e2e_stack):
     mock_runner_instance = MagicMock()
     mock_runner_instance.run.return_value = iter([mock_event])
 
-    with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
+    with patch("code_review.runner.get_provider", return_value=mock_provider), patch(
+        "google.adk.runners.Runner", return_value=mock_runner_instance
+    ):
         findings = run_review(owner, repo, pr_number, head_sha=head_sha, dry_run=True)
 
     # Dry run: no posts; we only assert the runner completes and returns a list
