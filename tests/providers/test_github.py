@@ -86,6 +86,36 @@ def test_post_review_comments(mock_client):
 
 
 @patch("code_review.providers.github.httpx.Client")
+def test_post_review_comments_with_suggested_patch(mock_client):
+    mock_post = MagicMock()
+    mock_post.raise_for_status = MagicMock()
+    mock_post.content = b""
+    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    p.post_review_comments(
+        "owner",
+        "repo",
+        1,
+        [
+            InlineComment(
+                path="foo.py",
+                line=10,
+                body="[Suggestion] Consider refactor.",
+                suggested_patch="replacement_code();",
+            )
+        ],
+        head_sha="abc123",
+    )
+    call_args = mock_client.return_value.__enter__.return_value.post.call_args
+    payload = call_args[1]["json"]
+    comment_body = payload["comments"][0]["body"]
+    assert "[Suggestion] Consider refactor." in comment_body
+    assert "```suggestion" in comment_body
+    assert "replacement_code();" in comment_body
+
+
+@patch("code_review.providers.github.httpx.Client")
 def test_get_existing_review_comments(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = [

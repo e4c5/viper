@@ -90,6 +90,43 @@ def test_post_review_comments(mock_client):
 
 
 @patch("code_review.providers.gitlab.httpx.Client")
+def test_post_review_comments_with_suggested_patch(mock_client):
+    # First call: get MR for diff_refs
+    mr_resp = MagicMock()
+    mr_resp.json.return_value = {
+        "diff_refs": {"base_sha": "base123", "head_sha": "head123", "start_sha": "start123"},
+    }
+    mr_resp.headers = {"content-type": "application/json"}
+    post_resp = MagicMock()
+    post_resp.raise_for_status = MagicMock()
+    post_resp.json.return_value = {"id": "disc1"}
+    mock_client.return_value.__enter__.return_value.get.return_value = mr_resp
+    mock_client.return_value.__enter__.return_value.post.return_value = post_resp
+
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p.post_review_comments(
+        "owner",
+        "repo",
+        1,
+        [
+            InlineComment(
+                path="foo.py",
+                line=10,
+                body="[Suggestion] Consider refactor.",
+                suggested_patch="replacement_code();",
+            )
+        ],
+        head_sha="head123",
+    )
+    post_call = mock_client.return_value.__enter__.return_value.post.call_args
+    payload = post_call[1]["json"]
+    body = payload["body"]
+    assert "[Suggestion] Consider refactor." in body
+    assert "```suggestion" in body
+    assert "replacement_code();" in body
+
+
+@patch("code_review.providers.gitlab.httpx.Client")
 def test_get_existing_review_comments(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = [

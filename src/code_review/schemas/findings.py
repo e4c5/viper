@@ -19,6 +19,10 @@ class FindingV1(BaseModel):
     category: str | None = Field(default=None, description="e.g. Correctness, Security, Style; use NeedsVerification for uncertainty")
     anchor: str | None = Field(default=None, description="Optional anchor text for stable positioning when lines shift")
     fingerprint_hint: str | None = Field(default=None, description="Code span or anchor text to help runner fingerprinting")
+    suggested_patch: str | None = Field(
+        default=None,
+        description="Optional suggested code change to render as a suggestion block when provider supports suggestions",
+    )
 
     @model_validator(mode="after")
     def end_line_not_less_than_line(self) -> "FindingV1":

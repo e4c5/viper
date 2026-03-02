@@ -156,7 +156,15 @@ class GitHubProvider(ProviderInterface):
             return
         review_comments = [
             {
-                **{"path": c.path, "side": "RIGHT", "body": c.body},
+                **{
+                    "path": c.path,
+                    "side": "RIGHT",
+                    "body": (
+                        c.body
+                        if not c.suggested_patch
+                        else f"{c.body}\n\n```suggestion\n{c.suggested_patch}\n```"
+                    ),
+                },
                 **(
                     {"start_line": c.line, "line": c.end_line}
                     if (c.end_line is not None and c.end_line != c.line)

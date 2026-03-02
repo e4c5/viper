@@ -208,6 +208,11 @@ class GitLabProvider(ProviderInterface):
         start_sha = diff_refs.get("start_sha") or base_sha
         head_sha_val = head_sha or diff_refs.get("head_sha") or ""
         for c in comments:
+            body = (
+                c.body
+                if not c.suggested_patch
+                else f"{c.body}\n\n```suggestion\n{c.suggested_patch}\n```"
+            )
             position = {
                 "base_sha": base_sha,
                 "start_sha": start_sha,
@@ -219,7 +224,7 @@ class GitLabProvider(ProviderInterface):
             }
             self._post(
                 self._path(owner, repo, "merge_requests", str(pr_number), "discussions"),
-                {"body": c.body, "position": position},
+                {"body": body, "position": position},
             )
 
     def get_existing_review_comments(

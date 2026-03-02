@@ -48,15 +48,15 @@ An AI agent executing these tasks should always cross‑check behavior and edge 
 
 ## Phase 4: Provider Capabilities and Suggestions
 
-- [ ] **Task 4.1: Use `ProviderCapabilities` for suggestions**
-  - [ ] Extend the posting path in `runner.run_review` so that:
-    - [ ] When `provider.capabilities().supports_suggestions` is `True` and a finding carries a suggested patch or code change (see the Plan’s provider‑neutral comment model), the runner fills `InlineComment.suggested_patch` instead of (or in addition to) plain text.
-    - [ ] Providers that support suggestion blocks (GitHub, GitLab) convert `InlineComment.suggested_patch` into their platform’s suggested change format, as outlined in the Plan’s **Phase 6.1**.
-  - [ ] Update tests in `tests/providers/test_github.py` and `tests/providers/test_gitlab.py` (and any new formatter tests as needed) to assert the correct suggestion payload.
+- [x] **Task 4.1: Use `ProviderCapabilities` for suggestions**
+  - [x] Extend the posting path in `runner.run_review` so that:
+  - [x] When `provider.capabilities().supports_suggestions` is `True` and a finding carries a suggested patch or code change (see the Plan’s provider‑neutral comment model), the runner fills `InlineComment.suggested_patch` (via `FindingV1.suggested_patch`) instead of (or in addition to) plain text.
+  - [x] Providers that support suggestion blocks (GitHub, GitLab) convert `InlineComment.suggested_patch` into their platform’s suggested change format by appending a ```suggestion``` block to the comment body.
+  - [x] Update tests in `tests/providers/test_github.py` and `tests/providers/test_gitlab.py` (and any new formatter tests as needed) to assert the correct suggestion payload.
 
-- [ ] **Task 4.2: Guard resolve calls with capabilities**
-  - [ ] When implementing auto‑resolve (Task 2.1), ensure the runner only calls `provider.resolve_comment(...)` when `provider.capabilities().resolvable_comments` is `True`.
-  - [ ] Add tests for a provider with `resolvable_comments=False` to confirm that `resolve_comment` is not called and that behavior degrades gracefully, matching the Plan’s guidance.
+- [x] **Task 4.2: Guard resolve calls with capabilities**
+  - [x] When implementing auto‑resolve (Task 2.1), ensure the runner only calls `provider.resolve_comment(...)` when `provider.capabilities().resolvable_comments` is `True`.
+  - [x] Add tests for a provider with `resolvable_comments=False` to confirm that `resolve_comment` is not called and that behavior degrades gracefully, matching the Plan’s guidance (including a dry‑run test).
 
 ---
 

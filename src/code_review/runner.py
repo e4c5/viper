@@ -438,7 +438,13 @@ def run_review(
                     body, fp, AGENT_VERSION, run_id=run_id
                 )
             comments.append(
-                InlineComment(path=f.path, line=f.line, body=body, end_line=f.end_line)
+                InlineComment(
+                    path=f.path,
+                    line=f.line,
+                    body=body,
+                    end_line=f.end_line,
+                    suggested_patch=f.suggested_patch,
+                )
             )
         try:
             provider.post_review_comments(
