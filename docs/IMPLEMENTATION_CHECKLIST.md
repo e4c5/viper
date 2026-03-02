@@ -38,9 +38,9 @@ Tick items as they are implemented.
 
 ## 4. CI/CD Pipeline
 
-- [x] Tighten `ruff` configuration and integrate it into CI; mypy is optional and can be run locally if desired (see §4.1).
+- [x] Tighten `ruff` configuration and integrate it into CI as a non-blocking check; mypy is optional and can be run locally if desired (see §4.1).
 - [x] Pin the Docker base image by digest and add image scanning to CI (see §4.2).
-- [x] Introduce a `.pre-commit-config.yaml` with formatting, linting, and type-checking hooks (see §4.3).
+- [x] Introduce a `.pre-commit-config.yaml` for optional local formatting and linting hooks (see §4.3). The default config is intentionally empty; see `DEVELOPER_GUIDE.md` §8.4 for enabling hooks.
 - [x] Improve Jenkins credential handling and documentation to decouple from hard-coded IDs (see §4.4).
 
 ## 5. Performance and Reliability

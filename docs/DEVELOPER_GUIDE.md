@@ -358,9 +358,12 @@ Tests mirror the source layout and live under `tests/`:
 ```bash
 pip install -e ".[dev]"
 
-# Linting (Ruff) and type checking (mypy)
+# Linting (Ruff). CI runs this as a non-blocking check so lint
+# failures show up in GitHub Actions logs but do not fail the build.
 ruff check src tests
-mypy src
+
+# Optional local type checking (only if you install mypy yourself)
+# mypy src
 
 # Unit and integration tests
 pytest
@@ -372,26 +375,30 @@ pytest --ignore=tests/e2e
 RUN_E2E=1 pytest -m e2e
 ```
 
-### 8.4 Pre-commit Hooks
+### 8.4 Pre-commit Hooks (optional)
 
-This repo includes a `.pre-commit-config.yaml` with hooks for Ruff (lint + format) and mypy. To
-enable them locally:
+Pre-commit hooks are **not enabled by default**. The repository ships an empty
+`.pre-commit-config.yaml` so that contributors can opt in to local linting and
+formatting if they wish.
+
+If you want Ruff to run automatically on `git commit`, install and configure
+pre-commit locally:
 
 ```bash
 pip install pre-commit
 pre-commit install
 ```
 
-After that, `pre-commit` will run on every `git commit`, automatically:
+Then add your preferred hooks to `.pre-commit-config.yaml`, for example:
 
-- Running **Ruff** with `--fix` (lint + quick fixes).
-- Formatting code via **ruff-format**.
-- Running **mypy** against `src/` using the settings in `pyproject.toml`.
-
-You can also run all hooks manually:
-
-```bash
-pre-commit run --all-files
+```yaml
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.0
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
 ```
 
 ---

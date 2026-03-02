@@ -10,7 +10,8 @@ from code_review.diff.parser import parse_unified_diff
 class ProviderCapabilities(BaseModel):
     """
     Provider capability flags for branching behavior.
-    - resolvable_comments: provider supports marking comments as resolved (e.g. GitLab).
+    - resolvable_comments: provider supports marking comments as resolved.
+      (Currently false for all built-in providers.)
     - supports_suggestions: provider supports suggested-change / code suggestion blocks
      (e.g. GitHub, GitLab).
     """
