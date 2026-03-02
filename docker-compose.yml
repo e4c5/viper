@@ -32,11 +32,9 @@ services:
       - "50000:50000"
     volumes:
       - jenkins_home:/var/jenkins_home
-      - ./docker/jenkins/Jenkinsfile:/var/jenkins_home/jenkinsfiles/code-review.Jenkinsfile:ro
       - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     environment:
       JAVA_OPTS: -Djenkins.install.runSetupWizard=false -Dhudson.model.ParametersAction.safeParameters=jenkins-generic-webhook-trigger-plugin_uuid
-      CASC_JENKINS_CONFIG: /var/jenkins_home/casc.yaml
       JENKINS_ADMIN_USER: admin
       JENKINS_ADMIN_PASS: admin
       # Podman users only: set runtime to podman (Docker users do not need this)

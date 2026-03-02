@@ -15,7 +15,7 @@ Two short paths for testing during development: **Docker** and **non-Docker**.
    export CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
    podman-compose up -d --build
    ```
-2. Configure Gitea and Jenkins using **Quick Start** (includes the webhook setup and auto-created Jenkins job):
+2. Configure Gitea and Jenkins using **Quick Start** (includes the webhook setup):
    - See **[Quick Start Guide (Docker Only)](QUICKSTART.md)**.
 3. Trigger a review:
    - Create/update a PR in Gitea → Jenkins auto-runs the review job.

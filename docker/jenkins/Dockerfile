@@ -14,6 +14,3 @@ RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
 
 # Seed admin user and optional credentials on first boot.
 COPY docker/jenkins/init.groovy.d/ /usr/share/jenkins/ref/init.groovy.d/
-
-# Jenkins Configuration as Code (auto job setup)
-COPY docker/jenkins/casc.yaml /usr/share/jenkins/ref/casc.yaml

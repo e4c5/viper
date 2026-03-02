@@ -2,5 +2,4 @@ workflow-aggregator
 credentials
 credentials-binding
 git
-configuration-as-code
 generic-webhook-trigger
