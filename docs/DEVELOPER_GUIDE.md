@@ -353,13 +353,45 @@ Tests mirror the source layout and live under `tests/`:
 - **Config**: **Patch `get_scm_config`** and **get_llm_config** (and in runner tests **get_context_window**) so tests do not depend on real env.
 - **HTTP (Gitea, etc.)**: Patch `httpx.Client` (or the client used by the provider) and set `.request.return_value` (or `.get`/`.post` if the provider uses them) to a mock response with `.text`, `.json()`, `.headers` as needed.
 
-### 8.3 Running Tests
+### 8.3 Running Tests and Tooling
 
 ```bash
 pip install -e ".[dev]"
+
+# Linting (Ruff) and type checking (mypy)
+ruff check src tests
+mypy src
+
+# Unit and integration tests
 pytest
-# Exclude E2E (requires RUN_E2E=1 and live Gitea):
+
+# Exclude E2E (requires RUN_E2E=1 and Docker/Podman):
 pytest --ignore=tests/e2e
+
+# Full-stack E2E (auto-managed Gitea + Jenkins stack and hello-world PR)
+RUN_E2E=1 pytest -m e2e
+```
+
+### 8.4 Pre-commit Hooks
+
+This repo includes a `.pre-commit-config.yaml` with hooks for Ruff (lint + format) and mypy. To
+enable them locally:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+After that, `pre-commit` will run on every `git commit`, automatically:
+
+- Running **Ruff** with `--fix` (lint + quick fixes).
+- Formatting code via **ruff-format**.
+- Running **mypy** against `src/` using the settings in `pyproject.toml`.
+
+You can also run all hooks manually:
+
+```bash
+pre-commit run --all-files
 ```
 
 ---

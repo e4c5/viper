@@ -3,6 +3,12 @@
 //   OR inline (USE_INLINE_AGENT=true): code-review --owner ... --repo ... --pr ... --head-sha ... (avoids rootless Podman uid_map issues).
 // Build agent image from repo root: docker build -t code-review-agent -f docker/Dockerfile.agent .
 // Runtime: set CONTAINER_RUNTIME (e.g. podman) to force one; otherwise pipeline auto-detects docker or podman.
+//
+// Required Jenkins Secret text credentials:
+//   - ID "SCM_TOKEN": SCM access token for commenting on PRs.
+//   - ID "GOOGLE_API_KEY": LLM API key (or equivalent provider key when using Gemini).
+// If your organisation uses different credential IDs, update the `environment {}` block
+// below to match your Jenkins credentials naming convention.
 
 pipeline {
     agent any
