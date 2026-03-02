@@ -17,8 +17,13 @@ _SIGNING_KEY_ENV = "CODE_REVIEW_SIGNING_KEY"
 
 
 def _get_signing_key() -> bytes:
-    """Return HMAC signing key for markers. Falls back to SCM_TOKEN for compatibility."""
-    key = os.environ.get(_SIGNING_KEY_ENV) or os.environ.get("SCM_TOKEN") or ""
+    """
+    Return HMAC signing key for markers.
+
+    Only CODE_REVIEW_SIGNING_KEY enables signing/verification. This keeps backward
+    compatibility with existing unsigned markers and tests even when SCM_TOKEN is set.
+    """
+    key = os.environ.get(_SIGNING_KEY_ENV) or ""
     return key.encode("utf-8")
 
 

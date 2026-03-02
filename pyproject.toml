@@ -51,7 +51,16 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = ["e2e: E2E tests (require Docker + Gitea, run with RUN_E2E=1)"]
+markers = [
+    "e2e: E2E tests (require Docker + Gitea, run with RUN_E2E=1)",
+    "respx: HTTP mocking with respx",
+]
+filterwarnings = [
+    # Known third-party deprecations / noisy warnings; safe to ignore for now.
+    "ignore:.*PytestUnknownMarkWarning:pytest.PytestUnknownMarkWarning",
+    "ignore:Inheritance class AiohttpClientSession from ClientSession is discouraged:DeprecationWarning:google.genai._api_client",
+    "ignore:.*PytestUnhandledThreadExceptionWarning:pytest.PytestUnhandledThreadExceptionWarning",
+]
 
 [tool.ruff]
 line-length = 100

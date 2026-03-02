@@ -74,11 +74,15 @@ class ProviderInterface(ABC):
         """Return unified diff string for the PR."""
         ...
 
-    @abstractmethod
     def get_pr_diff_for_file(
         self, owner: str, repo: str, pr_number: int, path: str
     ) -> str:
-        """Return diff for a single file. Default: parse full diff and slice by file."""
+        """
+        Return diff for a single file.
+
+        Default implementation parses the full PR diff and slices by file path.
+        Providers with native per-file diff endpoints may override for efficiency.
+        """
         full_diff = self.get_pr_diff(owner, repo, pr_number)
         hunks = parse_unified_diff(full_diff)
         lines: list[str] = []
@@ -109,7 +113,6 @@ class ProviderInterface(ABC):
         """Return file content at ref (branch/tag/SHA)."""
         ...
 
-    @abstractmethod
     def get_file_lines(
         self,
         owner: str,
@@ -119,7 +122,12 @@ class ProviderInterface(ABC):
         start_line: int,
         end_line: int,
     ) -> str:
-        """Return lines start_line..end_line (1-based inclusive) from file at ref."""
+        """
+        Return lines start_line..end_line (1-based inclusive) from file at ref.
+
+        Default implementation calls get_file_content and slices the result.
+        Providers may override if they have a more efficient line-range API.
+        """
         content = self.get_file_content(owner, repo, ref, path)
         lines = content.splitlines()
         if start_line < 1 or end_line < start_line:

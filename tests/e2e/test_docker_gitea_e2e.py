@@ -15,7 +15,7 @@ import pytest
     os.environ.get("RUN_E2E") != "1",
     reason="E2E requires RUN_E2E=1 and Docker Compose with Gitea",
 )
-def test_e2e_docker_gitea_full_review():
+def test_e2e_docker_gitea_full_review(e2e_stack):
     """Full E2E: against real Gitea (localhost), create PR, run agent, assert comments.
     Requires: docker compose up (Gitea), repo with PR, SCM_* and LLM_* env set.
     """

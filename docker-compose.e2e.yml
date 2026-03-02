@@ -1,0 +1,55 @@
+# Gitea + Jenkins for E2E testing with isolated volumes.
+# This uses separate project/volume names so it does not touch your normal dev data.
+#
+# Usage:
+#   docker compose -f docker-compose.e2e.yml -p code-review-e2e up -d --build
+#   RUN_E2E=1 pytest tests/e2e
+#   docker compose -f docker-compose.e2e.yml -p code-review-e2e down -v
+
+name: code-review-e2e
+
+services:
+  gitea:
+    image: gitea/gitea:1.21.4
+    container_name: code-review-e2e-gitea
+    environment:
+      GITEA__server__DOMAIN: localhost
+      GITEA__server__ROOT_URL: http://localhost:3001
+      GITEA__server__HTTP_PORT: "3001"
+      # Allow local webhooks to Jenkins inside the Compose network
+      GITEA__webhook__ALLOWED_HOST_LIST: jenkins,jenkins:8080
+    ports:
+      - "3001:3001"
+    volumes:
+      - gitea_data_e2e:/data
+    networks:
+      - code-review-e2e-net
+
+  jenkins:
+    build:
+      context: .
+      dockerfile: docker/jenkins/Dockerfile
+    container_name: code-review-e2e-jenkins
+    ports:
+      - "8081:8080"
+      - "50001:50000"
+    volumes:
+      - jenkins_home_e2e:/var/jenkins_home
+      - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+    environment:
+      JAVA_OPTS: -Djenkins.install.runSetupWizard=false -Dhudson.model.ParametersAction.safeParameters=jenkins-generic-webhook-trigger-plugin_uuid
+      JENKINS_ADMIN_USER: admin
+      JENKINS_ADMIN_PASS: admin
+      CONTAINER_RUNTIME: ${CONTAINER_RUNTIME:-docker}
+      USE_INLINE_AGENT: ${USE_INLINE_AGENT:-false}
+    networks:
+      - code-review-e2e-net
+
+volumes:
+  gitea_data_e2e:
+  jenkins_home_e2e:
+
+networks:
+  code-review-e2e-net:
+    driver: bridge
+

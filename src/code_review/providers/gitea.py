@@ -92,7 +92,7 @@ class GiteaProvider(ProviderInterface):
             except (binascii.Error, TypeError) as exc:  # malformed or non-base64 content
                 raise ValueError(f"Invalid base64 content for {path} at {ref}") from exc
             raw = decoded.decode("utf-8", errors="replace")
-            return truncate_repo_content(raw, max_bytes=MAX_REPO_FILE_BYTES)
+            return truncate_repo_content(raw)
         raise ValueError(f"Unexpected response for {path} at {ref}")
 
     def get_file_lines(

@@ -20,6 +20,20 @@ Two short paths for testing during development: **Docker** and **non-Docker**.
 3. Trigger a review:
    - Create/update a PR in Gitea → Jenkins auto-runs the review job.
 
+### Optional: isolated E2E stack (separate volumes)
+
+To run the E2E tests without touching your normal `gitea_data` / `jenkins_home` volumes, use the
+separate Compose file and project name:
+
+```bash
+docker compose -f docker-compose.e2e.yml -p code-review-e2e up -d --build
+RUN_E2E=1 pytest tests/e2e
+docker compose -f docker-compose.e2e.yml -p code-review-e2e down -v
+```
+
+This uses different volume and container names (`gitea_data_e2e`, `jenkins_home_e2e`, etc.), so your
+existing Docker data is not affected.
+
 ---
 
 ## B) Without Docker (run locally against any SCM)
