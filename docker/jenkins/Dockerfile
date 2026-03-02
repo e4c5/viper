@@ -1,9 +1,10 @@
 FROM jenkins/jenkins:2.552
 
-# Install Docker CLI so Jenkins can run the agent container.
+# Install Docker CLI and Podman so Jenkins can run the agent container
+# with either runtime (controlled by the CONTAINER_RUNTIME env var).
 USER root
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends docker.io \
+    && apt-get install -y --no-install-recommends docker.io podman \
     && rm -rf /var/lib/apt/lists/* \
     && usermod -aG docker jenkins
 USER jenkins

@@ -1,7 +1,10 @@
 # Gitea + Jenkins for local testing. Agent is NOT a service; run via:
-#   docker run --rm --network code-review_code-review-net -e SCM_* -e LLM_* code-review-agent review
+#   $CONTAINER_RUNTIME run --rm --network code-review_code-review-net -e SCM_* -e LLM_* code-review-agent review
 # Build agent image from repo root: docker build -t code-review-agent -f docker/Dockerfile.agent .
+#   (or: podman build -t code-review-agent -f docker/Dockerfile.agent .)
 # Network name uses project name "code-review" (set below); if you use -p othername, use othername_code-review-net.
+# Set CONTAINER_SOCKET to override the socket path (e.g. podman socket).
+# Set CONTAINER_RUNTIME to override the container runtime (e.g. podman). Defaults to docker.
 
 name: code-review
 
@@ -37,6 +40,7 @@ services:
       JAVA_OPTS: -Djenkins.install.runSetupWizard=false -Dhudson.model.ParametersAction.safeParameters=jenkins-generic-webhook-trigger-plugin_uuid
       JENKINS_ADMIN_USER: admin
       JENKINS_ADMIN_PASS: admin
+      CONTAINER_RUNTIME: ${CONTAINER_RUNTIME:-docker}
       # Optional: seed credentials for local testing
       # SCM_TOKEN: your_gitea_token
       # GOOGLE_API_KEY: your_google_api_key
