@@ -1,13 +1,13 @@
 # Quick Start Guide (Docker Only)
 
-Get the code review agent running quickly with **Docker Compose** (Gitea + Jenkins) and **auto-triggered PR reviews**.
+Get the code review agent running with Docker Compose, Gitea, Jenkins, and auto-triggered PR reviews.
 
 ---
 
 ## Prerequisites
 
 - **Docker** and **Docker Compose**
-- **LLM API key** (e.g. `GOOGLE_API_KEY` for Gemini, or `OPENAI_API_KEY` for OpenAI)
+- **LLM API key** (for example `GOOGLE_API_KEY`)
 
 ---
 
@@ -19,21 +19,17 @@ From the **repository root** (the folder that contains `docker-compose.yml`):
 docker compose up -d --build
 ```
 
-If you use Podman Compose instead:
+If you use Podman Compose:
 
 ```bash
+export CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
 podman-compose up -d --build
 ```
 
 - **Gitea**: http://localhost:3000  
 - **Jenkins**: http://localhost:8080  
 
-**Note (Docker vs Podman):**
-- Docker users: no changes needed.
-- Podman users: set `CONTAINER_SOCKET` to your rootless Podman socket before starting:
-  - Example: `export CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock`
-  - Then run `podman-compose up -d --build`
-- Podman users only: uncomment `CONTAINER_RUNTIME: podman` in `docker-compose.yml` so Jenkins uses Podman instead of Docker.
+If you use Podman, uncomment `CONTAINER_RUNTIME: podman` in [docker-compose.yml](/home/raditha/workspace/python/code-review/docker-compose.yml) before starting Jenkins.
 
 ---
 
@@ -41,9 +37,7 @@ podman-compose up -d --build
 
 1. Open http://localhost:3000 and complete first-run setup (admin user, etc.).
 2. Create a **repository** (e.g. `myrepo`) under a user or org (e.g. `myorg`).
-3. Create an **API token**: **Settings → Applications → Generate New Token** (scope: read/write for the repo).
-4. If webhooks fail with **“webhook can only call allowed HTTP servers”**, ensure `docker-compose.yml` includes:
-   - `GITEA__webhook__ALLOWED_HOST_LIST: jenkins,jenkins:8080`
+3. Create an **API token**: **Settings → Applications → Generate New Token**.
 
 ---
 
@@ -60,14 +54,12 @@ podman-compose up -d --build
    - Click **New Item** (left nav) or **Create a job** (home page), then choose **Pipeline**.
    - **Pipeline script from SCM** → point to this repo and set **Script Path** to `docker/jenkins/Jenkinsfile`,  
      **or** use **Pipeline script** and paste the contents of `docker/jenkins/Jenkinsfile`.
-   - Do **not** add `SCM_*` parameters in the Jenkins UI when using **Pipeline script from SCM** (they will be overwritten by the Jenkinsfile).
-   - Manual runs: use **Build with Parameters** (the Jenkinsfile defines `SCM_*` parameters).
-   - Webhook runs: `SCM_*` are injected automatically as environment variables by the webhook trigger.
+   - Do **not** add `SCM_*` parameters in the Jenkins UI when using **Pipeline script from SCM**.
 
-**How environment variables are set (clarity):**
-- `docker compose` reads a `.env` file **only** to substitute values in `docker-compose.yml`. It does **not** inject those values into Jenkins jobs.
-- Jenkins job env vars come from **Credentials**, **build parameters**, or **webhook variables** (below).
-- In this setup, the Jenkinsfile sets `SCM_TOKEN`/`GOOGLE_API_KEY` from **Credentials**, and sets `SCM_OWNER`/`SCM_REPO`/`SCM_PR_NUM`/`SCM_HEAD_SHA` from **webhook variables** (or from build parameters if you trigger manually).
+**How values are provided**
+- `SCM_TOKEN` and `GOOGLE_API_KEY` come from Jenkins **Credentials**.
+- `SCM_OWNER`, `SCM_REPO`, `SCM_PR_NUM`, and `SCM_HEAD_SHA` come from the webhook trigger mappings below.
+- `.env` is only used by Docker Compose to substitute values in `docker-compose.yml`.
 
 ---
 
@@ -83,27 +75,45 @@ docker build -t code-review-agent -f docker/Dockerfile.agent .
 
 ## 5. Auto-trigger PR reviews (Gitea webhook → Jenkins)
 
-Configure the **Generic Webhook Trigger** on the Jenkins job with these JSONPath mappings:
+### 5.1 Configure the Jenkins webhook trigger
+
+The Jenkins image already includes **Generic Webhook Trigger**.
+
+Open your Pipeline job → **Configure**.
+
+In **Build Triggers**:
+- Check **Generic Webhook Trigger**.
+- In the plugin section, find **Post content parameters**.
+- Add these 5 variables there:
 
 - `SCM_OWNER` → `$.pull_request.base.repo.owner.login`
 - `SCM_REPO` → `$.pull_request.base.repo.name`
 - `SCM_PR_NUM` → `$.pull_request.number`
 - `SCM_HEAD_SHA` → `$.pull_request.head.sha`
+- `PR_ACTION` → `$.action`
 
-### 5.1 Enable the Jenkins webhook trigger
+1. For each variable, set:
+   `Variable` = the name above
+   `Expression` = the matching JSONPath above
+   `Expression type` = `JSONPath`
+2. In the same **Generic Webhook Trigger** section, set:
+   `Optional filter` text = `$PR_ACTION`
+   `Optional filter` regexp = `^(opened|synchronize)$`
+3. Save the job.
+4. Re-open the job configuration if needed and copy the **Webhook URL** shown in the same **Generic Webhook Trigger** section.
 
-1. Open your Pipeline job → **Configure** → **Build Triggers**.
-2. Check **Generic Webhook Trigger**.
-3. Add the 4 JSONPath variables above (they become env vars for the build).
-4. Save the job and copy the **Webhook URL** shown by the plugin.
+The pipeline also checks `PR_ACTION` itself and skips execution unless the action is `opened` or `synchronize`.
 
-### 5.2 Configure the Gitea webhook
+### 5.2 Configure the Gitea webhook (repo-level)
 
 1. In Gitea, open your repo → **Settings → Webhooks → Add Webhook → Gitea**.
 2. **Target URL**: paste the Jenkins webhook URL from step 5.1.
 3. **Content Type**: `application/json`.
 4. **Trigger On**: **Pull Request**.
 5. Save the webhook.
+6. Confirm **Delivery History** shows a 2xx response.
+
+If delivery fails with `webhook can only call allowed HTTP servers`, verify [docker-compose.yml](/home/raditha/workspace/python/code-review/docker-compose.yml) includes `GITEA__webhook__ALLOWED_HOST_LIST: jenkins,jenkins:8080`.
 
 Now, when a PR is opened or updated, Jenkins will trigger the pipeline and run the review.
 
@@ -111,4 +121,4 @@ Now, when a PR is opened or updated, Jenkins will trigger the pipeline and run t
 
 ## Next steps
 
-For a fuller development workflow (Docker + non-Docker paths), see **[Development Testing Guide](DEV_TESTING.md)**.
+For development workflows beyond this setup, see [docs/DEV_TESTING.md](/home/raditha/workspace/python/code-review/docs/DEV_TESTING.md).

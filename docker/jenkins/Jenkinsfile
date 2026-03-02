@@ -16,6 +16,7 @@ pipeline {
         string(name: 'SCM_REPO', description: 'Repo name')
         string(name: 'SCM_PR_NUM', description: 'PR number')
         string(name: 'SCM_HEAD_SHA', description: 'Head commit SHA')
+        string(name: 'PR_ACTION', description: 'Pull request webhook action')
         string(name: 'LLM_PROVIDER', defaultValue: 'gemini', description: 'LLM provider')
         string(name: 'LLM_MODEL', defaultValue: 'gemini-2.5-flash', description: 'LLM model')
         string(name: 'COMPOSE_PROJECT_NAME', defaultValue: 'code-review', description: 'Docker Compose project name for agent network; set env COMPOSE_PROJECT_NAME or use -p when starting compose')
@@ -32,7 +33,15 @@ pipeline {
                     def scmRepo = params.SCM_REPO ?: env.SCM_REPO
                     def scmPrNum = params.SCM_PR_NUM ?: env.SCM_PR_NUM
                     def scmHeadSha = params.SCM_HEAD_SHA ?: env.SCM_HEAD_SHA
+                    def prAction = params.PR_ACTION ?: env.PR_ACTION
                     def containerRuntime = env.CONTAINER_RUNTIME ?: 'docker'
+                    def allowedActions = ['opened', 'synchronize']
+
+                    if (prAction && !allowedActions.contains(prAction)) {
+                        currentBuild.description = "Skipped PR action: ${prAction}"
+                        echo "Skipping PR action '${prAction}'. Allowed actions: ${allowedActions.join(', ')}."
+                        return
+                    }
 
                     if (!scmOwner || scmOwner.contains('$.pull_request')) {
                         error('SCM_OWNER not resolved from webhook. Check Generic Webhook Trigger JSONPath mapping.')
