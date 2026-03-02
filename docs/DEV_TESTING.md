@@ -42,3 +42,23 @@ Two short paths for testing during development: **Docker** and **non-Docker**.
    ```bash
    code-review review --owner <owner> --repo <repo> --pr <pr_number> --head-sha <commit_sha>
    ```
+
+---
+
+## C) With an External Orchestration Service (Optional)
+
+For high-concurrency testing, you can introduce a separate orchestration service (sister project) that:
+
+- Receives SCM webhooks or CI callbacks.
+- Enqueues review jobs and debounces by PR/head (latest `head_sha` wins).
+- Starts worker processes/containers that run:
+  - `code-review review --owner ... --repo ... --pr ... --head-sha ...`
+
+In that setup:
+
+- Use sections **A** or **B** to verify the worker image/CLI locally (one review at a time).
+- Use the orchestration project’s own docs (see `ORCHESTRATION_PLAN_SERVICE.md`) to:
+  - Run a local instance of the webhook/queue/worker stack.
+  - Verify that multiple rapid PR updates result in a **single** review for the latest head SHA.
+
+The Python package itself remains unchanged; only how you **schedule** reviews differs.

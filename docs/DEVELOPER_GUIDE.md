@@ -301,7 +301,36 @@ Provider-specific keys (used by ADK/LiteLLM, not by `config.py`): `GOOGLE_API_KE
 
 ---
 
-## 8. Testing
+## 8. Orchestrated Deployment (Optional)
+
+For high-concurrency or multi-tenant scenarios, you can run this package as a **stateless worker** behind an external orchestration service.
+
+- **Worker contract**:
+  - CLI: `code-review review --owner ... --repo ... --pr ... --head-sha ...`
+  - Env: `SCM_*` and `LLM_*` as documented above.
+  - One invocation of `run_review`:
+    - Runs a single review for the given PR/head.
+    - Uses hidden markers + an idempotency key to avoid duplicate comments on the same head.
+    - Returns `[]` when a run is skipped (e.g. `[skip-review]` label or idempotency key already seen).
+
+- **Idempotency key**:
+  - The runner builds an internal key of the form:
+    - `{provider}/{owner}/{repo}/pr/{pr_number}/head/{head_sha}/agent/{AGENT_VERSION}/config/{config_hash}`
+  - This key is embedded in each posted comment’s hidden marker and used to skip duplicate runs for the same PR/head/config.
+
+- **Orchestration service (sister project)**:
+  - Lives in a separate repo and is responsible for:
+    - Receiving SCM webhooks / CI callbacks.
+    - Debouncing jobs per PR so the **latest head_sha wins**.
+    - Ensuring at most one active `run_review` per PR/head at a time (per-PR locking).
+    - Starting worker containers/processes that invoke this package via the CLI.
+  - See `ORCHESTRATION_PLAN_AGENT.md` (this repo) and `ORCHESTRATION_PLAN_SERVICE.md` (sister project) for a detailed design.
+
+This mode is optional: CI can still call the agent directly without any orchestration layer for low/medium concurrency.
+
+---
+
+## 9. Testing
 
 ### 8.1 Test Layout
 
@@ -335,13 +364,13 @@ pytest --ignore=tests/e2e
 
 ---
 
-## 9. References
+## 10. References
 
 - **README.md**: Quick start, configuration summary, Docker/CI, observability.
 - **.env.example**: Example SCM and LLM env vars.
 - **AGENTS.md**: Project summary, where things live, ADK usage, conventions; optional context for the review agent.
 - **Google ADK**: [Agent Development Kit](https://google.github.io/adk-docs/) — LlmAgent, Runner, SessionService, function tools.
 
-## 10. Development Testing
+## 11. Development Testing
 
 For local Gitea + Jenkins testing (including webhook auto-triggers) and for running against remote SCMs during development, see **[Development Testing Guide](DEV_TESTING.md)**.
