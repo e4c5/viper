@@ -1,6 +1,5 @@
 """Validated configuration (Pydantic Settings). Centralizes env var handling."""
 
-from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -13,6 +12,9 @@ _PRIVATE_NETWORK_PREFIXES = (
     "192.168.",
     "169.254.",
 )
+
+_SCM_CONFIG: "SCMConfig | None" = None
+_LLM_CONFIG: "LLMConfig | None" = None
 
 
 class SCMConfig(BaseSettings):
@@ -88,21 +90,38 @@ class LLMConfig(BaseSettings):
     )
     timeout_seconds: float = Field(
         default=60.0,
-        description="Per-request timeout for LLM API calls",
+        description=(
+            "Per-request timeout for LLM API calls. "
+            "NOTE: currently configuration-only; see IMPROVEMENT_PLAN §2.4/§5.5 before relying on it."
+        ),
     )
     max_retries: int = Field(
         default=3,
-        description="Max retries on transient LLM failures",
+        description=(
+            "Max retries on transient LLM failures. "
+            "NOTE: currently configuration-only; see IMPROVEMENT_PLAN §2.4/§5.5 before relying on it."
+        ),
     )
 
 
-@lru_cache
 def get_scm_config() -> SCMConfig:
-    """Cached SCM config."""
-    return SCMConfig()
+    """Return cached SCM config instance."""
+    global _SCM_CONFIG
+    if _SCM_CONFIG is None:
+        _SCM_CONFIG = SCMConfig()
+    return _SCM_CONFIG
 
 
-@lru_cache
 def get_llm_config() -> LLMConfig:
-    """Cached LLM config."""
-    return LLMConfig()
+    """Return cached LLM config instance."""
+    global _LLM_CONFIG
+    if _LLM_CONFIG is None:
+        _LLM_CONFIG = LLMConfig()
+    return _LLM_CONFIG
+
+
+def reset_config_cache() -> None:
+    """Reset cached config instances. Intended for use in tests."""
+    global _SCM_CONFIG, _LLM_CONFIG
+    _SCM_CONFIG = None
+    _LLM_CONFIG = None

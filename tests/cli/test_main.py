@@ -11,7 +11,7 @@ try:
 except ImportError:
     ClickExit = SystemExit
 
-from code_review.__main__ import app, review
+from code_review.__main__ import review
 
 
 def test_cli_missing_owner_exits_1():

@@ -3,8 +3,6 @@
 import logging
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from code_review.providers.base import FileInfo
 
 

@@ -1,7 +1,5 @@
 """Tests for language/framework detector."""
 
-import pytest
-
 from code_review.standards.detector import (
     CONFIDENCE_THRESHOLD_HIGH,
     CONFIDENCE_THRESHOLD_MEDIUM,
@@ -136,3 +134,34 @@ def test_detect_from_paths_per_folder_root_single_root():
 def test_detect_from_paths_per_folder_root_empty():
     """Empty paths -> empty dict."""
     assert detect_from_paths_per_folder_root([]) == {}
+
+
+def test_detect_from_paths_per_folder_root_overlapping_roots():
+    """Overlapping roots: longest-prefix root wins."""
+    paths = [
+        "services/api/pyproject.toml",
+        "services/api/app/main.py",
+        "services/api-admin/pyproject.toml",
+        "services/api-admin/app/admin.py",
+    ]
+    result = detect_from_paths_per_folder_root(paths)
+    # Both roots should be present with python language
+    assert "services/api" in result
+    assert "services/api-admin" in result
+    assert result["services/api"].language == "python"
+    assert result["services/api-admin"].language == "python"
+
+
+def test_detect_from_paths_per_folder_root_orphan_files_grouped_under_empty_root():
+    """Files not under any config root are grouped under ''."""
+    paths = [
+        "pkg-python/requirements.txt",
+        "pkg-python/app/main.py",
+        "scripts/one_off.py",
+    ]
+    result = detect_from_paths_per_folder_root(paths)
+    assert "pkg-python" in result
+    assert "" in result
+    assert result["pkg-python"].language == "python"
+    # Orphan script should still be classified (likely python) under repo root
+    assert result[""].language in ("python", "unknown")

@@ -3,9 +3,11 @@
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 import uuid
+from collections import Counter
 
 from google.genai import types
 
@@ -31,8 +33,12 @@ USER_ID = "reviewer"
 AGENT_VERSION = getattr(code_review, "__version__", "0.1.0")
 logger = logging.getLogger(__name__)
 
-# Fraction of context window reserved for diff content; rest for system prompt, tools, response
-DIFF_TOKEN_BUDGET_RATIO = 0.25
+# Fraction of context window reserved for diff content; rest for system prompt, tools, response.
+# Configurable via LLM_DIFF_BUDGET_RATIO env var.
+try:
+    DIFF_TOKEN_BUDGET_RATIO = float(os.getenv("LLM_DIFF_BUDGET_RATIO", "0.25"))
+except ValueError:
+    DIFF_TOKEN_BUDGET_RATIO = 0.25
 
 
 def _estimate_tokens(text: str) -> int:
@@ -104,7 +110,6 @@ def _get_file_lines_by_path(provider, owner: str, repo: str, ref: str, paths: li
 
 def _build_pr_summary_body(to_post: list[tuple[FindingV1, str]]) -> str:
     """Build PR-level summary: counts by severity and link to inline comments (Phase 4.2)."""
-    from collections import Counter
     counts = Counter(f.severity for f, _ in to_post)
     parts = [f"{count} {str(sev).capitalize()}" for sev, count in sorted(counts.items())]
     summary = "Code review: " + ", ".join(parts) + "."
@@ -224,7 +229,16 @@ def run_review(
 
     cfg = get_scm_config()
     llm_cfg = get_llm_config()
-    provider = get_provider(cfg.provider, cfg.url, cfg.token)
+    token_val = (
+        cfg.token.get_secret_value()
+        if hasattr(cfg.token, "get_secret_value")
+        else cfg.token
+    )
+    provider = get_provider(
+        cfg.provider,
+        cfg.url,
+        token_val,
+    )
 
     # Skip review if PR has skip label or title contains skip pattern (e.g. [skip-review])
     if cfg.skip_label or cfg.skip_title_pattern:

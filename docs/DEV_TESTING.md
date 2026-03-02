@@ -20,6 +20,49 @@ Two short paths for testing during development: **Docker** and **non-Docker**.
 3. Trigger a review:
    - Create/update a PR in Gitea → Jenkins auto-runs the review job.
 
+### Optional: isolated E2E stack (separate volumes, auto-managed by pytest)
+
+To run E2E tests without touching your normal `gitea_data` / `jenkins_home` volumes, this repo
+provides an isolated Compose stack under `tests/e2e/docker-compose.e2e.yml` plus a pytest fixture
+that starts and stops it automatically.
+
+#### One-command E2E (hello-world PR auto-created)
+
+The E2E test will automatically:
+
+- Start Gitea + Jenkins via the isolated Compose stack.
+- Use the Gitea API to create (or reuse) a small `code-review-e2e-hello` repo.
+- Create a feature branch and a “hello world” PR.
+- Run the agent against that PR with a stubbed LLM.
+
+From the repo root:
+
+```bash
+RUN_E2E=1 pytest -m e2e
+```
+
+No manual `GITEA_E2E_TOKEN` export is required; the E2E setup code handles creating and using a
+Gitea access token internally.
+
+What happens:
+
+- `tests/conftest.py::e2e_stack` uses `docker compose -f tests/e2e/docker-compose.e2e.yml -p code-review-e2e up -d`
+  to start Gitea + Jenkins once per test session.
+- `tests/e2e/test_docker_gitea_e2e.py` calls the Gitea REST API using an internally created access
+  token to create the hello-world repo and PR and then runs the agent via `run_review(...)`
+  (with LLM stubbed).
+- When the session finishes, pytest tears the stack down with
+  `docker compose -f tests/e2e/docker-compose.e2e.yml -p code-review-e2e down -v`.
+
+If you change Dockerfiles and need to rebuild images, set `E2E_REBUILD=1`:
+
+```bash
+E2E_REBUILD=1 RUN_E2E=1 pytest -m e2e
+```
+
+This uses different volume and container names (`gitea_data_e2e`, `jenkins_home_e2e`, etc.), so your
+existing Docker data is not affected.
+
 ---
 
 ## B) Without Docker (run locally against any SCM)

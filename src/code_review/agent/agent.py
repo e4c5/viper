@@ -4,22 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from code_review.agent.tools.gitea_tools import create_findings_only_tools, create_gitea_tools
+from code_review.agent.tools.gitea_tools import create_findings_only_tools
 from code_review.config import get_llm_config
 from code_review.models import get_configured_model
 from code_review.providers.base import ProviderInterface
 
 if TYPE_CHECKING:
     from google.adk.agents import Agent
-
-# Instruction when agent posts comments itself (legacy)
-BASE_INSTRUCTION = """
-You are a code review agent. You will receive PR details (owner, repo, pr_number, head_sha).
-Use get_pr_diff to fetch the diff, get_file_content for AGENTS.md/README/.cursor/rules context.
-Call get_existing_review_comments to get the ignore list (manually resolved issues). Do not post comments for issues that match (path, body_hash) in the ignore list.
-Analyze the diff for bugs, style, security, and best practices. Consider the language/framework.
-Use post_review_comment for each finding: path, line, and body with [Critical]/[Suggestion]/[Info] prefix. Skip any finding that was manually resolved.
-"""
 
 # Instruction when agent returns findings only; runner filters and posts
 FINDINGS_ONLY_INSTRUCTION = """
@@ -40,7 +31,13 @@ def create_review_agent(
     review_standards: str = "",
     findings_only: bool = True,
 ) -> Agent:
-    """Create the code review LlmAgent. If findings_only=True, agent returns JSON findings; runner posts."""
+    """Create the code review LlmAgent in findings-only mode.
+
+    The agent always returns JSON findings; the Python runner is responsible for fetching
+    existing comments, applying idempotency/ignore logic, and posting comments.
+
+    The findings_only parameter is retained for backwards compatibility but has no effect.
+    """
     from google.adk.agents import Agent
     from google.genai import types
 
@@ -50,12 +47,8 @@ def create_review_agent(
         max_output_tokens=llm_cfg.max_output_tokens,
     )
 
-    if findings_only:
-        tools = create_findings_only_tools(provider)
-        instruction = FINDINGS_ONLY_INSTRUCTION
-    else:
-        tools = create_gitea_tools(provider)
-        instruction = BASE_INSTRUCTION
+    tools = create_findings_only_tools(provider)
+    instruction = FINDINGS_ONLY_INSTRUCTION
     # Debug mode: disable tool calls when LLM_DISABLE_TOOL_CALLS is set.
     # This constructs the Agent without function tools so tests can exercise
     # runner logic without invoking SCM-backed tools.

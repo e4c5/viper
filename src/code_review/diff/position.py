@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from code_review.diff.parser import DiffHunk, parse_unified_diff
+from code_review.diff.parser import parse_unified_diff
 
 
 @dataclass

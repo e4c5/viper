@@ -68,7 +68,6 @@ _PATH_SIGNALS: dict[str, tuple[str, str | None]] = {
     "build.gradle": ("java", None),
     "build.gradle.kts": ("java", None),
     "CMakeLists.txt": ("cpp", None),
-    "Makefile": ("cpp", None),
     "meson.build": ("cpp", None),
 }
 

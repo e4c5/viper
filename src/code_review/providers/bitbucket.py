@@ -4,7 +4,6 @@ from typing import Any
 
 import httpx
 
-from code_review.diff.parser import parse_unified_diff
 from code_review.providers.safety import truncate_repo_content
 from code_review.providers.base import (
     FileInfo,
@@ -60,35 +59,6 @@ class BitbucketProvider(ProviderInterface):
         path = self._path(owner, repo, "pullrequests", str(pr_number), "diff")
         out = self._get(path)
         return out if isinstance(out, str) else ""
-
-    def get_pr_diff_for_file(
-        self, owner: str, repo: str, pr_number: int, file_path: str
-    ) -> str:
-        """Return diff for a single file by parsing full diff."""
-        full_diff = self.get_pr_diff(owner, repo, pr_number)
-        hunks = parse_unified_diff(full_diff)
-        lines: list[str] = []
-        headers_emitted = False
-        for hunk in hunks:
-            if hunk.path != file_path:
-                continue
-            if not headers_emitted:
-                lines.append(f"--- a/{hunk.path}")
-                lines.append(f"+++ b/{hunk.path}")
-                headers_emitted = True
-            lines.append(
-                f"@@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},{hunk.new_count} @@"
-            )
-            for content, old_ln, new_ln in hunk.lines:
-                if old_ln is not None and new_ln is not None:
-                    lines.append(" " + content)
-                elif new_ln is not None:
-                    lines.append("+" + content)
-                elif old_ln is not None:
-                    lines.append("-" + content)
-                else:
-                    lines.append("\\" + content)
-        return "\n".join(lines) if lines else ""
 
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
         """Return file content at ref (Bitbucket src endpoint)."""

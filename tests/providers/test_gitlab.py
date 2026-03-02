@@ -1,7 +1,6 @@
 """Tests for GitLab provider (mocked HTTP)."""
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from code_review.providers import get_provider
 from code_review.providers.gitlab import GitLabProvider

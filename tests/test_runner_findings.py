@@ -45,6 +45,13 @@ def test_findings_from_response_invalid_skipped():
     assert len(findings) == 0
 
 
+def test_findings_from_response_malformed_json_returns_empty():
+    """Malformed JSON from agent should not raise; runner parses it as no findings."""
+    text = '{"path": "missing array wrapper"'  # invalid JSON
+    findings = _findings_from_response(text)
+    assert findings == []
+
+
 def test_finding_to_comment_body():
     f = FindingV1(path="a.py", line=1, severity="suggestion", code="x", message="Do Y.")
     body = finding_to_comment_body(f)

@@ -1,9 +1,7 @@
 """Tests for GitHub provider (mocked HTTP)."""
 
 import base64
-
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from code_review.providers import get_provider
 from code_review.providers.github import GitHubProvider
