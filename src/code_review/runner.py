@@ -383,7 +383,10 @@ class ReviewOrchestrator:
         self.print_findings = print_findings
 
     def _load_config_and_provider(self):
-        """Load SCM/LLM config and create the provider instance. Returns (cfg, llm_cfg, provider)."""
+        """Load SCM/LLM config and create the provider instance.
+
+        Returns (cfg, llm_cfg, provider).
+        """
         cfg = get_scm_config()
         llm_cfg = get_llm_config()
         token_val = (
@@ -441,7 +444,8 @@ class ReviewOrchestrator:
     def _load_existing_comments_and_markers(self, provider, owner: str, repo: str, pr_number: int):
         """
         Fetch existing review comments, build ignore set and resolved sets from markers.
-        Returns (existing, existing_dicts, ignore_set, resolved_comments, resolved_body_set, resolved_fp_set).
+        Returns (existing, existing_dicts, ignore_set, resolved_comments,
+                 resolved_body_set, resolved_fp_set).
         """
         existing = provider.get_existing_review_comments(owner, repo, pr_number)
         existing_dicts = [c.model_dump() for c in existing]
@@ -486,8 +490,8 @@ class ReviewOrchestrator:
         run_handle,
     ) -> list[FindingV1] | None:
         """
-        If we already ran for this PR/head/config (run id in comment marker), emit observability and return [].
-        Otherwise return None (caller continues).
+        If we already ran for this PR/head/config (run id in comment marker),
+        emit observability and return []. Otherwise return None (caller continues).
         """
         if not head_sha:
             return None
@@ -511,8 +515,8 @@ class ReviewOrchestrator:
     def _build_ignore_set_and_filter_files(self, paths: list[str]) -> list[str]:
         """
         Optionally filter which file paths to review (e.g. by ignore patterns).
-        Currently returns paths unchanged; ignore_set is built in _load_existing_comments_and_markers
-        and used later to filter findings.
+        Currently returns paths unchanged; ignore_set is built in
+        _load_existing_comments_and_markers and used later to filter findings.
         """
         return paths
 
@@ -755,6 +759,19 @@ class ReviewOrchestrator:
             provider, owner, repo, pr_number
         )
         paths = self._build_ignore_set_and_filter_files(paths)
+        if not paths:
+            return self._record_observability_and_build_result(
+                trace_id,
+                owner,
+                repo,
+                pr_number,
+                start_time,
+                run_handle,
+                paths,
+                [],
+                0,
+                [],
+            )
         _, review_standards = self._detect_languages_for_files(paths)
 
         session_id, session_service, runner = self._create_agent_and_runner(
