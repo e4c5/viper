@@ -185,11 +185,11 @@ At each step below:
 
 ### Step 2 – Extract Skip Logic and Existing State
 
-- **[ ]** Move skip logic into `_determine_skip_reason()`.
-- **[ ]** Move comment fetching + fingerprint parsing into `_load_existing_comments_and_markers()`.
-- **[ ]** Move idempotency/short‑circuit into `_compute_idempotency_and_maybe_short_circuit()`.
-- **[ ]** Wire helpers into `run()` in the same order as before.
-- **[ ]** Run `pytest --ignore=tests/e2e` and ensure all tests pass.
+- **[x]** Move skip logic into `_determine_skip_reason()`.
+- **[x]** Move comment fetching + fingerprint parsing into `_load_existing_comments_and_markers()`.
+- **[x]** Move idempotency/short‑circuit into `_compute_idempotency_and_maybe_short_circuit()`.
+- **[x]** Wire helpers into `run()` in the same order as before.
+- **[x]** Run `pytest --ignore=tests/e2e` and ensure all tests pass.
 
 ### Step 3 – Extract Files, Diffs, and Language Detection
 

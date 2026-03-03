@@ -159,3 +159,122 @@ def test_review_orchestrator_run_returns_list_of_findings():
     assert len(result) == 1
     assert result[0].path == "foo.py"
     assert result[0].message == "m"
+
+
+# --- Step 2: _determine_skip_reason, _load_existing_comments_and_markers, _compute_idempotency_and_maybe_short_circuit ---
+
+
+def test_determine_skip_reason_returns_none_when_no_skip_config():
+    """When cfg has no skip_label or skip_title_pattern, _determine_skip_reason returns None."""
+    cfg = MagicMock(skip_label="", skip_title_pattern="")
+    provider = MagicMock()
+    o = ReviewOrchestrator("o", "r", 1)
+    result = o._determine_skip_reason(
+        provider, cfg, "o", "r", 1, "trace-1", 0.0, MagicMock()
+    )
+    assert result is None
+    provider.get_pr_info.assert_not_called()
+
+
+def test_determine_skip_reason_returns_empty_list_when_pr_has_skip_label():
+    """When PR has the skip label, _determine_skip_reason returns [] and emits observability."""
+    cfg = MagicMock()
+    cfg.skip_label = "skip-review"
+    cfg.skip_title_pattern = ""
+    provider = MagicMock()
+    provider.get_pr_info.return_value = MagicMock(
+        labels=["skip-review", "other"], title="Fix bug"
+    )
+    o = ReviewOrchestrator("o", "r", 1)
+    with patch("code_review.runner._log_run_complete"), patch(
+        "code_review.runner.observability"
+    ) as mock_obs:
+        result = o._determine_skip_reason(
+            provider, cfg, "o", "r", 1, "trace-1", 0.0, MagicMock()
+        )
+    assert result == []
+    mock_obs.finish_run.assert_called_once()
+
+
+def test_determine_skip_reason_returns_none_when_pr_info_is_none():
+    """When get_pr_info returns None, _determine_skip_reason returns None."""
+    cfg = MagicMock(skip_label="skip-review", skip_title_pattern="")
+    provider = MagicMock()
+    provider.get_pr_info.return_value = None
+    o = ReviewOrchestrator("o", "r", 1)
+    result = o._determine_skip_reason(
+        provider, cfg, "o", "r", 1, "trace-1", 0.0, MagicMock()
+    )
+    assert result is None
+
+
+def test_load_existing_comments_and_markers_returns_ignore_and_resolved_sets():
+    """_load_existing_comments_and_markers returns existing, dicts, ignore_set, resolved sets."""
+    provider = MagicMock()
+    comment = MagicMock()
+    comment.model_dump.return_value = {"path": "a.py", "body": "Hello"}
+    comment.path = "a.py"
+    comment.body = "Hello"
+    comment.resolved = False
+    provider.get_existing_review_comments.return_value = [comment]
+
+    o = ReviewOrchestrator("o", "r", 1)
+    existing, existing_dicts, ignore_set, resolved_comments, resolved_body_set, resolved_fp_set = (
+        o._load_existing_comments_and_markers(provider, "o", "r", 1)
+    )
+
+    assert len(existing) == 1
+    assert existing_dicts == [{"path": "a.py", "body": "Hello"}]
+    assert len(ignore_set) >= 1  # body_hash at least
+    assert resolved_comments == []
+    assert resolved_body_set == set()
+    assert resolved_fp_set == set()
+    provider.get_existing_review_comments.assert_called_once_with("o", "r", 1)
+
+
+def test_compute_idempotency_and_maybe_short_circuit_returns_none_when_no_head_sha():
+    """When head_sha is empty, _compute_idempotency_and_maybe_short_circuit returns None."""
+    o = ReviewOrchestrator("o", "r", 1, head_sha="")
+    result = o._compute_idempotency_and_maybe_short_circuit(
+        MagicMock(), MagicMock(), "o", "r", 1, "", [], "trace", 0.0, MagicMock()
+    )
+    assert result is None
+
+
+def test_compute_idempotency_and_maybe_short_circuit_returns_none_when_key_not_seen():
+    """When idempotency key not in comments, returns None."""
+    o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
+    result = o._compute_idempotency_and_maybe_short_circuit(
+        MagicMock(),
+        MagicMock(),
+        "o",
+        "r",
+        1,
+        "abc",
+        [{"path": "x", "body": "no marker"}],
+        "trace",
+        0.0,
+        MagicMock(),
+    )
+    assert result is None
+
+
+def test_compute_idempotency_and_maybe_short_circuit_returns_empty_list_when_key_seen():
+    """When idempotency key is seen in comments, returns [] and emits observability."""
+    from code_review.runner import _build_idempotency_key
+
+    cfg = MagicMock(provider="gitea", url="https://x.com", token="x")
+    llm_cfg = MagicMock(provider="gemini", model="m")
+    run_id = _build_idempotency_key(cfg, llm_cfg, "o", "r", 1, "abc")
+    existing_dicts = [
+        {"path": "a.py", "body": f"<!-- code-review-agent:run={run_id} -->\nDone."}
+    ]
+    o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
+    with patch("code_review.runner._log_run_complete"), patch(
+        "code_review.runner.observability"
+    ) as mock_obs:
+        result = o._compute_idempotency_and_maybe_short_circuit(
+            cfg, llm_cfg, "o", "r", 1, "abc", existing_dicts, "trace", 0.0, MagicMock()
+        )
+    assert result == []
+    mock_obs.finish_run.assert_called_once()

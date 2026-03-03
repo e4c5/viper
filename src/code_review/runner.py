@@ -243,6 +243,115 @@ class ReviewOrchestrator:
         provider = get_provider(cfg.provider, cfg.url, token_val)
         return (cfg, llm_cfg, provider)
 
+    def _determine_skip_reason(
+        self,
+        provider,
+        cfg,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        trace_id: str,
+        start_time: float,
+        run_handle,
+    ) -> list[FindingV1] | None:
+        """
+        If the PR should be skipped (skip label or title pattern), emit observability and return [].
+        Otherwise return None (caller continues).
+        """
+        if not cfg.skip_label and not cfg.skip_title_pattern:
+            return None
+        pr_info = provider.get_pr_info(owner, repo, pr_number)
+        if not pr_info:
+            return None
+        if (
+            cfg.skip_label
+            and cfg.skip_label.strip()
+            and any(
+                lb.strip().lower() == cfg.skip_label.strip().lower() for lb in pr_info.labels
+            )
+        ):
+            _duration_ms = (time.perf_counter() - start_time) * 1000
+            _log_run_complete(trace_id, owner, repo, pr_number, 0, 0, 0, _duration_ms)
+            observability.finish_run(
+                run_handle, owner, repo, pr_number, 0, 0, 0, _duration_ms / 1000.0
+            )
+            return []
+        if (
+            cfg.skip_title_pattern
+            and cfg.skip_title_pattern.strip()
+            and cfg.skip_title_pattern.strip().lower() in pr_info.title.lower()
+        ):
+            _duration_ms = (time.perf_counter() - start_time) * 1000
+            _log_run_complete(trace_id, owner, repo, pr_number, 0, 0, 0, _duration_ms)
+            observability.finish_run(
+                run_handle, owner, repo, pr_number, 0, 0, 0, _duration_ms / 1000.0
+            )
+            return []
+        return None
+
+    def _load_existing_comments_and_markers(self, provider, owner: str, repo: str, pr_number: int):
+        """
+        Fetch existing review comments, build ignore set and resolved sets from markers.
+        Returns (existing, existing_dicts, ignore_set, resolved_comments, resolved_body_set, resolved_fp_set).
+        """
+        existing = provider.get_existing_review_comments(owner, repo, pr_number)
+        existing_dicts = [c.model_dump() for c in existing]
+        ignore_set = _build_ignore_set(existing_dicts)
+        resolved_comments = []
+        for c in existing:
+            resolved_flag = getattr(c, "resolved", False)
+            if isinstance(resolved_flag, bool) and resolved_flag:
+                resolved_comments.append(c)
+        resolved_body_set: set[tuple[str, str]] = set()
+        resolved_fp_set: set[tuple[str, str]] = set()
+        for c in resolved_comments:
+            path = getattr(c, "path", "") or ""
+            body = getattr(c, "body", "") or ""
+            if not path or not body:
+                continue
+            body_hash = hashlib.sha256(body.encode()).hexdigest()
+            resolved_body_set.add((path, body_hash))
+            parsed = parse_marker_from_comment_body(body)
+            if parsed.get("fingerprint"):
+                resolved_fp_set.add((path, parsed["fingerprint"]))
+        return (
+            existing,
+            existing_dicts,
+            ignore_set,
+            resolved_comments,
+            resolved_body_set,
+            resolved_fp_set,
+        )
+
+    def _compute_idempotency_and_maybe_short_circuit(
+        self,
+        cfg,
+        llm_cfg,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        head_sha: str,
+        existing_dicts: list,
+        trace_id: str,
+        start_time: float,
+        run_handle,
+    ) -> list[FindingV1] | None:
+        """
+        If we already ran for this PR/head/config (run id in comment marker), emit observability and return [].
+        Otherwise return None (caller continues).
+        """
+        if not head_sha:
+            return None
+        run_id = _build_idempotency_key(cfg, llm_cfg, owner, repo, pr_number, head_sha)
+        if not _idempotency_key_seen_in_comments(existing_dicts, run_id):
+            return None
+        _duration_ms = (time.perf_counter() - start_time) * 1000
+        _log_run_complete(trace_id, owner, repo, pr_number, 0, 0, 0, _duration_ms)
+        observability.finish_run(
+            run_handle, owner, repo, pr_number, 0, 0, 0, _duration_ms / 1000.0
+        )
+        return []
+
     def run(self) -> list[FindingV1]:
         """
         Execute the full review flow. Returns list of findings that were posted
@@ -266,70 +375,35 @@ class ReviewOrchestrator:
 
         cfg, llm_cfg, provider = self._load_config_and_provider()
 
-        # Skip review if PR has skip label or title contains skip pattern (e.g. [skip-review])
-        if cfg.skip_label or cfg.skip_title_pattern:
-            pr_info = provider.get_pr_info(owner, repo, pr_number)
-            if pr_info:
-                if (
-                    cfg.skip_label
-                    and cfg.skip_label.strip()
-                    and any(
-                        lb.strip().lower() == cfg.skip_label.strip().lower() for lb in pr_info.labels
-                    )
-                ):
-                    _duration_ms = (time.perf_counter() - start_time) * 1000
-                    _log_run_complete(trace_id, owner, repo, pr_number, 0, 0, 0, _duration_ms)
-                    observability.finish_run(
-                        run_handle, owner, repo, pr_number, 0, 0, 0, _duration_ms / 1000.0
-                    )
-                    return []
-                if (
-                    cfg.skip_title_pattern
-                    and cfg.skip_title_pattern.strip()
-                    and cfg.skip_title_pattern.strip().lower() in pr_info.title.lower()
-                ):
-                    _duration_ms = (time.perf_counter() - start_time) * 1000
-                    _log_run_complete(trace_id, owner, repo, pr_number, 0, 0, 0, _duration_ms)
-                    observability.finish_run(
-                        run_handle, owner, repo, pr_number, 0, 0, 0, _duration_ms / 1000.0
-                    )
-                    return []
+        skip_result = self._determine_skip_reason(
+            provider, cfg, owner, repo, pr_number, trace_id, start_time, run_handle
+        )
+        if skip_result is not None:
+            return skip_result
 
-        # Runner fetches existing comments and builds ignore list
-        existing = provider.get_existing_review_comments(owner, repo, pr_number)
-        existing_dicts = [c.model_dump() for c in existing]
-        ignore_set = _build_ignore_set(existing_dicts)
-        # Track manually resolved comments separately for ignore and auto-resolve behavior.
-        resolved_comments = []
-        for c in existing:
-            # Only treat comments as resolved when the resolved attribute is a real
-            # boolean True (avoids MagicMock truthiness in tests).
-            resolved_flag = getattr(c, "resolved", False)
-            if isinstance(resolved_flag, bool) and resolved_flag:
-                resolved_comments.append(c)
-        resolved_body_set: set[tuple[str, str]] = set()
-        resolved_fp_set: set[tuple[str, str]] = set()
-        for c in resolved_comments:
-            path = getattr(c, "path", "") or ""
-            body = getattr(c, "body", "") or ""
-            if not path or not body:
-                continue
-            body_hash = hashlib.sha256(body.encode()).hexdigest()
-            resolved_body_set.add((path, body_hash))
-            parsed = parse_marker_from_comment_body(body)
-            if parsed.get("fingerprint"):
-                resolved_fp_set.add((path, parsed["fingerprint"]))
+        (
+            existing,
+            existing_dicts,
+            ignore_set,
+            resolved_comments,
+            resolved_body_set,
+            resolved_fp_set,
+        ) = self._load_existing_comments_and_markers(provider, owner, repo, pr_number)
 
-        # Idempotency: skip if we already ran for this PR/head/config (run id in comment marker)
-        if head_sha:
-            run_id = _build_idempotency_key(cfg, llm_cfg, owner, repo, pr_number, head_sha)
-            if _idempotency_key_seen_in_comments(existing_dicts, run_id):
-                _duration_ms = (time.perf_counter() - start_time) * 1000
-                _log_run_complete(trace_id, owner, repo, pr_number, 0, 0, 0, _duration_ms)
-                observability.finish_run(
-                    run_handle, owner, repo, pr_number, 0, 0, 0, _duration_ms / 1000.0
-                )
-                return []
+        idempotency_result = self._compute_idempotency_and_maybe_short_circuit(
+            cfg,
+            llm_cfg,
+            owner,
+            repo,
+            pr_number,
+            head_sha,
+            existing_dicts,
+            trace_id,
+            start_time,
+            run_handle,
+        )
+        if idempotency_result is not None:
+            return idempotency_result
 
         files = provider.get_pr_files(owner, repo, pr_number)
         paths = [f.path for f in files]
