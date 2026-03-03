@@ -373,14 +373,36 @@ class ReviewOrchestrator:
         review_standards = get_review_standards(detected.language, detected.framework)
         return (detected, review_standards)
 
+    def _create_agent_and_runner(
+        self, provider, review_standards: str, owner: str, repo: str, pr_number: int
+    ):
+        """
+        Build the findings-only agent, session service, and ADK Runner.
+        Returns (session_id, session_service, runner).
+        """
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+
+        agent = create_review_agent(provider, review_standards, findings_only=True)
+        session_id = f"{owner}/{repo}/pr-{pr_number}/{uuid.uuid4().hex[:12]}"
+        session_service = InMemorySessionService()
+        session_service.create_session_sync(
+            app_name=APP_NAME,
+            user_id=USER_ID,
+            session_id=session_id,
+        )
+        runner = Runner(
+            agent=agent,
+            app_name=APP_NAME,
+            session_service=session_service,
+        )
+        return (session_id, session_service, runner)
+
     def run(self) -> list[FindingV1]:
         """
         Execute the full review flow. Returns list of findings that were posted
         (or would be posted if dry_run).
         """
-        from google.adk.runners import Runner
-        from google.adk.sessions import InMemorySessionService
-
         # Unpack to locals so the rest of the method matches the original run_review()
         # body unchanged (no self. prefix). Will be removed as logic is extracted to helpers.
         owner = self.owner
@@ -432,20 +454,8 @@ class ReviewOrchestrator:
         paths = self._build_ignore_set_and_filter_files(paths)
         detected, review_standards = self._detect_languages_for_files(paths)
 
-        agent = create_review_agent(provider, review_standards, findings_only=True)
-
-        session_id = f"{owner}/{repo}/pr-{pr_number}/{uuid.uuid4().hex[:12]}"
-        session_service = InMemorySessionService()
-        session_service.create_session_sync(
-            app_name=APP_NAME,
-            user_id=USER_ID,
-            session_id=session_id,
-        )
-
-        runner = Runner(
-            agent=agent,
-            app_name=APP_NAME,
-            session_service=session_service,
+        session_id, session_service, runner = self._create_agent_and_runner(
+            provider, review_standards, owner, repo, pr_number
         )
 
         diff_budget = int(get_context_window() * DIFF_TOKEN_BUDGET_RATIO)

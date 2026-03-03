@@ -201,10 +201,10 @@ At each step below:
 
 ### Step 4 – Extract Agent and Runner Creation
 
-- **[ ]** Move agent construction into `_create_agent_and_runner()`.
-- **[ ]** Ensure `findings_only=True` and logging/model selection behaviour are unchanged.
-- **[ ]** Replace inlined block in `run()` with the helper call.
-- **[ ]** Run `pytest --ignore=tests/e2e` and ensure all tests pass.
+- **[x]** Move agent construction into `_create_agent_and_runner()`.
+- **[x]** Ensure `findings_only=True` and logging/model selection behaviour are unchanged.
+- **[x]** Replace inlined block in `run()` with the helper call.
+- **[x]** Run `pytest --ignore=tests/e2e` and ensure all tests pass.
 
 ### Step 5 – Extract Agent Execution and Findings Handling
 

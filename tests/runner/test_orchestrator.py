@@ -323,3 +323,38 @@ def test_detect_languages_for_files_returns_detected_and_review_standards():
     assert detected.language == "python"
     assert isinstance(review_standards, str)
     assert "python" in review_standards.lower() or "Python" in review_standards
+
+
+# --- Step 4: _create_agent_and_runner ---
+
+
+@patch("code_review.runner.create_review_agent")
+def test_create_agent_and_runner_returns_session_id_service_runner(mock_create_agent):
+    """_create_agent_and_runner returns (session_id, session_service, runner) with findings_only=True."""
+    mock_agent = MagicMock()
+    mock_create_agent.return_value = mock_agent
+    provider = MagicMock()
+    review_standards = "### Python"
+
+    o = ReviewOrchestrator("o", "r", 42)
+    with patch("google.adk.runners.Runner") as MockRunner, patch(
+        "google.adk.sessions.InMemorySessionService"
+    ) as MockSessionService:
+        mock_svc = MagicMock()
+        MockSessionService.return_value = mock_svc
+        mock_runner = MagicMock()
+        MockRunner.return_value = mock_runner
+
+        session_id, session_service, runner = o._create_agent_and_runner(
+            provider, review_standards, "o", "r", 42
+        )
+
+    mock_create_agent.assert_called_once_with(provider, review_standards, findings_only=True)
+    assert session_id.startswith("o/r/pr-42/")
+    assert len(session_id) > len("o/r/pr-42/")
+    assert session_service is mock_svc
+    assert runner is mock_runner
+    mock_svc.create_session_sync.assert_called_once()
+    MockRunner.assert_called_once_with(
+        agent=mock_agent, app_name="code_review", session_service=mock_svc
+    )
