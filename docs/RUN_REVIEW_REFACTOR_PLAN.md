@@ -94,13 +94,13 @@ review flow. The public API will mirror the existing `run_review()` parameters a
 
   ```python
   class ReviewOrchestrator:
-      def run(self) -> ReviewResult:
+      def run(self) -> list[FindingV1]:
           """Execute the full review flow in the same order as the legacy run_review()."""
           ...
   ```
 
-The exact `ReviewResult` type will be whatever `run_review()` currently returns (bool, enum,
-or structured result). The refactor must **not** change that signature.
+The return type of `run_review()` is **`list[FindingV1]`** (findings that were posted or would be
+posted when `dry_run=True`). The refactor must **not** change that signature.
 
 ### 3.2 Proposed Internal Methods
 
@@ -156,101 +156,74 @@ should encapsulate a **single, testable responsibility**.
 
 ---
 
-## 4. Step‑By‑Step Refactor Plan
+## 4. Step‑By‑Step Refactor Plan (Checklist)
 
 At each step below:
 
-- Move logic from `run_review()` into a `ReviewOrchestrator` method with as few modifications as
-  possible.
-- **After the code change, immediately run the existing tests**:
+- **[ ]** Move logic from `run_review()` into a `ReviewOrchestrator` method with as few modifications
+  as possible.
+- **[ ]** After the code change, immediately run the existing tests:
 
   ```bash
   pytest --ignore=tests/e2e
   ```
 
-- Only proceed to the next step when all tests pass.
+- **[ ]** Only proceed to the next step when all tests pass.
 
 ### Step 0 – Introduce `ReviewOrchestrator` Shell
 
-1. Add `ReviewOrchestrator` to `runner.py` with:
-   - An `__init__` that captures configuration/CLI arguments (same as `run_review()` parameters).
-   - A `run()` method that simply calls the existing module‑level `run_review()` logic for now
-     (copy‑paste or delegation).
-2. Update module‑level `run_review()` to be a thin façade that:
-   - Instantiates `ReviewOrchestrator` with the same arguments.
-   - Calls `orchestrator.run()` and returns its result.
-3. Run:
-   - `pytest --ignore=tests/e2e`
+- **[x]** Add `ReviewOrchestrator` to `runner.py` (init + `run()` delegating to existing logic).
+- **[x]** Update module‑level `run_review()` to be a thin façade that instantiates the orchestrator and calls `run()`.
+- **[x]** Run `pytest --ignore=tests/e2e` and ensure all tests pass.
 
 ### Step 1 – Extract Config and Provider Setup
 
-1. Inside `ReviewOrchestrator.run()`, extract the configuration and provider‑setup code into
-   `_load_config_and_provider()`.
-2. Ensure that:
-   - Any exceptions are propagated exactly as before.
-   - Logging messages and metric labels are unchanged.
-3. Replace the inlined configuration section in `run()` with a call to the helper.
-4. Run:
-   - `pytest --ignore=tests/e2e`
+- **[x]** Extract config/provider setup into `_load_config_and_provider()`.
+- **[x]** Verify exceptions, logging, and metrics behave exactly as before.
+- **[x]** Replace the inlined section in `run()` with a call to the helper.
+- **[x]** Run `pytest --ignore=tests/e2e` and ensure all tests pass.
 
 ### Step 2 – Extract Skip Logic and Existing State
 
-1. Move skip‑decision code into `_determine_skip_reason()`.
-2. Move comment‑fetch and fingerprint parsing into `_load_existing_comments_and_markers()`.
-3. Move idempotency‑key computation and short‑circuit logic into
-   `_compute_idempotency_and_maybe_short_circuit()`.
-4. Wire these helpers into `run()` in the same order they previously appeared in `run_review()`.
-5. Run:
-   - `pytest --ignore=tests/e2e`
+- **[ ]** Move skip logic into `_determine_skip_reason()`.
+- **[ ]** Move comment fetching + fingerprint parsing into `_load_existing_comments_and_markers()`.
+- **[ ]** Move idempotency/short‑circuit into `_compute_idempotency_and_maybe_short_circuit()`.
+- **[ ]** Wire helpers into `run()` in the same order as before.
+- **[ ]** Run `pytest --ignore=tests/e2e` and ensure all tests pass.
 
 ### Step 3 – Extract Files, Diffs, and Language Detection
 
-1. Extract provider calls for PR files and diffs into `_fetch_pr_files_and_diffs()`.
-2. Extract ignore‑set building and file filtering into `_build_ignore_set_and_filter_files()`,
-   reusing existing `_build_ignore_set` and related helpers.
-3. Extract language detection into `_detect_languages_for_files()`, reusing the current
-   `detect_from_paths()` call.
-4. Ensure that any early‑return conditions (e.g. "no files to review") are preserved.
-5. Run:
-   - `pytest --ignore=tests/e2e`
+- **[ ]** Extract PR files/diffs into `_fetch_pr_files_and_diffs()`.
+- **[ ]** Extract ignore‑set + file filtering into `_build_ignore_set_and_filter_files()`.
+- **[ ]** Extract language detection into `_detect_languages_for_files()`.
+- **[ ]** Ensure early‑return conditions (e.g. “no files to review”) are preserved.
+- **[ ]** Run `pytest --ignore=tests/e2e` and ensure all tests pass.
 
 ### Step 4 – Extract Agent and Runner Creation
 
-1. Move the agent construction logic into `_create_agent_and_runner()`, reusing
-   `create_review_agent(...)`.
-2. Ensure that:
-   - `findings_only=True` is still used for production.
-   - Any logging about model/provider selection is preserved.
-3. Replace the corresponding block in `run()` with a call to the new helper.
-4. Run:
-   - `pytest --ignore=tests/e2e`
+- **[ ]** Move agent construction into `_create_agent_and_runner()`.
+- **[ ]** Ensure `findings_only=True` and logging/model selection behaviour are unchanged.
+- **[ ]** Replace inlined block in `run()` with the helper call.
+- **[ ]** Run `pytest --ignore=tests/e2e` and ensure all tests pass.
 
 ### Step 5 – Extract Agent Execution and Findings Handling
 
-1. Move the `Runner.run()` invocation and response parsing into
-   `_run_agent_and_collect_findings()` (wrapping the existing
-   `_run_agent_and_collect_response()` implementation as appropriate).
-2. Move fingerprinting and filtering into `_attach_fingerprints_and_filter_findings()`, reusing
-   `_fingerprint_for_finding` and any existing deduplication logic.
-3. Move all comment posting and summary posting into `_post_findings_and_summary()`.
-4. Ensure that:
-   - Existing batch + per‑comment + summary fallback behaviour is preserved.
-   - All log messages about posting success/failure are preserved.
-5. Run:
-   - `pytest --ignore=tests/e2e`
+- **[ ]** Move `Runner.run()` + response parsing into `_run_agent_and_collect_findings()`.
+- **[ ]** Move fingerprinting/filtering into `_attach_fingerprints_and_filter_findings()`.
+- **[ ]** Move posting logic into `_post_findings_and_summary()`.
+- **[ ]** Verify batch/per‑comment/summary fallback and logging are unchanged.
+- **[ ]** Run `pytest --ignore=tests/e2e` and ensure all tests pass.
 
 ### Step 6 – Extract Final Observability and Result Construction
 
-1. Move the observability / metrics recording code into
-   `_record_observability_and_build_result()`.
-2. Return the same `ReviewResult` from `ReviewOrchestrator.run()` as
-   the legacy `run_review()` used to return.
-3. Confirm that any log message keys and metric labels remain untouched.
-4. Run:
-   - `pytest --ignore=tests/e2e`
+- **[ ]** Move observability/metrics into `_record_observability_and_build_result()`.
+- **[ ]** Ensure the return type is `list[FindingV1]` and semantics match the legacy `run_review()`.
+- **[ ]** Confirm log keys and metric labels are unchanged.
+- **[ ]** Run `pytest --ignore=tests/e2e` and ensure all tests pass.
 
-At this point, `run_review()` should be a thin façade, and the orchestration should be entirely
-encapsulated in `ReviewOrchestrator`.
+### Final
+
+- **[ ]** Confirm `run_review()` is now a thin façade over `ReviewOrchestrator.run()` and all tests are green.
 
 ---
 
@@ -314,4 +287,3 @@ described elsewhere in `docs/IMPROVEMENT_PLAN.md`, for example:
 
 These are **out of scope** for the initial refactor but are made easier by the structure described
 in this document.
-
