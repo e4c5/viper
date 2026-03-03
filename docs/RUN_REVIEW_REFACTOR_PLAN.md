@@ -109,7 +109,7 @@ These methods will be extracted from the existing `run_review()` body with minim
 - **Configuration / provider**
   - `_load_config_and_provider()`
     - Load `SCMConfig` and `LLMConfig`.
-    - Instantiate `ProviderInterface` and capture `ProviderCapabilities`.
+    - Instantiate `ProviderInterface`. Returns `(cfg, llm_cfg, provider)`.
 
 - **Skip and prior state**
   - `_determine_skip_reason()`
@@ -123,11 +123,14 @@ These methods will be extracted from the existing `run_review()` body with minim
 
 - **Files, diffs, and languages**
   - `_fetch_pr_files_and_diffs()`
-    - Get PR files and diffs from the provider.
+    - Get PR files and diffs from the provider. Returns `(files, paths, full_diff)`.
   - `_build_ignore_set_and_filter_files()`
-    - Reuse `_build_ignore_set` and related helpers.
+    - Optionally filter file paths to review. The ignore set is built in
+      `_load_existing_comments_and_markers()` (via `_build_ignore_set`); this helper is for
+      file-path filtering and currently returns paths unchanged.
   - `_detect_languages_for_files()`
-    - Call current language detector (single‑language for now).
+    - Call current language detector (single‑language for now). Returns
+      `(detected, review_standards)`.
 
 - **Agent and session**
   - `_create_agent_and_runner()`
@@ -160,15 +163,15 @@ should encapsulate a **single, testable responsibility**.
 
 At each step below:
 
-- **[ ]** Move logic from `run_review()` into a `ReviewOrchestrator` method with as few modifications
+- **[x]** Move logic from `run_review()` into a `ReviewOrchestrator` method with as few modifications
   as possible.
-- **[ ]** After the code change, immediately run the existing tests:
+- **[x]** After the code change, immediately run the existing tests:
 
   ```bash
   pytest --ignore=tests/e2e
   ```
 
-- **[ ]** Only proceed to the next step when all tests pass.
+- **[x]** Only proceed to the next step when all tests pass.
 
 ### Step 0 – Introduce `ReviewOrchestrator` Shell
 
@@ -245,6 +248,13 @@ At each step below:
 ### 5.2 New Tests Targeting Extracted Methods
 
 Once the refactor stabilises and all existing tests are green:
+
+**Implemented:** Unit tests for the orchestrator and its helpers live in
+`tests/runner/test_orchestrator.py` (e.g. `_load_config_and_provider`, `_determine_skip_reason`,
+`_load_existing_comments_and_markers`, `_compute_idempotency_and_maybe_short_circuit`,
+`_fetch_pr_files_and_diffs`, `_build_ignore_set_and_filter_files`, `_detect_languages_for_files`,
+`_create_agent_and_runner`, `_attach_fingerprints_and_filter_findings`, `_post_findings_and_summary`,
+`_record_observability_and_build_result`, and `ReviewOrchestrator.run()`).
 
 1. **Add tests for `ReviewOrchestrator.run()` happy path and key error paths**, mirroring the
    coverage that currently exists for `run_review()`.

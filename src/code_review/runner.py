@@ -641,8 +641,7 @@ class ReviewOrchestrator:
         Execute the full review flow. Returns list of findings that were posted
         (or would be posted if dry_run).
         """
-        # Unpack to locals so the rest of the method matches the original run_review()
-        # body unchanged (no self. prefix). Will be removed as logic is extracted to helpers.
+        # Unpack to locals for use in helper calls below.
         owner = self.owner
         repo = self.repo
         pr_number = self.pr_number
