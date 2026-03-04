@@ -12,6 +12,8 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    file_infos_from_pull_file_list,
+    pr_info_from_api_dict,
 )
 from code_review.providers.safety import truncate_repo_content
 
@@ -76,42 +78,11 @@ class GitHubProvider(ProviderInterface):
             return truncate_repo_content(raw, max_bytes=MAX_REPO_FILE_BYTES)
         raise ValueError(f"Unexpected response for {path} at {ref}")
 
-    def get_file_lines(
-        self,
-        owner: str,
-        repo: str,
-        ref: str,
-        path: str,
-        start_line: int,
-        end_line: int,
-    ) -> str:
-        """Return lines start_line..end_line (1-based inclusive) from file at ref."""
-        content = self.get_file_content(owner, repo, ref, path)
-        lines = content.splitlines()
-        if start_line < 1 or end_line < start_line:
-            return ""
-        start_idx = start_line - 1
-        end_idx = min(end_line, len(lines))
-        return "\n".join(lines[start_idx:end_idx])
-
     def get_pr_files(self, owner: str, repo: str, pr_number: int) -> list[FileInfo]:
         """Return list of changed files in the PR."""
         path = f"/repos/{owner}/{repo}/pulls/{pr_number}/files"
         data = self._get(path, params={"per_page": 100})
-        if not isinstance(data, list):
-            return []
-        result: list[FileInfo] = []
-        for f in data:
-            status = f.get("status", "modified")
-            result.append(
-                FileInfo(
-                    path=f.get("filename", f.get("path", "")),
-                    status=status,
-                    additions=f.get("additions", 0),
-                    deletions=f.get("deletions", 0),
-                )
-            )
-        return result
+        return file_infos_from_pull_file_list(data) if isinstance(data, list) else []
 
     def post_review_comments(
         self,
@@ -178,15 +149,10 @@ class GitHubProvider(ProviderInterface):
         self._post(f"/repos/{owner}/{repo}/issues/{pr_number}/comments", {"body": body})
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
-        """Return PR title and labels for skip-review check."""
+        """Return PR title, labels, and description for skip-review and metadata."""
         try:
             data = self._get(f"/repos/{owner}/{repo}/pulls/{pr_number}")
-            if not isinstance(data, dict):
-                return None
-            title = data.get("title", "") or ""
-            labels_raw = data.get("labels") or []
-            labels = [lb.get("name", lb) if isinstance(lb, dict) else str(lb) for lb in labels_raw]
-            return PRInfo(title=title, labels=labels)
+            return pr_info_from_api_dict(data, "body") if isinstance(data, dict) else None
         except Exception:
             return None
 

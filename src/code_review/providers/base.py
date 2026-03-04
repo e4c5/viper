@@ -34,6 +34,37 @@ class PRInfo(BaseModel):
 
     title: str = ""
     labels: list[str] = Field(default_factory=list, description="Label names")
+    description: str = ""
+
+
+def pr_info_from_api_dict(data: dict, description_key: str = "body") -> PRInfo:
+    """Build PRInfo from a provider API dict. Use description_key='description' for GitLab/Bitbucket."""
+    title = data.get("title", "") or ""
+    labels_raw = data.get("labels") or []
+    labels = [
+        lb.get("name", lb) if isinstance(lb, dict) else str(lb) for lb in labels_raw
+    ]
+    description = data.get(description_key, "") or ""
+    return PRInfo(title=title, labels=labels, description=description)
+
+
+def file_infos_from_pull_file_list(files: list) -> list[FileInfo]:
+    """Build list of FileInfo from a provider API list of file dicts (filename/path, status, additions, deletions)."""
+    if not isinstance(files, list):
+        return []
+    result: list[FileInfo] = []
+    for f in files:
+        if not isinstance(f, dict):
+            continue
+        result.append(
+            FileInfo(
+                path=f.get("filename", f.get("path", "")),
+                status=f.get("status", "modified"),
+                additions=f.get("additions", 0),
+                deletions=f.get("deletions", 0),
+            )
+        )
+    return result
 
 
 class ReviewComment(BaseModel):

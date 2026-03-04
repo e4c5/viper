@@ -135,6 +135,67 @@ def _get_file_lines_by_path(
     return out
 
 
+def _generate_auto_pr_description(
+    title: str, paths: list[str], max_files: int = 10
+) -> str:
+    """
+    Build a simple, deterministic PR description when none was provided.
+
+    Uses the title and the list of changed file paths so downstream tools
+    (and humans) have a quick summary even if the author omitted one.
+    """
+    title_str = title.strip() or "Untitled change"
+    unique_paths = list(dict.fromkeys(paths))
+    shown_paths = unique_paths[:max_files]
+    files_part = ", ".join(f"`{p}`" for p in shown_paths) if shown_paths else "no files detected"
+    more_suffix = ""
+    if len(unique_paths) > max_files:
+        more_suffix = f", and {len(unique_paths) - max_files} more file(s)"
+    return (
+        f"**Title**: {title_str}\n\n"
+        f"This pull request updates {len(unique_paths)} file(s): {files_part}{more_suffix}."
+    )
+
+
+def _maybe_post_started_review_comment(
+    provider,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    pr_info,
+    paths: list[str],
+) -> None:
+    """
+    If the PR has no meaningful description, post a PR-level comment indicating
+    that Viper has started a review and include an auto-generated description.
+    """
+    if not pr_info:
+        return
+    if not paths:
+        return
+    description = (getattr(pr_info, "description", "") or "").strip()
+    # Treat very short descriptions as effectively missing.
+    if len(description) >= 40:
+        return
+    auto_desc = _generate_auto_pr_description(getattr(pr_info, "title", "") or "", paths)
+    body = (
+        "Viper has started a review of this pull request.\n\n"
+        "The pull request did not include a detailed description, so the following "
+        "summary was auto-generated:\n\n"
+        f"{auto_desc}"
+    )
+    try:
+        provider.post_pr_summary_comment(owner, repo, pr_number, body)
+    except Exception as e:  # pragma: no cover - defensive; providers should implement this
+        logger.warning(
+            "post_pr_summary_comment (started review) failed owner=%s repo=%s pr_number=%s: %s",
+            owner,
+            repo,
+            pr_number,
+            e,
+        )
+
+
 def _build_pr_summary_body(to_post: list[tuple[FindingV1, str]]) -> str:
     """Build PR-level summary: counts by severity and link to inline comments (Phase 4.2)."""
     counts = Counter(f.severity for f, _ in to_post)
@@ -755,9 +816,9 @@ class ReviewOrchestrator:
         if idempotency_result is not None:
             return idempotency_result
 
-        _, paths, full_diff = self._fetch_pr_files_and_diffs(
-            provider, owner, repo, pr_number
-        )
+        pr_info_for_metadata = provider.get_pr_info(owner, repo, pr_number)
+
+        _, paths, full_diff = self._fetch_pr_files_and_diffs(provider, owner, repo, pr_number)
         paths = self._build_ignore_set_and_filter_files(paths)
         if not paths:
             return self._record_observability_and_build_result(
@@ -771,6 +832,12 @@ class ReviewOrchestrator:
                 [],
                 0,
                 [],
+            )
+        # Optionally post an initial "Viper has started a review" comment with an
+        # auto-generated description when the PR lacks a useful description.
+        if not dry_run:
+            _maybe_post_started_review_comment(
+                provider, owner, repo, pr_number, pr_info_for_metadata, paths
             )
         _, review_standards = self._detect_languages_for_files(paths)
 

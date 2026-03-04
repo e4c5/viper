@@ -11,6 +11,7 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    pr_info_from_api_dict,
 )
 from code_review.providers.safety import truncate_repo_content
 
@@ -66,24 +67,6 @@ class BitbucketProvider(ProviderInterface):
         raw = self._get_raw_bytes(url)
         text = raw.decode("utf-8", errors="replace")
         return truncate_repo_content(text, max_bytes=MAX_REPO_FILE_BYTES)
-
-    def get_file_lines(
-        self,
-        owner: str,
-        repo: str,
-        ref: str,
-        path: str,
-        start_line: int,
-        end_line: int,
-    ) -> str:
-        """Return lines start_line..end_line (1-based inclusive) from file at ref."""
-        content = self.get_file_content(owner, repo, ref, path)
-        lines = content.splitlines()
-        if start_line < 1 or end_line < start_line:
-            return ""
-        start_idx = start_line - 1
-        end_idx = min(end_line, len(lines))
-        return "\n".join(lines[start_idx:end_idx])
 
     def get_pr_files(self, owner: str, repo: str, pr_number: int) -> list[FileInfo]:
         """Return list of changed files from PR diffstat (paginated)."""
@@ -178,18 +161,13 @@ class BitbucketProvider(ProviderInterface):
         self._post(path, {"content": {"raw": body}})
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
-        """Return PR title and labels for skip-review check."""
+        """Return PR title, labels, and description for skip-review and metadata.
+        Bitbucket Cloud REST API v2.0 does not support PR labels; labels will always be empty.
+        """
         try:
             path = self._path(owner, repo, "pullrequests", str(pr_number))
             data = self._get(path)
-            if not isinstance(data, dict):
-                return None
-            title = data.get("title", "") or ""
-            # Bitbucket Cloud REST API v2.0 does not support pull request labels,
-            # so skip-review-by-label is ineffective; labels will always be empty.
-            labels_raw = data.get("labels") or []
-            labels = [lb.get("name", lb) if isinstance(lb, dict) else str(lb) for lb in labels_raw]
-            return PRInfo(title=title, labels=labels)
+            return pr_info_from_api_dict(data, "description") if isinstance(data, dict) else None
         except Exception:
             return None
 

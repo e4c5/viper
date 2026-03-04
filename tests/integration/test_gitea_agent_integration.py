@@ -140,9 +140,12 @@ def test_agent_vs_gitea_posts_findings_to_mocked_api(
     assert "[Suggestion]" in comment["body"]
     assert payload.get("commit_id") == head_sha
 
-    # Phase 4.2: PR summary comment posted after successful inline post
+    # Phase 4.2: PR summary comment posted after successful inline post.
+    # The runner may also post an initial "Viper has started a review" comment when
+    # the PR description is missing; assert that at least one summary comment was made
+    # and that the final one contains the aggregated summary text.
     assert post_summary.called
-    summary_payload = json.loads(post_summary.calls[0].request.content.decode())
+    summary_payload = json.loads(post_summary.calls[-1].request.content.decode())
     assert "body" in summary_payload
     assert "1 Suggestion" in summary_payload["body"]
     assert "See inline comments above" in summary_payload["body"]
