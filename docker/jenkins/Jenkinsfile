@@ -45,7 +45,10 @@ pipeline {
                     def llmProvider = params.LLM_PROVIDER ?: env.LLM_PROVIDER
                     def llmModel = params.LLM_MODEL ?: env.LLM_MODEL
                     def containerRuntime = env.CONTAINER_RUNTIME ?: 'docker'
-                    def allowedActions = ['opened', 'synchronize']
+                    // Supported webhook actions:
+                    // - GitHub / Gitea style: "opened", "synchronize"
+                    // - Bitbucket Data Center "eventKey": "pr:opened", "pr:modified", "pr:from_ref_updated"
+                    def allowedActions = ['opened', 'synchronize', 'pr:opened', 'pr:modified', 'pr:from_ref_updated']
 
                     if (!env.SCM_TOKEN?.trim()) {
                         error('SCM_TOKEN is empty. Configure Jenkins Secret text credentials with ID "SCM_TOKEN" (see README.md) before running this pipeline.')
