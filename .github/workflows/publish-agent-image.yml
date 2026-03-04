@@ -36,13 +36,13 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
+          if [ -z "${DOCKERHUB_REPO}" ] && [ -z "$DOCKERHUB_USERNAME" ]; then
+            echo "Set DOCKERHUB_REPO (variable) or DOCKERHUB_USERNAME (secret) to specify the Docker Hub repository." >&2
+            exit 1
+          fi
           if [ -n "${DOCKERHUB_REPO}" ]; then
             echo "repo=${DOCKERHUB_REPO}" >> "$GITHUB_OUTPUT"
           else
-            if [ -z "$DOCKERHUB_USERNAME" ]; then
-              echo "DOCKERHUB_REPO or DOCKERHUB_USERNAME must be set" >&2
-              exit 1
-            fi
             echo "repo=${DOCKERHUB_USERNAME}/code-review-agent" >> "$GITHUB_OUTPUT"
           fi
 
