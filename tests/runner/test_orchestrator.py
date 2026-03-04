@@ -1,5 +1,6 @@
 """Unit tests for ReviewOrchestrator and its extracted helpers (RUN_REVIEW_REFACTOR_PLAN)."""
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +10,47 @@ from code_review.runner import (
     _generate_auto_pr_description,
     _maybe_post_started_review_comment,
 )
+
+
+@contextmanager
+def _orchestrator_run_env(
+    findings_json: str = '[{"path":"foo.py","line":1,"severity":"info","code":"c","message":"m"}]',
+):
+    """Context manager: patch config/provider and ADK Runner; yield (provider, mock_runner)."""
+    from code_review.providers.base import FileInfo
+
+    mock_runner_instance = MagicMock()
+    mock_event = MagicMock()
+    mock_event.is_final_response.return_value = True
+    mock_event.content = MagicMock()
+    mock_event.content.parts = [MagicMock(text=findings_json)]
+    mock_runner_instance.run.return_value = iter([mock_event])
+
+    with (
+        patch("code_review.runner.get_context_window", return_value=1_000_000),
+        patch("code_review.runner.get_provider") as mock_get_provider,
+        patch("code_review.runner.get_scm_config") as mock_scm,
+        patch("code_review.runner.get_llm_config") as mock_llm,
+        patch("google.adk.runners.Runner", return_value=mock_runner_instance),
+    ):
+        mock_scm.return_value = MagicMock(
+            provider="gitea",
+            url="https://x.com",
+            token="x",
+            skip_label="",
+            skip_title_pattern="",
+        )
+        mock_llm.return_value = MagicMock()
+        provider = MagicMock()
+        provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
+        provider.get_pr_diff.return_value = "diff"
+        provider.get_existing_review_comments.return_value = []
+        provider.get_file_content.return_value = "line1\n"
+        provider.capabilities.return_value = MagicMock(
+            resolvable_comments=False, supports_suggestions=False
+        )
+        mock_get_provider.return_value = provider
+        yield provider, mock_runner_instance
 
 # --- ReviewOrchestrator._load_config_and_provider() ---
 
@@ -134,39 +176,9 @@ def test_review_orchestrator_stores_init_args():
 
 def test_review_orchestrator_run_returns_list_of_findings():
     """ReviewOrchestrator.run() returns list[FindingV1] (same contract as run_review)."""
-    with (
-        patch("code_review.runner.get_context_window", return_value=1_000_000),
-        patch("code_review.runner.get_provider") as mock_get_provider,
-        patch("code_review.runner.get_scm_config") as mock_scm,
-        patch("code_review.runner.get_llm_config") as mock_llm,
-    ):
-        from code_review.providers.base import FileInfo
-
-        mock_scm.return_value = MagicMock(
-            provider="gitea", url="https://x.com", token="x", skip_label="", skip_title_pattern=""
-        )
-        mock_llm.return_value = MagicMock()
-        provider = MagicMock()
-        provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-        provider.get_pr_diff.return_value = "diff"
-        provider.get_existing_review_comments.return_value = []
-        provider.get_file_content.return_value = "line1\n"
-        provider.capabilities.return_value = MagicMock(
-            resolvable_comments=False, supports_suggestions=False
-        )
-        mock_get_provider.return_value = provider
-
-        mock_runner_instance = MagicMock()
-        findings_json = '[{"path":"foo.py","line":1,"severity":"info","code":"c","message":"m"}]'
-        mock_event = MagicMock()
-        mock_event.is_final_response.return_value = True
-        mock_event.content = MagicMock()
-        mock_event.content.parts = [MagicMock(text=findings_json)]
-        mock_runner_instance.run.return_value = iter([mock_event])
-
-        with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
-            orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="abc123", dry_run=True)
-            result = orchestrator.run()
+    with _orchestrator_run_env() as (provider, _):
+        orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="abc123", dry_run=True)
+        result = orchestrator.run()
 
     assert isinstance(result, list)
     assert len(result) == 1
@@ -487,39 +499,9 @@ def test_maybe_post_started_review_comment_skips_when_description_present():
 
 def test_run_does_not_post_started_review_comment_in_dry_run():
     """ReviewOrchestrator.run() must not post started-review comment when dry_run=True."""
-    with (
-        patch("code_review.runner.get_context_window", return_value=1_000_000),
-        patch("code_review.runner.get_provider") as mock_get_provider,
-        patch("code_review.runner.get_scm_config") as mock_scm,
-        patch("code_review.runner.get_llm_config") as mock_llm,
-    ):
-        from code_review.providers.base import FileInfo
-
-        mock_scm.return_value = MagicMock(
-            provider="gitea", url="https://x.com", token="x", skip_label="", skip_title_pattern=""
-        )
-        mock_llm.return_value = MagicMock()
-        provider = MagicMock()
-        provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-        provider.get_pr_diff.return_value = "diff"
-        provider.get_existing_review_comments.return_value = []
-        provider.get_file_content.return_value = "line1\n"
-        provider.capabilities.return_value = MagicMock(
-            resolvable_comments=False, supports_suggestions=False
-        )
+    with _orchestrator_run_env() as (provider, _):
         provider.post_pr_summary_comment = MagicMock()
-        mock_get_provider.return_value = provider
-
-        mock_runner_instance = MagicMock()
-        findings_json = '[{"path":"foo.py","line":1,"severity":"info","code":"c","message":"m"}]'
-        mock_event = MagicMock()
-        mock_event.is_final_response.return_value = True
-        mock_event.content = MagicMock()
-        mock_event.content.parts = [MagicMock(text=findings_json)]
-        mock_runner_instance.run.return_value = iter([mock_event])
-
-        with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
-            orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="abc123", dry_run=True)
-            orchestrator.run()
+        orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="abc123", dry_run=True)
+        orchestrator.run()
 
     provider.post_pr_summary_comment.assert_not_called()
