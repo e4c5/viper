@@ -835,9 +835,10 @@ class ReviewOrchestrator:
             )
         # Optionally post an initial "Viper has started a review" comment with an
         # auto-generated description when the PR lacks a useful description.
-        _maybe_post_started_review_comment(
-            provider, owner, repo, pr_number, pr_info_for_metadata, paths
-        )
+        if not dry_run:
+            _maybe_post_started_review_comment(
+                provider, owner, repo, pr_number, pr_info_for_metadata, paths
+            )
         _, review_standards = self._detect_languages_for_files(paths)
 
         session_id, session_service, runner = self._create_agent_and_runner(
