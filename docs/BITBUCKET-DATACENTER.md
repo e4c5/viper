@@ -1,19 +1,19 @@
 # Bitbucket Data Center – Code review pipeline
 
-Use a **separate Jenkins job** for Bitbucket Data Center (or Server). Both Gitea/GitHub and Bitbucket jobs use the **same** `Jenkinsfile`; the script detects the webhook source from `PR_ACTION` and uses the correct credential and SCM URL.
+When your SCM is **Bitbucket Data Center** (or Server), use this guide. You create one pipeline job that uses the same `Jenkinsfile` as for Gitea/GitHub/GitLab, but with a Bitbucket-specific credential ID and webhook payload mapping.
 
 ---
 
 ## Overview
 
-| Item | Gitea / GitHub job | Bitbucket job |
-|------|--------------------|----------------|
-| Script Path | `docker/jenkins/Jenkinsfile` | `docker/jenkins/Jenkinsfile` (same) |
-| Credential ID | `SCM_TOKEN` | `SCM_TOKEN_BITBUCKET` |
-| Webhook payload | `pull_request`, `action` | `pullRequest`, `eventKey` |
-| Docs | [Quick Start](QUICKSTART.md) | This document |
+| Item | For Bitbucket Data Center |
+|------|----------------------------|
+| Script Path | `docker/jenkins/Jenkinsfile` |
+| Credential ID | `SCM_TOKEN_BITBUCKET` |
+| Webhook payload | `pullRequest`, `eventKey` (Bitbucket format) |
+| Env | `SCM_URL` = Bitbucket REST API base |
 
-Two jobs, one script: each job has its own webhook URL and credential; the pipeline chooses token and SCM settings from the payload.
+If you use Gitea, GitHub, or GitLab instead, follow [Jenkins (existing)](JENKINS-EXISTING.md) or [Quick Start](QUICKSTART.md) and use credential `SCM_TOKEN` with the standard webhook JSONPaths.
 
 ---
 
@@ -27,9 +27,9 @@ Two jobs, one script: each job has its own webhook URL and credential; the pipel
 
 ## 2. Create the Bitbucket pipeline job
 
-1. **New Item** → **Pipeline** (e.g. name: `code-review-bitbucket`).
-2. **Pipeline script from SCM** → point to this repo, **Script Path**: `docker/jenkins/Jenkinsfile`  
-   (same as the Gitea/GitHub job; the script detects Bitbucket from the webhook payload).
+1. **New Item** → **Pipeline** (e.g. name: `code-review`).
+2. **Pipeline script from SCM** → point to this repo, **Script Path**: `docker/jenkins/Jenkinsfile`.  
+   The script detects Bitbucket from the webhook payload and uses `SCM_TOKEN_BITBUCKET` and your `SCM_URL`.
 
 ---
 
@@ -42,7 +42,7 @@ In **Manage Jenkins → Credentials**, add **Secret text**:
 | `SCM_TOKEN_BITBUCKET` | Bitbucket API token (repo read + comment on PRs) |
 | `GOOGLE_API_KEY` | LLM API key (or your provider’s key) |
 
-This job uses only `SCM_TOKEN_BITBUCKET`; the Gitea/GitHub job uses `SCM_TOKEN`.
+Use this credential ID so the pipeline binds your Bitbucket token for this job.
 
 ---
 
@@ -95,11 +95,8 @@ In Bitbucket Data Center, for the repo:
 
 ## 7. Summary
 
-- **One Jenkinsfile** (`docker/jenkins/Jenkinsfile`) for both Gitea/GitHub and Bitbucket; no duplicate pipeline script.
-- **Bitbucket job**: credential `SCM_TOKEN_BITBUCKET`, env `SCM_URL`, Bitbucket webhook URL and JSONPaths (this doc).
-- **Gitea/GitHub job**: credential `SCM_TOKEN`, webhook and JSONPaths as in [Quick Start](QUICKSTART.md).
-
-Each job has its own webhook URL and credential; the pipeline picks the right token and SCM URL from `PR_ACTION`.
+- One pipeline job: **Script Path** `docker/jenkins/Jenkinsfile`, credential **`SCM_TOKEN_BITBUCKET`**, env **`SCM_URL`** (Bitbucket REST API base), and the Bitbucket webhook JSONPaths and filter from this doc.
+- The pipeline detects the Bitbucket payload from `PR_ACTION` and uses the Bitbucket token and URL.
 
 ---
 

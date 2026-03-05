@@ -2,7 +2,7 @@
 
 This guide is for teams that **already run Jenkins** (on-prem or in CI) and want to add the code-review agent. You do **not** need the Docker Compose stack from the [Quick Start](QUICKSTART.md); you only add a pipeline job and credentials to your current Jenkins.
 
-Supported SCMs: **Gitea**, **GitHub**, **GitLab**, **Bitbucket** (Cloud and Data Center). For **Bitbucket Data Center** use a separate job and credential—see [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
+Supported SCMs: **Gitea**, **GitHub**, **GitLab**, **Bitbucket Cloud**, and **Bitbucket Data Center**. Most setups use one SCM. If yours is **Bitbucket Data Center** (or Server), follow [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for credential ID and webhook setup; otherwise use this guide.
 
 ---
 
@@ -14,7 +14,7 @@ Supported SCMs: **Gitea**, **GitHub**, **GitLab**, **Bitbucket** (Cloud and Data
 | 2 | Add **credentials** (SCM token, LLM API key) in Jenkins |
 | 3 | Set **SCM and LLM** environment variables for the job (or globally) |
 | 4 | (Optional) Configure **webhooks** so PRs trigger the job automatically |
-| 5 | Ensure agents can run the agent: **Docker/Podman** + image, or **CLI only** (no containers) |
+| 5 | Ensure the job’s Jenkins **node** can run the review: either **Docker or Podman** plus the agent image, or the **CLI** installed on the node (no containers) |
 
 ---
 
@@ -40,7 +40,7 @@ In **Manage Jenkins → Credentials → System → Global credentials**:
 | `SCM_TOKEN` | Secret text | SCM API token (Gitea, GitHub, GitLab, or Bitbucket Cloud) with repo read + comment on PRs |
 | `GOOGLE_API_KEY` | Secret text | LLM API key (or use your provider’s key and set `LLM_PROVIDER` / `LLM_MODEL`) |
 
-For **Bitbucket Data Center** use a **separate job** and credential ID `SCM_TOKEN_BITBUCKET`; see [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
+If your SCM is **Bitbucket Data Center**, use credential ID `SCM_TOKEN_BITBUCKET` and follow [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
 
 ---
 
@@ -80,7 +80,7 @@ To run the review when a PR is opened or updated, use the **Generic Webhook Trig
 | `SCM_HEAD_SHA` | `$.pull_request.head.sha` |
 | `PR_ACTION` | `$.action` |
 
-For **Bitbucket Data Center** (different payload), use a **separate job** and see [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for JSONPath and filter.
+If your SCM is **Bitbucket Data Center**, see [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for the JSONPath expressions and filter (different webhook payload).
 
 ---
 
@@ -100,7 +100,7 @@ If you don’t set `USE_INLINE_AGENT=true` and the node has no Docker/Podman, th
 ## Summary
 
 - **Existing Jenkins**: Add one Pipeline job (Script Path: `docker/jenkins/Jenkinsfile`), credentials `SCM_TOKEN` and `GOOGLE_API_KEY`, and SCM/LLM env vars.
-- **Webhooks**: Use Generic Webhook Trigger and your SCM’s webhook UI; for Bitbucket Data Center use a separate job and [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
+- **Webhooks**: Use Generic Webhook Trigger and your SCM’s webhook UI; if your SCM is Bitbucket Data Center, see [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
 - **Execution**: Use the prebuilt image (or build it) on agents with Docker/Podman, or install the CLI and set `USE_INLINE_AGENT=true` as in [Jenkins without Docker](JENKINS-NO-DOCKER.md).
 
 For a full local stack (Gitea + Jenkins via Docker Compose), see [Quick Start](QUICKSTART.md).

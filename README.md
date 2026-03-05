@@ -1,6 +1,6 @@
 # Code Review Agent
 
-AI-driven code review for CI/CD: reviews pull request diffs, posts inline comments, and tracks resolved issues. Supports **Gitea**, **GitHub**, **GitLab**, **Bitbucket** and configurable LLMs (Gemini, OpenAI, Anthropic, Vertex, Ollama). The agent runs as a one-shot container or CLI—no long-running service.
+AI-driven code review for CI/CD: reviews pull request diffs, posts inline comments, and tracks resolved issues. Supports **Gitea**, **GitHub**, **GitLab**, **Bitbucket** and configurable LLMs (Gemini, OpenAI, Anthropic, Vertex, Ollama). The agent runs as a one-shot container or CLI. No long-running service.
 
 ---
 
@@ -14,7 +14,7 @@ Choose the path that matches your setup.
 | **Try it locally** (Gitea + Jenkins via Docker Compose) | **[Quick Start (Docker)](docs/QUICKSTART.md)** — start the stack, configure Gitea and Jenkins, wire webhooks. |
 | **Use Podman instead of Docker** | **[Quick Start (Podman)](docs/QUICKSTART-podman.md)** — rootless Podman and the same stack. |
 | **Run Jenkins without Docker** (no containers on agents) | **[Jenkins without Docker](docs/JENKINS-NO-DOCKER.md)** — install the CLI on agents and set `USE_INLINE_AGENT=true`. |
-| **Use Bitbucket Data Center** | **[Bitbucket Data Center](docs/BITBUCKET-DATACENTER.md)** — separate Jenkins job, credential, and webhook mapping. |
+| **Your SCM is Bitbucket Data Center** | **[Bitbucket Data Center](docs/BITBUCKET-DATACENTER.md)** — credential `SCM_TOKEN_BITBUCKET`, Bitbucket webhook JSONPaths, and env. |
 | **Develop or test locally** (any SCM) | **[Development testing](docs/DEV_TESTING.md)** — run `code-review review` directly; **[Developer guide](docs/DEVELOPER_GUIDE.md)** — architecture and extension points. |
 
 ---

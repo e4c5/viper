@@ -107,7 +107,7 @@ podman build -t code-review-agent -f docker/Dockerfile.agent .
 
 ## 5. Auto-trigger PR reviews (Gitea webhook → Jenkins)
 
-This section applies to **Gitea** (and GitHub-style) webhooks. For **Bitbucket Data Center**, use a separate pipeline and see [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
+This section applies to **Gitea** (and GitHub-style) webhooks. If your SCM is **Bitbucket Data Center**, see [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for webhook setup.
 
 ### 5.1 Configure the Jenkins webhook trigger
 

@@ -1,12 +1,10 @@
-// Single pipeline for Gitea/GitHub and Bitbucket Data Center. Use separate Jenkins jobs (one per SCM).
-// The job that receives the webhook determines the payload: Gitea/GitHub jobs get action (opened/synchronize);
-// Bitbucket jobs get eventKey (pr:opened etc.). This script detects the source from PR_ACTION and uses the
-// correct credential and SCM URL. See docs/QUICKSTART.md (Gitea) and docs/BITBUCKET-DATACENTER.md (Bitbucket).
+// One pipeline script for Gitea, GitHub, GitLab, and Bitbucket Data Center.
+// Webhook payload identifies the source: Gitea/GitHub/GitLab send action (opened/synchronize);
+// Bitbucket DC sends eventKey (pr:opened etc.). This script uses PR_ACTION to pick credential and SCM URL.
+// See docs/QUICKSTART.md and docs/JENKINS-EXISTING.md (Gitea/GitHub/GitLab); docs/BITBUCKET-DATACENTER.md (Bitbucket DC).
 //
-// Credentials (create the one needed for each job):
-//   - Gitea/GitHub job: ID "SCM_TOKEN" (Gitea or GitHub token).
-//   - Bitbucket job:    ID "SCM_TOKEN_BITBUCKET" (Bitbucket token).
-//   - Both:             ID "GOOGLE_API_KEY" (or your LLM key).
+// Credentials: ID "SCM_TOKEN" for Gitea/GitHub/GitLab, or "SCM_TOKEN_BITBUCKET" for Bitbucket Data Center;
+//              ID "GOOGLE_API_KEY" (or your LLM key) for all.
 
 pipeline {
     agent any
