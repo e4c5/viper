@@ -32,10 +32,10 @@ AI-driven code review agent for CI/CD pipelines. Reviews pull request diffs, pos
   - Local testing paths with Docker or without Docker.
   - Running `code-review review --owner <owner> --repo <repo> --pr <n> --head-sha <sha>` directly against Gitea, GitHub, GitLab, or Bitbucket.
 
-- **Bitbucket Data Center integration (webhooks → Jenkins)**  
-  See **[Bitbucket Data Center Integration](docs/BITBUCKET-DATACENTER.md)** for:
-  - Mapping Bitbucket DC webhook payloads to Jenkins Generic Webhook Trigger parameters.
-  - Configuring the pipeline so Bitbucket PRs trigger reviews.
+- **Bitbucket Data Center**  
+  Use a **separate** Jenkins job; **[Bitbucket Data Center](docs/BITBUCKET-DATACENTER.md)** for:
+  - Same `Jenkinsfile` as Gitea/GitHub; credential `SCM_TOKEN_BITBUCKET`, env `SCM_URL`, and Bitbucket webhook URL.
+  - JSONPath mappings and event filter for Bitbucket PR payloads.
 
 - **Architecture and extension points**  
   See **[Developer Guide](docs/DEVELOPER_GUIDE.md)** for:
@@ -53,7 +53,7 @@ AI-driven code review agent for CI/CD pipelines. Reviews pull request diffs, pos
 - Ensure your shell or CI loads these into environment variables before running the CLI.  
   See **[Quick Start](docs/QUICKSTART.md#configuration)** and `.env.example` for details.
 
-For Jenkins, store secrets in **Manage Jenkins → Credentials** as Secret text IDs (for example `SCM_TOKEN`, `GOOGLE_API_KEY`) and let the pipeline read them (see `docker/jenkins/Jenkinsfile`). For inline execution on Jenkins without Docker, set `USE_INLINE_AGENT=true` and follow **[docs/JENKINS-NO-DOCKER.md](docs/JENKINS-NO-DOCKER.md)**.
+For Jenkins, store secrets in **Manage Jenkins → Credentials** as Secret text (`SCM_TOKEN`, `GOOGLE_API_KEY`). Use a **separate pipeline job** for Bitbucket Data Center (different Jenkinsfile and credential); see **[Bitbucket Data Center](docs/BITBUCKET-DATACENTER.md)**. For inline execution without Docker, set `USE_INLINE_AGENT=true` and follow **[docs/JENKINS-NO-DOCKER.md](docs/JENKINS-NO-DOCKER.md)**.
 
 ---
 
