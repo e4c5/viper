@@ -1,8 +1,8 @@
 # Using the code-review agent with your existing Jenkins
 
-This guide is for teams that **already run Jenkins** (on-prem or in CI) and want to add the code-review agent. You do **not** need the Docker Compose stack from the [Quick Start](QUICKSTART.md); you only add a pipeline job and credentials to your current Jenkins.
+This guide is for teams that **already run Jenkins** (on-prem or in the cloud) and want to add the code-review agent. You do **not** need the Docker Compose stack from the [Quick Start](QUICKSTART.md); you only add a pipeline job and credentials to your current Jenkins.
 
-Supported SCMs: **Gitea**, **GitHub**, **GitLab**, **Bitbucket Cloud**, and **Bitbucket Data Center**. Most setups use one SCM. If yours is **Bitbucket Data Center** (or Server), follow [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for credential ID and webhook setup; otherwise use this guide.
+Supported SCMs: **Gitea**, **GitHub**, **GitLab**, **Bitbucket Cloud**, and **Bitbucket Data Center**. Most setups use one SCM. If yours is **Bitbucket Data Center** (or Server), follow [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for credential ID and webhook setup; otherwise use this guide. If you do have multiple SCMs in your team, you can setup multiple pipelines with the same jenkins file but different settings to support them all.
 
 ---
 
@@ -13,14 +13,14 @@ Supported SCMs: **Gitea**, **GitHub**, **GitLab**, **Bitbucket Cloud**, and **Bi
 | 1 | Create a **Pipeline** job and use the Jenkinsfile from this repo |
 | 2 | Add **credentials** (SCM token, LLM API key) in Jenkins |
 | 3 | Set **SCM and LLM** environment variables for the job (or globally) |
-| 4 | (Optional) Configure **webhooks** so PRs trigger the job automatically |
+| 4 | Configure **webhooks** so PRs trigger the job automatically |
 | 5 | Ensure the job’s Jenkins **node** can run the review: either **Docker or Podman** plus the agent image, or the **CLI** installed on the node (no containers) |
 
 ---
 
 ## 1. Create the pipeline job
 
-1. In Jenkins: **New Item** → **Pipeline** (e.g. name: `code-review`).
+1. In Jenkins: **New Item** → **Pipeline** (e.g. name: `code-review`). If you use **folder-scoped credentials** (Step 2, Option A), create the folder first, then **New Item** from within that folder so the job can use the folder’s credentials.
 2. **Pipeline** section:
    - Choose **Pipeline script from SCM**.
    - Point **SCM** to this repository (Git URL and branch).
@@ -33,14 +33,25 @@ If you prefer to paste the script: **Pipeline script** and copy the contents of 
 
 ## 2. Add credentials
 
-In **Manage Jenkins → Credentials → System → Global credentials**:
+You can store credentials **globally** (visible to all jobs) or **per folder** (visible only to jobs in that folder). Prefer folder-scoped credentials so the SCM and LLM tokens are only available to the code-review pipeline(s).
+
+### Option A – Pipeline-specific (recommended)
+
+1. Create a **Folder**: **New Item** → **Folder** (e.g. name: `code-review`).
+2. Open the folder → **Credentials** (in the folder’s left menu). If you don’t see it, the **Folders** plugin may need to be installed (**Manage Jenkins → Plugins**).
+3. **Add Credentials** → Kind: **Secret text**. Create the credentials in the table below **in this folder**.
+4. Create your **Pipeline** job **inside this folder** (New Item from within the folder). The job will resolve credentials from the folder.
+
+### Option B – Global
+
+In **Manage Jenkins → Credentials → System → Global credentials (unrestricted)** → **Add Credentials**. Any job on the instance can use these.
 
 | Credential ID | Kind | Purpose |
 |---------------|------|--------|
 | `SCM_TOKEN` | Secret text | SCM API token (Gitea, GitHub, GitLab, or Bitbucket Cloud) with repo read + comment on PRs |
 | `GOOGLE_API_KEY` | Secret text | LLM API key (or use your provider’s key and set `LLM_PROVIDER` / `LLM_MODEL`) |
 
-If your SCM is **Bitbucket Data Center**, use credential ID `SCM_TOKEN_BITBUCKET` and follow [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
+If your SCM is **Bitbucket Data Center**, use the same credential ID `SCM_TOKEN` (with your Bitbucket token) and follow [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for webhook setup.
 
 ---
 
@@ -60,7 +71,7 @@ LLM (optional if you rely on job parameters): `LLM_PROVIDER=gemini`, `LLM_MODEL=
 
 ---
 
-## 4. (Optional) Webhooks so PRs trigger the job
+## 4. Webhooks so PRs trigger the job
 
 To run the review when a PR is opened or updated, use the **Generic Webhook Trigger** plugin.
 

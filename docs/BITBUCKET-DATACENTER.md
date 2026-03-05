@@ -9,11 +9,11 @@ When your SCM is **Bitbucket Data Center** (or Server), use this guide. You crea
 | Item | For Bitbucket Data Center |
 |------|----------------------------|
 | Script Path | `docker/jenkins/Jenkinsfile` |
-| Credential ID | `SCM_TOKEN_BITBUCKET` |
+| Credential ID | `SCM_TOKEN` (same as other SCMs; use folder-scoped credentials so this job has its own token) |
 | Webhook payload | `pullRequest`, `eventKey` (Bitbucket format) |
 | Env | `SCM_URL` = Bitbucket REST API base |
 
-If you use Gitea, GitHub, or GitLab instead, follow [Jenkins (existing)](JENKINS-EXISTING.md) or [Quick Start](QUICKSTART.md) and use credential `SCM_TOKEN` with the standard webhook JSONPaths.
+If you use Gitea, GitHub, or GitLab instead, follow [Jenkins (existing)](JENKINS-EXISTING.md). If you don't have an SCM or want to try this in a green field use the [Quick Start](QUICKSTART.md) 
 
 ---
 
@@ -29,20 +29,21 @@ If you use Gitea, GitHub, or GitLab instead, follow [Jenkins (existing)](JENKINS
 
 1. **New Item** → **Pipeline** (e.g. name: `code-review`).
 2. **Pipeline script from SCM** → point to this repo, **Script Path**: `docker/jenkins/Jenkinsfile`.  
-   The script detects Bitbucket from the webhook payload and uses `SCM_TOKEN_BITBUCKET` and your `SCM_URL`.
+   The script detects Bitbucket from the webhook payload and uses `SCM_TOKEN` and your `SCM_URL`.
 
 ---
 
 ## 3. Credentials
 
-In **Manage Jenkins → Credentials**, add **Secret text**:
+Add **Secret text** credentials with the IDs below (same as for Gitea/GitHub/GitLab). Prefer **folder-scoped** credentials so only this pipeline can use them:
+
+- **Folder-scoped (recommended):** Create a Folder (e.g. `code-review`), add these credentials in **Folder → Credentials**, and create the pipeline job inside that folder.
+- **Global:** **Manage Jenkins → Credentials → System → Global credentials** → Add Credentials.
 
 | ID | Secret |
 |----|--------|
-| `SCM_TOKEN_BITBUCKET` | Bitbucket API token (repo read + comment on PRs) |
+| `SCM_TOKEN` | Bitbucket API token (repo read + comment on PRs) |
 | `GOOGLE_API_KEY` | LLM API key (or your provider’s key) |
-
-Use this credential ID so the pipeline binds your Bitbucket token for this job.
 
 ---
 
@@ -95,8 +96,8 @@ In Bitbucket Data Center, for the repo:
 
 ## 7. Summary
 
-- One pipeline job: **Script Path** `docker/jenkins/Jenkinsfile`, credential **`SCM_TOKEN_BITBUCKET`**, env **`SCM_URL`** (Bitbucket REST API base), and the Bitbucket webhook JSONPaths and filter from this doc.
-- The pipeline detects the Bitbucket payload from `PR_ACTION` and uses the Bitbucket token and URL.
+- One pipeline job: **Script Path** `docker/jenkins/Jenkinsfile`, credential **`SCM_TOKEN`**, env **`SCM_URL`** (Bitbucket REST API base), and the Bitbucket webhook JSONPaths and filter from this doc.
+- The pipeline detects the Bitbucket payload from `PR_ACTION` and uses your token and URL.
 
 ---
 

@@ -3,8 +3,8 @@
 // Bitbucket DC sends eventKey (pr:opened etc.). This script uses PR_ACTION to pick credential and SCM URL.
 // See docs/QUICKSTART.md and docs/JENKINS-EXISTING.md (Gitea/GitHub/GitLab); docs/BITBUCKET-DATACENTER.md (Bitbucket DC).
 //
-// Credentials: ID "SCM_TOKEN" for Gitea/GitHub/GitLab, or "SCM_TOKEN_BITBUCKET" for Bitbucket Data Center;
-//              ID "GOOGLE_API_KEY" (or your LLM key) for all.
+// Credentials: ID "SCM_TOKEN" (same for all SCMs; use folder-scoped credentials so each pipeline has its own token);
+//              ID "GOOGLE_API_KEY" (or your LLM key).
 
 pipeline {
     agent any
@@ -45,7 +45,7 @@ pipeline {
                     def allowedActions = isBitbucket
                         ? ['pr:opened', 'pr:modified', 'pr:from_ref_updated']
                         : ['opened', 'synchronize']
-                    def credId = isBitbucket ? 'SCM_TOKEN_BITBUCKET' : 'SCM_TOKEN'
+                    def credId = 'SCM_TOKEN'
                     def scmProvider = isBitbucket ? 'bitbucket' : (env.SCM_PROVIDER ?: 'gitea')
                     def scmUrl = isBitbucket
                         ? (env.SCM_URL ?: env.SCM_URL_BITBUCKET ?: '')

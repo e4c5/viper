@@ -51,8 +51,8 @@ docker compose up -d --build
 
 1. Open http://localhost:8080. Default credentials are `admin` / `admin` (from `docker-compose.yml`).
 2. **Add credentials**:
-   - Go to **Manage Jenkins → Credentials → System → Global credentials (unrestricted)**.
-   - **Add Credentials** → Kind: **Secret text**.
+   - **Global:** **Manage Jenkins → Credentials → System → Global credentials (unrestricted)** → **Add Credentials** → Kind: **Secret text**.
+   - **Pipeline-specific (optional):** Create a **Folder** (e.g. `code-review`), open it → **Credentials** → add the same credentials there, and create the Pipeline job inside that folder so only it can use them.
    - Create:
      - ID: `SCM_TOKEN`, Secret: your Gitea API token.
      - ID: `GOOGLE_API_KEY` (or `OPENAI_API_KEY`, etc.), Secret: your LLM API key.

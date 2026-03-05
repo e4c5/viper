@@ -14,7 +14,7 @@ Choose the path that matches your setup.
 | **Try it locally** (Gitea + Jenkins via Docker Compose) | **[Quick Start (Docker)](docs/QUICKSTART.md)** — start the stack, configure Gitea and Jenkins, wire webhooks. |
 | **Use Podman instead of Docker** | **[Quick Start (Podman)](docs/QUICKSTART-podman.md)** — rootless Podman and the same stack. |
 | **Run Jenkins without Docker** (no containers on agents) | **[Jenkins without Docker](docs/JENKINS-NO-DOCKER.md)** — install the CLI on agents and set `USE_INLINE_AGENT=true`. |
-| **Your SCM is Bitbucket Data Center** | **[Bitbucket Data Center](docs/BITBUCKET-DATACENTER.md)** — credential `SCM_TOKEN_BITBUCKET`, Bitbucket webhook JSONPaths, and env. |
+| **Your SCM is Bitbucket Data Center** | **[Bitbucket Data Center](docs/BITBUCKET-DATACENTER.md)** — same credential `SCM_TOKEN`, Bitbucket webhook JSONPaths, and env. |
 | **Develop or test locally** (any SCM) | **[Development testing](docs/DEV_TESTING.md)** — run `code-review review` directly; **[Developer guide](docs/DEVELOPER_GUIDE.md)** — architecture and extension points. |
 
 ---
@@ -24,7 +24,7 @@ Choose the path that matches your setup.
 - **Environment**: Copy `.env.example` to `.env` and set at least:
   - **SCM**: `SCM_PROVIDER`, `SCM_URL`, `SCM_TOKEN` (and optionally `SCM_OWNER`, `SCM_REPO`, `SCM_PR_NUM`, `SCM_HEAD_SHA`, `SCM_SKIP_LABEL`, `SCM_SKIP_TITLE_PATTERN`).
   - **LLM**: `LLM_PROVIDER`, `LLM_MODEL`, and the provider API key (e.g. `GOOGLE_API_KEY`).
-- **Jenkins**: Store secrets in **Manage Jenkins → Credentials** as Secret text (`SCM_TOKEN`, `GOOGLE_API_KEY`). Set `SCM_PROVIDER` and `SCM_URL` in the job or global env. See [Jenkins (existing)](docs/JENKINS-EXISTING.md) and [Quick Start](docs/QUICKSTART.md#configuration).
+- **Jenkins**: Store secrets as Secret text (`SCM_TOKEN`, `GOOGLE_API_KEY`) in **Manage Jenkins → Credentials** (global) or in a **Folder’s Credentials** so only the code-review pipeline can use them. Set `SCM_PROVIDER` and `SCM_URL` in the job or global env. See [Jenkins (existing)](docs/JENKINS-EXISTING.md) and [Quick Start](docs/QUICKSTART.md#configuration).
 
 ---
 
