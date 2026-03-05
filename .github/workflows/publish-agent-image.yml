@@ -43,7 +43,7 @@ jobs:
           if [ -n "${DOCKERHUB_REPO}" ]; then
             echo "repo=${DOCKERHUB_REPO}" >> "$GITHUB_OUTPUT"
           else
-            echo "repo=${DOCKERHUB_USERNAME}/code-review-agent" >> "$GITHUB_OUTPUT"
+            echo "repo=${DOCKERHUB_USERNAME}/viper" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up Docker Buildx
