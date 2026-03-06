@@ -2,7 +2,7 @@
 
 This guide is for teams that **already run Jenkins** (on-prem or in the cloud) and want to add the code-review agent. You do **not** need the Docker Compose stack from the [Quick Start](QUICKSTART.md); you only add a pipeline job and credentials to your current Jenkins.
 
-Supported SCMs: **Gitea**, **GitHub**, **GitLab**, **Bitbucket Cloud**, and **Bitbucket Data Center**. Most setups use one SCM.  If you do have multiple SCMs in your team, you can setup multiple pipelines with the same jenkins file but different settings to support them all. If your SCM is **Bitbucket Data Center** (or Server), follow [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for credential ID and webhook setup; otherwise use this guide.
+Supported SCMs: **Gitea**, **GitHub**, **GitLab**, **Bitbucket Cloud**, and **Bitbucket Data Center**. Most setups use one SCM; this guide covers that case. If you use **multiple SCMs**, see [Jenkins with multiple SCMs](JENKINS-MULTIPLE-SCMS.md). If your SCM is **Bitbucket Data Center** (or Server), follow [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for webhook setup; otherwise use this guide.
 
 ---
 
@@ -71,7 +71,7 @@ The simplest path is to set them **globally**:
 
 - **Manage Jenkins → System → Global properties → Environment variables** → add the variables below.
 
-If you prefer, you can also define them per job (for example via an `environment { ... }` block in your own Jenkinsfile wrapper), but for most setups global variables are enough.
+Pipeline jobs do not have a “Build Environment” section in the job configuration UI (unlike Freestyle jobs). For the single-SCM setup, use the **global** variables above. The main pipeline (`Script Path`: `docker/jenkins/Jenkinsfile`) is designed for one set of global SCM/LLM env vars. For **multiple SCMs**, use the wrapper approach in [Jenkins with multiple SCMs](JENKINS-MULTIPLE-SCMS.md) instead.
 
 | Variable | Example (Gitea) | Example (GitHub) |
 |----------|-----------------|------------------|
