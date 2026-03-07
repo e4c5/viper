@@ -75,7 +75,7 @@ python -m e2e_ui.run_single_scm
 
 ### 2. Multiple SCMs (one folder + wrapper job per SCM)
 
-**What it does:** Configures Jenkins for two SCMs (Gitea and GitHub): two folders, two Pipeline jobs (each using **Script Path** `docker/jenkins/Jenkinsfile.multi-scm-wrapper`), folder-scoped credentials from .env, and webhook trigger for each job. No global SCM env. Matches [Jenkins with multiple SCMs](JENKINS-MULTIPLE-SCMS.md).
+**What it does:** Configures Jenkins with two folders and two Pipeline jobs, each using **Script Path** `docker/jenkins/Jenkinsfile.multi-scm-wrapper`, folder-scoped credentials from .env, and webhook trigger. For **different** SCMs (e.g. Gitea vs GitHub), you must create one wrapper copy per SCM in the repo and set each job’s Script Path to that file—see [Jenkins with multiple SCMs](JENKINS-MULTIPLE-SCMS.md). The script does not create those copies; it sets up the folder/job structure and credentials.
 
 **Run:**
 

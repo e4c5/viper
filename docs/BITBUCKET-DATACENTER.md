@@ -31,7 +31,7 @@ If you use Gitea, GitHub, or GitLab instead, follow [Jenkins (existing)](JENKINS
 
 1. **New Item** → **Pipeline** (e.g. name: `code-review`).
 2. **Pipeline script from SCM** → point to this repo, **Script Path**: `docker/jenkins/Jenkinsfile`.  
-   The script detects Bitbucket from the webhook payload and uses `SCM_TOKEN` and your `SCM_URL`.
+   Use **Pipeline script from SCM** only (inline paste is not supported—the Jenkinsfile loads `mainPipeline.groovy` from the repo). The script detects Bitbucket from the webhook payload and uses `SCM_TOKEN` and your `SCM_URL`.
 
 ---
 

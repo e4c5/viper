@@ -1,6 +1,7 @@
 // Multi-SCM wrapper: set SCM_PROVIDER and SCM_URL for this job, then run the main pipeline.
-// Use one job per SCM. Point the job's "Script Path" to this file. Edit the two lines below for this SCM.
-// For another SCM, copy this file (e.g. in your branch), edit the two lines, and set Script Path to the copy.
+// Use one job per SCM. For each SCM, use a COPY of this file in the repo (e.g. Jenkinsfile.wrapper-gitea,
+// Jenkinsfile.wrapper-github), edit the two lines below in that copy, and set the job's Script Path to that file.
+// See docs/JENKINS-MULTIPLE-SCMS.md. Pipeline script from SCM is required (no inline paste).
 //
 // Credentials: use folder-scoped credentials so this job has its own SCM_TOKEN and GOOGLE_API_KEY.
 

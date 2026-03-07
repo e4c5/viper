@@ -58,9 +58,9 @@ docker compose up -d --build
      - ID: `GOOGLE_API_KEY` (or `OPENAI_API_KEY`, etc.), Secret: your LLM API key.
 3. Create a **Pipeline** job:
    - Click **New Item** (left nav) or **Create a job** (home page), then choose **Pipeline**.
-   - **Pipeline script from SCM** → point to this repo and set **Script Path** to `docker/jenkins/Jenkinsfile`,  
-     **or** use **Pipeline script** and paste the contents of `docker/jenkins/Jenkinsfile`.
-   - Do **not** add `SCM_*` parameters in the Jenkins UI when using **Pipeline script from SCM**.
+   - **Pipeline script from SCM** → point to this repo and set **Script Path** to `docker/jenkins/Jenkinsfile`.  
+     You must use **Pipeline script from SCM** (not inline **Pipeline script**): the Jenkinsfile loads `docker/jenkins/mainPipeline.groovy` from the repo, so both files must be present in the checkout. See [Jenkins (existing)](JENKINS-EXISTING.md) for details.
+   - Do **not** add `SCM_*` parameters in the Jenkins UI when using webhooks.
 
 **How values are provided**
 - `SCM_TOKEN` and `GOOGLE_API_KEY` come from Jenkins **Credentials**.
