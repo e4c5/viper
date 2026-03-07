@@ -23,14 +23,16 @@ pip install -e ".[e2e-ui]"
 playwright install chromium
 ```
 
-Environment variables (optional; defaults shown):
+Environment variables:
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `JENKINS_URL` | `http://localhost:8080` | Jenkins base URL |
-| `JENKINS_USERNAME` | `admin` | Login user |
-| `JENKINS_PASSWORD` | `admin` | Login password |
-| `E2E_UI_REPO_URL` | (none) | Repo URL for “Pipeline script from SCM” (e.g. your fork) |
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `JENKINS_URL` | No (default: `http://localhost:8080`) | Jenkins base URL |
+| `JENKINS_USERNAME` | **Yes** | Jenkins login user (e.g. `admin` for local Docker) |
+| `JENKINS_PASSWORD` | **Yes** | Jenkins login password (e.g. `admin` for local Docker) |
+| `E2E_UI_REPO_URL` | No | Repo URL for “Pipeline script from SCM” (e.g. your fork) |
+
+Credentials are not hard-coded; set `JENKINS_USERNAME` and `JENKINS_PASSWORD` in the environment (or in `.env`) before running e2e_ui tests.
 
 ---
 

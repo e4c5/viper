@@ -2,12 +2,16 @@
 
 Secrets (SCM_TOKEN, GOOGLE_API_KEY, etc.) are read from .env; variable names
 match Jenkins credential IDs. Run with RUN_E2E_UI=1 and ensure Jenkins is up.
+
+Playwright is imported only inside fixtures that use it so CI without the e2e-ui
+extra can still collect and run other tests without ModuleNotFoundError.
 """
+
+from __future__ import annotations
 
 import os
 
 import pytest
-from playwright.sync_api import Page, sync_playwright
 
 from tests.e2e_ui.core.env_loader import EnvLoader
 from tests.e2e_ui.core.jenkins import JenkinsUI
@@ -33,12 +37,18 @@ def jenkins_base_url() -> str:
 
 @pytest.fixture(scope="session")
 def jenkins_username() -> str:
-    return os.environ.get("JENKINS_USERNAME", "admin")
+    username = os.environ.get("JENKINS_USERNAME")
+    if not username:
+        pytest.skip("JENKINS_USERNAME must be set for e2e_ui tests (e.g. admin for local Jenkins)")
+    return username
 
 
 @pytest.fixture(scope="session")
 def jenkins_password() -> str:
-    return os.environ.get("JENKINS_PASSWORD", "admin")
+    password = os.environ.get("JENKINS_PASSWORD")
+    if not password:
+        pytest.skip("JENKINS_PASSWORD must be set for e2e_ui tests (e.g. admin for local Jenkins)")
+    return password
 
 
 @pytest.fixture(scope="session")
@@ -46,6 +56,10 @@ def playwright_browser():
     """Start Playwright and yield browser; tear down after session."""
     if os.environ.get("RUN_E2E_UI") != "1":
         pytest.skip("e2e_ui tests only run when RUN_E2E_UI=1")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("playwright not installed; install with pip install -e '.[e2e-ui]' and playwright install chromium")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=os.environ.get("E2E_UI_HEADED") != "1")
         yield browser
@@ -53,7 +67,7 @@ def playwright_browser():
 
 
 @pytest.fixture
-def jenkins_page(playwright_browser, jenkins_base_url: str) -> Page:
+def jenkins_page(playwright_browser, jenkins_base_url: str):
     """New page for each test; reuse browser."""
     context = playwright_browser.new_context(
         base_url=jenkins_base_url,
@@ -66,7 +80,7 @@ def jenkins_page(playwright_browser, jenkins_base_url: str) -> Page:
 
 @pytest.fixture
 def jenkins_ui(
-    jenkins_page: Page,
+    jenkins_page,
     jenkins_base_url: str,
     jenkins_username: str,
     jenkins_password: str,

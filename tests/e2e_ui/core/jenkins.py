@@ -22,8 +22,8 @@ class JenkinsUI:
         self,
         page: Page,
         base_url: str,
-        username: str = "admin",
-        password: str = "admin",
+        username: str,
+        password: str,
     ) -> None:
         self._page = page
         self._base_url = base_url.rstrip("/")
