@@ -13,13 +13,15 @@ When your SCM is **Bitbucket Data Center** (or Server), use this guide. You crea
 | Webhook payload | `pullRequest`, `eventKey` (Bitbucket format) |
 | Env | `SCM_URL` = Bitbucket REST API base |
 
+**Caveat:** The code-review agent's Bitbucket provider targets **Bitbucket Cloud** API v2. Bitbucket Data Center is not a full drop-in supported backend: full native support for Data Center's `/rest/api/1.0` (diffs, comments, etc.) may require a dedicated provider. Until then, you may see failure modes around diffs or posting comments. This guide covers **triggering** the pipeline from Bitbucket DC and passing PR metadata; the agent still runs the same CLI with `--owner`, `--repo`, `--pr`, `--head-sha`.
+
 If you use Gitea, GitHub, or GitLab instead, follow [Jenkins (existing)](JENKINS-EXISTING.md). If you don't have an SCM or want to try this in a green field use the [Quick Start](QUICKSTART.md) 
 
 ---
 
 ## 1. Prerequisites
 
-- Bitbucket Data Center / Server (e.g. 7.21.x).
+- **Bitbucket Data Center / Server** (e.g. 7.21.x). Note: the agent's Bitbucket provider targets Cloud API v2; DC is not a full drop-in—diffs/comments on DC may require a dedicated provider and you may see failure modes until then.
 - Jenkins with **Generic Webhook Trigger** plugin.
 - Agent image: build with `docker build -t code-review-agent -f docker/Dockerfile.agent .` or pull from Docker Hub.
 
@@ -103,4 +105,4 @@ In Bitbucket Data Center, for the repo:
 
 ## 8. Limitations
 
-The code-review agent’s Bitbucket provider is built for **Bitbucket Cloud** API v2. Full native support for Data Center’s `/rest/api/1.0` (diffs, comments, etc.) may require a dedicated provider later. This guide covers **triggering** the pipeline from Bitbucket DC and passing PR metadata; the agent still runs the same CLI with `--owner`, `--repo`, `--pr`, `--head-sha`.
+As noted at the top of this guide: the Bitbucket provider targets Cloud API v2; Data Center is not a full drop-in, and full native support for DC's `/rest/api/1.0` (diffs, comments, etc.) may require a dedicated provider. This guide covers triggering the pipeline and passing PR metadata; the agent still runs the same CLI with `--owner`, `--repo`, `--pr`, `--head-sha`.

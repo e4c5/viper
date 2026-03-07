@@ -18,13 +18,14 @@ pipeline {
         string(name: 'LLM_PROVIDER', defaultValue: 'gemini', description: 'LLM provider')
         string(name: 'LLM_MODEL', defaultValue: 'gemini-2.5-flash', description: 'LLM model')
         string(name: 'COMPOSE_PROJECT_NAME', defaultValue: 'code-review', description: 'Docker Compose project name')
+        string(name: 'IMAGE_NAME', defaultValue: 'code-review-agent', description: 'Container image name (or user/name); must match published image when using container agent')
     }
 
     stages {
         stage('Code Review') {
             steps {
                 script {
-                    def image = 'code-review-agent'
+                    def image = env.IMAGE_NAME?.trim() ?: params.IMAGE_NAME?.trim() ?: 'code-review-agent'
                     def projectName = env.COMPOSE_PROJECT_NAME ?: params.COMPOSE_PROJECT_NAME
                     def network = "${projectName}_code-review-net"
                     def scmOwner = params.SCM_OWNER ?: env.SCM_OWNER

@@ -35,7 +35,7 @@ Then configure the pipeline:
    - Set **Script Path** to `docker/jenkins/Jenkinsfile`.
 2. Do **not** define `SCM_OWNER`, `SCM_REPO`, `SCM_PR_NUM`, `SCM_HEAD_SHA`, or `PR_ACTION` as parameters in the UI when using webhooks—the Jenkinsfile declares them and the Generic Webhook Trigger fills them.
 
-If you prefer to paste the script: **Pipeline script** and copy the contents of `docker/jenkins/Jenkinsfile` from this repo.
+Use **Pipeline script from SCM** (not inline **Pipeline script**): the Jenkinsfile loads `docker/jenkins/mainPipeline.groovy` from the repo, so the pipeline depends on SCM checkout. Pasting only the Jenkinsfile into inline script would fail because the loaded file would not be available.
 
 ---
 

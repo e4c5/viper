@@ -1,6 +1,6 @@
 # Playwright: standalone Jenkins setup scripts
 
-Standalone Playwright scripts automate Jenkins configuration for the code-review agent so you can drive the same flows as in the docs (single SCM, multi-SCM) from the command line. They use a **reusable core** and read secrets from a **.env file** (variable names match Jenkins credential IDs).
+Standalone Playwright scripts automate Jenkins configuration for **viper** so you can drive the same flows as in the docs (single SCM, multi-SCM) from the command line. They use a **reusable core** and read secrets from a **.env file** (variable names match Jenkins credential IDs).
 
 **Not part of the test suite or CI.** Run these scripts manually when you want to visually confirm or automate Jenkins setup.
 
@@ -44,7 +44,7 @@ Credentials used by the scripts (and written into Jenkins) come from the same .e
 
 | Variable | Purpose |
 |----------|---------|
-| `SCM_PROVIDER` | SCM identifier written to Jenkins global env (e.g. `gitea`, `github`, `gitlab`, `bitbucket`). Must match the agent. |
+| `SCM_PROVIDER` | SCM identifier written to Jenkins global env (e.g. `gitea`, `github`, `gitlab`, `bitbucket`). Must match viper. |
 | `SCM_URL` | SCM base URL written to Jenkins global env. **Use HTTPS in production**; clear-text HTTP is acceptable only for local/dev (e.g. Docker `http://gitea:3000`). |
 
 ### Optional (sensible defaults)
