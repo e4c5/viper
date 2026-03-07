@@ -41,6 +41,10 @@ observability = [
     "opentelemetry-sdk>=1.20",
     "opentelemetry-exporter-otlp-proto-http>=1.20",
 ]
+e2e-ui = [
+    "playwright>=1.49",
+    "python-dotenv>=1.0",
+]
 
 [project.scripts]
 code-review = "code_review.__main__:app"
@@ -53,6 +57,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "e2e: E2E tests (require Docker + Gitea, run with RUN_E2E=1)",
+    "e2e_ui: Playwright UI tests for Jenkins flows (require Jenkins + .env secrets, run with RUN_E2E_UI=1)",
     "respx: HTTP mocking with respx",
 ]
 filterwarnings = [
