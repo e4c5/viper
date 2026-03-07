@@ -1,8 +1,10 @@
-# Playwright UI tests: automating Jenkins setup
+# Playwright: standalone Jenkins setup scripts
 
-Playwright tests automate Jenkins configuration for the code-review agent so you can drive the same flows as in the docs (single SCM, multi-SCM, etc.) from the command line. They use a **reusable core** and read secrets from a **.env file** (variable names match Jenkins credential IDs).
+Standalone Playwright scripts automate Jenkins configuration for the code-review agent so you can drive the same flows as in the docs (single SCM, multi-SCM) from the command line. They use a **reusable core** and read secrets from a **.env file** (variable names match Jenkins credential IDs).
 
-**Target Jenkins version: 2.552** (classic UI). Selectors in `tests/e2e_ui/core/jenkins.py` are written for this version.
+**Not part of the test suite or CI.** Run these scripts manually when you want to visually confirm or automate Jenkins setup.
+
+**Target Jenkins version: 2.552** (classic UI). Selectors in `e2e_ui/core/jenkins.py` are written for this version.
 
 ---
 
@@ -32,13 +34,13 @@ Environment variables:
 | `JENKINS_PASSWORD` | **Yes** | Jenkins login password (e.g. `admin` for local Docker) |
 | `E2E_UI_REPO_URL` | No | Repo URL for “Pipeline script from SCM” (e.g. your fork) |
 
-Credentials are not hard-coded; set `JENKINS_USERNAME` and `JENKINS_PASSWORD` in the environment (or in `.env`) before running e2e_ui tests.
+Set `JENKINS_USERNAME` and `JENKINS_PASSWORD` in the environment or in `.env` before running the scripts.
 
 ---
 
 ## Scenarios and how to run them
 
-Tests are under `tests/e2e_ui/` and only run when **`RUN_E2E_UI=1`** is set.
+Run from the **repo root** so the `e2e_ui` package and paths (e.g. `docker/jenkins/Jenkinsfile`) resolve correctly.
 
 ### 1. Single SCM (global credentials and env, one pipeline job)
 
@@ -47,7 +49,7 @@ Tests are under `tests/e2e_ui/` and only run when **`RUN_E2E_UI=1`** is set.
 **Run:**
 
 ```bash
-RUN_E2E_UI=1 pytest tests/e2e_ui/flows/test_single_scm.py -v
+python -m e2e_ui.run_single_scm
 ```
 
 ### 2. Multiple SCMs (one folder + wrapper job per SCM)
@@ -57,39 +59,34 @@ RUN_E2E_UI=1 pytest tests/e2e_ui/flows/test_single_scm.py -v
 **Run:**
 
 ```bash
-RUN_E2E_UI=1 pytest tests/e2e_ui/flows/test_multi_scm.py -v
+python -m e2e_ui.run_multi_scm
 ```
 
-### 3. Run all e2e_ui scenarios
+### 3. Run with the browser visible
+
+By default the browser runs headless. To watch the flow:
 
 ```bash
-RUN_E2E_UI=1 pytest tests/e2e_ui/ -m e2e_ui -v
-```
-
-### 4. Run with the browser visible
-
-```bash
-E2E_UI_HEADED=1 RUN_E2E_UI=1 pytest tests/e2e_ui/ -m e2e_ui -v
+E2E_UI_HEADED=1 python -m e2e_ui.run_single_scm
+E2E_UI_HEADED=1 python -m e2e_ui.run_multi_scm
 ```
 
 ---
 
 ## Summary table
 
-| Scenario | Test path | Command |
-|----------|-----------|---------|
-| Single SCM (global creds + env, one job) | `tests/e2e_ui/flows/test_single_scm.py` | `RUN_E2E_UI=1 pytest tests/e2e_ui/flows/test_single_scm.py -v` |
-| Multiple SCMs (folder + wrapper per SCM) | `tests/e2e_ui/flows/test_multi_scm.py` | `RUN_E2E_UI=1 pytest tests/e2e_ui/flows/test_multi_scm.py -v` |
-| All e2e_ui tests | `tests/e2e_ui/` | `RUN_E2E_UI=1 pytest tests/e2e_ui/ -m e2e_ui -v` |
+| Scenario | Command |
+|----------|---------|
+| Single SCM (global creds + env, one job) | `python -m e2e_ui.run_single_scm` |
+| Multiple SCMs (folder + wrapper per SCM) | `python -m e2e_ui.run_multi_scm` |
 
 ---
 
 ## Code structure
 
-- **`tests/e2e_ui/core/env_loader.py`** – Loads `.env` and exposes `get_credentials()` (and `get(id)`) so tests use the same variable names as Jenkins credential IDs.
-- **`tests/e2e_ui/core/jenkins.py`** – **`JenkinsUI`** (reusable): `login()`, `create_folder()`, `add_credential_global()`, `add_credential_in_folder()`, `set_global_env_vars()`, `create_pipeline_job()`, `configure_webhook_trigger()`, `open_job()`, `move_job_into_folder()`.
-- **`tests/e2e_ui/flows/`** – Scenario tests that call **`JenkinsUI`** and **`EnvLoader`**:
-  - `test_single_scm.py` – Single SCM flow above.
-  - `test_multi_scm.py` – Multi-SCM flow above.
+- **`e2e_ui/core/env_loader.py`** – Loads `.env` and exposes `get_credentials()` (and `get(id)`) so scripts use the same variable names as Jenkins credential IDs.
+- **`e2e_ui/core/jenkins.py`** – **`JenkinsUI`** (reusable): `login()`, `create_folder()`, `add_credential_global()`, `add_credential_in_folder()`, `set_global_env_vars()`, `create_pipeline_job()`, `configure_webhook_trigger()`, `open_job()`, `move_job_into_folder()`.
+- **`e2e_ui/run_single_scm.py`** – Standalone script for the single-SCM flow.
+- **`e2e_ui/run_multi_scm.py`** – Standalone script for the multi-SCM flow.
 
-Selectors in `core/jenkins.py` are tuned for Jenkins 2.552; for other versions you may need to adjust them.
+Selectors in `e2e_ui/core/jenkins.py` are tuned for Jenkins 2.552; for other versions you may need to adjust them.

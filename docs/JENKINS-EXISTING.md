@@ -130,6 +130,3 @@ If you don’t set `USE_INLINE_AGENT=true` and the node has no Docker/Podman, th
 - **Execution**: Use the prebuilt image (or build it) on agents with Docker/Podman, or install the CLI and set `USE_INLINE_AGENT=true` as in [Jenkins without Docker](JENKINS-NO-DOCKER.md).
 
 For a full local stack (Gitea + Jenkins via Docker Compose), see [Quick Start](QUICKSTART.md).
-man, or install the CLI and set `USE_INLINE_AGENT=true` as in [Jenkins without Docker](JENKINS-NO-DOCKER.md).
-
-For a full local stack (Gitea + Jenkins via Docker Compose), see [Quick Start](QUICKSTART.md).

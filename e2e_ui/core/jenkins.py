@@ -113,7 +113,7 @@ class JenkinsUI:
         branch: str = "main",
         inside_folder: str | None = None,
     ) -> None:
-        """Create a Pipeline job (Pipeline script from SCM or inline)."""
+        """Create a Pipeline job. If repo_url is set, use Pipeline script from SCM and fill URL/Branch/Script Path; if repo_url is None, use inline Pipeline script and fill the script textarea with script_path (script content)."""
         prefix = f"{self._base_url}/job/{inside_folder}" if inside_folder else self._base_url
         self._page.goto(prefix)
         self._page.get_by_role("link", name="New Item").click()
@@ -124,12 +124,18 @@ class JenkinsUI:
             f"**/job/{name}/**",
             wait_until="networkidle",
         )
-        # Pipeline script from SCM
-        self._page.get_by_label("Pipeline script from SCM").check()
-        if repo_url:
+        if repo_url is not None:
+            # Pipeline script from SCM: fill Repository URL, Branch, Script Path
+            self._page.get_by_label("Pipeline script from SCM").check()
             self._page.get_by_label("Repository URL").fill(repo_url)
-        self._page.get_by_label("Branch").fill(branch)
-        self._page.get_by_label("Script Path").fill(script_path)
+            self._page.get_by_label("Branch").fill(branch)
+            self._page.get_by_label("Script Path").fill(script_path)
+        else:
+            # Inline pipeline script: leave "Pipeline script" selected, fill script textarea
+            # (script_path is used as the inline script content when repo_url is None)
+            script_ta = self._page.locator("textarea[name*='script'], textarea.jenkins-input")
+            if script_ta.count():
+                script_ta.first.fill(script_path)
         self._page.get_by_role("button", name="Save").click()
 
     def configure_webhook_trigger(

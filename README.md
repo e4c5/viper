@@ -16,7 +16,7 @@ Choose the path that matches your setup.
 | **Run Jenkins without Docker** (no containers on agents) | **[Jenkins without Docker](docs/JENKINS-NO-DOCKER.md)** — install the CLI on agents and set `USE_INLINE_AGENT=true`. |
 | **Your SCM is Bitbucket Data Center** | **[Bitbucket Data Center](docs/BITBUCKET-DATACENTER.md)** — same credential `SCM_TOKEN`, Bitbucket webhook JSONPaths, and env. |
 | **You use multiple SCMs** (e.g. Gitea + GitHub) | **[Jenkins with multiple SCMs](docs/JENKINS-MULTIPLE-SCMS.md)** — one folder and pipeline per SCM, same Jenkinsfile. |
-| **Automate Jenkins setup** (Playwright, Jenkins 2.552) | **[E2E UI: Playwright Jenkins flows](docs/E2E-UI-JENKINS.md)** — run single-SCM or multi-SCM scenarios; secrets from `.env`. |
+| **Automate Jenkins setup** (Playwright, Jenkins 2.552) | **[E2E UI: Playwright Jenkins flows](docs/E2E-UI-JENKINS.md)** — run standalone scripts for single-SCM or multi-SCM; secrets from `.env`. |
 | **Develop or test locally** (any SCM) | **[Development testing](docs/DEV_TESTING.md)** — run `code-review review` directly; **[Developer guide](docs/DEVELOPER_GUIDE.md)** — architecture and extension points. |
 
 ---
