@@ -1,7 +1,7 @@
 """Reusable Jenkins UI actions for Playwright.
 
-Uses Jenkins classic UI (Manage Jenkins, New Item, Credentials, etc.).
-Secrets are supplied from EnvLoader (same names as Jenkins credential IDs).
+Target Jenkins version: 2.552 (classic UI). Selectors are written for this version.
+Uses Manage Jenkins, New Item, Credentials, etc. Secrets from EnvLoader (same names as credential IDs).
 """
 
 from __future__ import annotations
@@ -10,6 +10,9 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from playwright.sync_api import Page
+
+# Jenkins version the selectors are written for; document when adjusting for other versions.
+JENKINS_VERSION_TARGET = "2.552"
 
 
 class JenkinsUI:

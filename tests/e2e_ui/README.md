@@ -2,6 +2,8 @@
 
 These tests automate Jenkins configuration for the different documented flows (single SCM, multi-SCM, etc.) using a **reusable core** and secrets from a **.env file** (same variable names as Jenkins credential IDs).
 
+**Target Jenkins version: 2.552** (classic UI). Selectors in `core/jenkins.py` are written for this version; other versions may need selector adjustments.
+
 ## Setup
 
 1. **Install dependencies** (including Playwright and browsers):
@@ -18,7 +20,7 @@ These tests automate Jenkins configuration for the different documented flows (s
 
    Optional: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.
 
-3. **Start Jenkins** (e.g. Docker Compose from Quick Start, or your own instance). Set:
+3. **Start Jenkins 2.552** (e.g. Docker Compose from Quick Start, or your own instance). Set:
 
    - `JENKINS_URL` (default: `http://localhost:8080`)
    - `JENKINS_USERNAME` (default: `admin`)
@@ -48,4 +50,4 @@ E2E_UI_HEADED=1 RUN_E2E_UI=1 pytest tests/e2e_ui/ -m e2e_ui
   - `test_single_scm.py` – Single SCM: global creds, global env, one job, webhook.
   - `test_multi_scm.py` – Multi-SCM: one folder + wrapper job per SCM, folder creds.
 
-Jenkins HTML can vary by version/theme; if a test fails, the selectors in `core/jenkins.py` may need adjustment for your Jenkins.
+Selectors are tuned for Jenkins 2.552; if you use a different version, you may need to adjust `core/jenkins.py`.
