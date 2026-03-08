@@ -132,7 +132,9 @@ class BitbucketServerProvider(ProviderInterface):
         head_sha: str = "",
     ) -> None:
         """Post inline comments (Server API: text + anchor with path/line/lineType/fileType/refs).
-        Path is normalized; lineType ADDED + fileType TO + fromHash/toHash place comments on the diff."""
+        Path is normalized. lineType must match the line in the diff: ADDED for '+' lines, CONTEXT
+        for unchanged lines; otherwise Bitbucket Server may show the comment at file level instead
+        of on the line. fromHash/toHash place the anchor in the correct diff."""
         if not comments:
             return
         path = self._path(owner, repo, "pull-requests", str(pr_number), "comments")
@@ -141,10 +143,11 @@ class BitbucketServerProvider(ProviderInterface):
             to_hash = head_sha
         for c in comments:
             anchor_path = self._anchor_path_for_diff(c.path)
+            line_type = getattr(c, "line_type", None) or "ADDED"
             anchor: dict[str, Any] = {
                 "path": anchor_path,
                 "line": c.line,
-                "lineType": "ADDED",
+                "lineType": line_type,
                 "fileType": "TO",
             }
             if from_hash and to_hash:

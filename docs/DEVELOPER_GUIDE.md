@@ -252,6 +252,8 @@ Configuration is read via **Pydantic Settings** in `config.py`; no `.env` file i
 
 For Bitbucket Data Center webhooks, `SCM_OWNER` is typically set from `$.pullRequest.toRef.repository.project.key` and `SCM_REPO` from `$.pullRequest.toRef.repository.slug`. See [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
 
+**Bitbucket Server inline comments:** For comments to appear on the correct line in the Diff view (rather than at file level), the anchor must include `lineType` matching the line in the diff: `ADDED` for lines that are added (`+` in the diff), `CONTEXT` for unchanged lines. The runner sets `line_type` per comment from the PR diff so Bitbucket can place them correctly. If a comment still appears at file level, the server may have rejected the anchor (e.g. path/ref mismatch or API version differences).
+
 ### 6.2 LLM (`LLM_` prefix)
 
 | Variable | Required | Description |

@@ -22,6 +22,7 @@ from code_review.diff.fingerprint import (
     parse_marker_from_comment_body,
     surrounding_content_hash,
 )
+from code_review.diff.parser import iter_new_lines
 from code_review.formatters.comment import finding_to_comment_body
 from code_review.models import get_context_window
 from code_review.providers import get_provider
@@ -55,6 +56,24 @@ except ValueError:
 def _estimate_tokens(text: str) -> int:
     """Rough token estimate (chars / 4) for diff and context budget checks."""
     return max(0, len(text) // 4)
+
+
+def _normalize_path_for_anchor(file_path: str) -> str:
+    """Normalize path like Bitbucket provider (strip dst://, src://) for diff line matching."""
+    p = (file_path or "").strip()
+    for prefix in ("dst://", "src://"):
+        if p.lower().startswith(prefix):
+            p = p[len(prefix) :].lstrip("/")
+            break
+    return p.lstrip("/") or file_path or ""
+
+
+def _added_lines_in_diff(diff_text: str) -> set[tuple[str, int]]:
+    """Set of (normalized_path, line) for each added line in the diff (for line_type ADDED)."""
+    out: set[tuple[str, int]] = set()
+    for path, new_ln, _ in iter_new_lines(diff_text):
+        out.add((_normalize_path_for_anchor(path), new_ln))
+    return out
 
 
 def _build_idempotency_key(
@@ -283,10 +302,12 @@ def _post_inline_comments_with_fallback(
     to_post: list[tuple[FindingV1, str]],
     cfg,
     llm_cfg,
+    full_diff: str = "",
 ) -> int:
     """Build inline comments, post batch (or per-comment fallback), then summary. Returns count."""
     caps = provider.capabilities()
     run_id = _build_idempotency_key(cfg, llm_cfg, owner, repo, pr_number, head_sha)
+    added_set = _added_lines_in_diff(full_diff) if full_diff else set()
     comments: list[InlineComment] = []
     for f, fp in to_post:
         body = finding_to_comment_body(f, use_collapsible_prompt=caps.markup_supports_collapsible)
@@ -298,6 +319,10 @@ def _post_inline_comments_with_fallback(
                 run_id=run_id,
                 marker_at_end=not caps.markup_hides_html_comment,
             )
+        line_type: str | None = None
+        if added_set:
+            norm_path = _normalize_path_for_anchor(f.path)
+            line_type = "ADDED" if (norm_path, f.line) in added_set else "CONTEXT"
         comments.append(
             InlineComment(
                 path=f.path,
@@ -305,6 +330,7 @@ def _post_inline_comments_with_fallback(
                 body=body,
                 end_line=f.end_line,
                 suggested_patch=f.suggested_patch,
+                line_type=line_type,
             )
         )
     try:
@@ -762,10 +788,12 @@ class ReviewOrchestrator:
         cfg,
         llm_cfg,
         existing: list,
+        full_diff: str = "",
     ) -> int:
         """
         Auto-resolve stale comments (if supported), then post inline comments and PR summary.
         Returns successful_post_count.
+        full_diff: used to set line_type (ADDED vs CONTEXT) so Bitbucket Server anchors comments correctly.
         """
         _resolve_stale_comments_if_supported(
             provider, owner, repo, pr_number, existing, to_post, head_sha, dry_run
@@ -777,7 +805,7 @@ class ReviewOrchestrator:
                     "Provide head_sha or use --dry-run to skip posting."
                 )
             return _post_inline_comments_with_fallback(
-                provider, owner, repo, pr_number, head_sha, to_post, cfg, llm_cfg
+                provider, owner, repo, pr_number, head_sha, to_post, cfg, llm_cfg, full_diff=full_diff
             )
         return 0
 
@@ -958,6 +986,7 @@ class ReviewOrchestrator:
             cfg,
             llm_cfg,
             existing,
+            full_diff=full_diff,
         )
         if dry_run:
             logger.info("Dry run: would post %d comment(s)", len(to_post))

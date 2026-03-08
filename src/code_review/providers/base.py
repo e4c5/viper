@@ -94,6 +94,8 @@ class InlineComment(BaseModel):
     each provider converts to its SCM API shape (inline, file-level, or PR-level fallback).
     When capabilities().supports_suggestions is True, providers may render suggested_patch
     as a suggestion block (e.g. GitHub/GitLab).
+    line_type: when set to "ADDED" or "CONTEXT", Bitbucket Server uses it in the anchor
+    so the comment attaches to the correct line in the diff (otherwise it may show as file-level).
     """
 
     path: str
@@ -105,6 +107,10 @@ class InlineComment(BaseModel):
     suggested_patch: str | None = Field(
         default=None,
         description="Optional suggested code change; used when provider supports_suggestions",
+    )
+    line_type: str | None = Field(
+        default=None,
+        description="For Bitbucket Server: 'ADDED' or 'CONTEXT' so the comment anchors to the diff line",
     )
 
     @model_validator(mode="after")
