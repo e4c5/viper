@@ -19,12 +19,16 @@ class ProviderCapabilities(BaseModel):
       the marker is appended so the visible part of the comment is not prefixed by raw markup.
     - markup_supports_collapsible: when True, <details>/<summary> render as collapsible
       sections. When False, the agent prompt is formatted as plain text to avoid raw tags.
+    - omit_fingerprint_marker_in_body: when True, do not add the HTML comment marker to
+      the comment body at all (avoids stray XML in UIs that display it). Dedup still uses
+      body_hash; fingerprint cannot be read back from existing comments.
     """
 
     resolvable_comments: bool = False
     supports_suggestions: bool = False
     markup_hides_html_comment: bool = True
     markup_supports_collapsible: bool = True
+    omit_fingerprint_marker_in_body: bool = False
 
 
 class FileInfo(BaseModel):

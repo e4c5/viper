@@ -106,6 +106,16 @@ class BitbucketProvider(ProviderInterface):
             url = next_url.strip() or None
         return result
 
+    def _anchor_path_for_diff(self, file_path: str) -> str:
+        """Normalize path so it matches the PR diff (enables inline comments on the diff view).
+        Strips dst:// and src:// prefixes so e.g. dst://src/main/java/foo.java -> src/main/java/foo.java."""
+        p = (file_path or "").strip()
+        for prefix in ("dst://", "src://"):
+            if p.lower().startswith(prefix):
+                p = p[len(prefix) :].lstrip("/")
+                break
+        return p.lstrip("/") or file_path or ""
+
     def post_review_comments(
         self,
         owner: str,
@@ -114,13 +124,15 @@ class BitbucketProvider(ProviderInterface):
         comments: list[InlineComment],
         head_sha: str = "",
     ) -> None:
-        """Post inline comments (Bitbucket Cloud: content.raw + inline.from/to/path)."""
+        """Post inline comments (Bitbucket Cloud: content.raw + inline.from/to/path).
+        Path is normalized so it matches the diff and comments appear on the file diff view."""
         path = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
         for c in comments:
+            anchor_path = self._anchor_path_for_diff(c.path)
             payload: dict[str, Any] = {
                 "content": {"raw": c.body},
                 "inline": {
-                    "path": c.path,
+                    "path": anchor_path,
                     "from": c.line,
                     "to": c.end_line if c.end_line is not None else c.line,
                 },
@@ -195,4 +207,5 @@ class BitbucketProvider(ProviderInterface):
             supports_suggestions=False,
             markup_hides_html_comment=False,
             markup_supports_collapsible=False,
+            omit_fingerprint_marker_in_body=True,
         )

@@ -290,7 +290,7 @@ def _post_inline_comments_with_fallback(
     comments: list[InlineComment] = []
     for f, fp in to_post:
         body = finding_to_comment_body(f, use_collapsible_prompt=caps.markup_supports_collapsible)
-        if fp:
+        if fp and not caps.omit_fingerprint_marker_in_body:
             body = format_comment_body_with_marker(
                 body,
                 fp,
