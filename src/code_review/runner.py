@@ -1,5 +1,6 @@
 """ADK Runner setup and programmatic invocation for code review."""
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -139,10 +140,10 @@ def _generate_auto_pr_description(
     title: str, paths: list[str], max_files: int = 10
 ) -> str:
     """
-    Build a simple, deterministic PR description when none was provided.
+    Build a non-empty, deterministic PR description when the user did not add one.
 
-    Uses the title and the list of changed file paths so downstream tools
-    (and humans) have a quick summary even if the author omitted one.
+    Uses the title and the list of changed file paths so the PR has a useful
+    description. Guarantees a non-empty string so it is safe to set as the PR body.
     """
     title_str = title.strip() or "Untitled change"
     unique_paths = list(dict.fromkeys(paths))
@@ -151,10 +152,11 @@ def _generate_auto_pr_description(
     more_suffix = ""
     if len(unique_paths) > max_files:
         more_suffix = f", and {len(unique_paths) - max_files} more file(s)"
-    return (
+    out = (
         f"**Title**: {title_str}\n\n"
         f"This pull request updates {len(unique_paths)} file(s): {files_part}{more_suffix}."
     )
+    return out.strip() or "Auto-generated summary."
 
 
 def _maybe_post_started_review_comment(
@@ -166,8 +168,9 @@ def _maybe_post_started_review_comment(
     paths: list[str],
 ) -> None:
     """
-    If the PR has no meaningful description, post a PR-level comment indicating
-    that Viper has started a review and include an auto-generated description.
+    When the user has not added a description to the PR: generate a non-empty
+    description, update the PR with it when the SCM API allows, then post
+    general notes about the PR and the review.
     """
     if not pr_info:
         return
@@ -177,15 +180,39 @@ def _maybe_post_started_review_comment(
     # Treat very short descriptions as effectively missing.
     if len(description) >= 40:
         return
-    auto_desc = _generate_auto_pr_description(getattr(pr_info, "title", "") or "", paths)
-    body = (
-        "Viper has started a review of this pull request.\n\n"
-        "The pull request did not include a detailed description, so the following "
-        "summary was auto-generated:\n\n"
-        f"{auto_desc}"
-    )
+    generated = _generate_auto_pr_description(getattr(pr_info, "title", "") or "", paths)
+    if not generated or not generated.strip():
+        return
+    # 1) Update the PR description when the SCM API allows it.
+    description_updated = False
     try:
-        provider.post_pr_summary_comment(owner, repo, pr_number, body)
+        provider.update_pr_description(owner, repo, pr_number, generated)
+        description_updated = True
+    except NotImplementedError:
+        pass
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(
+            "update_pr_description failed owner=%s repo=%s pr_number=%s: %s",
+            owner,
+            repo,
+            pr_number,
+            e,
+        )
+    # 2) Post general notes about the PR and the review.
+    if description_updated:
+        notes = (
+            "Viper has started a review of this pull request and updated the "
+            "PR description with an auto-generated summary."
+        )
+    else:
+        notes = (
+            "Viper has started a review of this pull request.\n\n"
+            "The PR had no description and this SCM does not support updating it; "
+            "below is the summary we generated for context:\n\n"
+            f"{generated}"
+        )
+    try:
+        provider.post_pr_summary_comment(owner, repo, pr_number, notes)
     except Exception as e:  # pragma: no cover - defensive; providers should implement this
         logger.warning(
             "post_pr_summary_comment (started review) failed owner=%s repo=%s pr_number=%s: %s",
@@ -408,19 +435,27 @@ def _log_run_complete(
     )
 
 
-def _run_agent_and_collect_response(runner, session_id: str, content: types.Content) -> str:
-    """Run agent once and return concatenated final response text."""
+async def _collect_response_async(
+    runner, session_id: str, content: types.Content
+) -> str:
+    """Run agent once via run_async and return concatenated final response text."""
     parts: list[str] = []
-    for event in runner.run(
+    async for event in runner.run_async(
         user_id=USER_ID,
         session_id=session_id,
         new_message=content,
     ):
         if event.is_final_response() and event.content and event.content.parts:
             for part in event.content.parts:
-                if part.text:
+                # Only use text parts; skip function_call etc. to avoid SDK warning
+                if getattr(part, "text", None):
                     parts.append(part.text)
     return "\n".join(parts)
+
+
+def _run_agent_and_collect_response(runner, session_id: str, content: types.Content) -> str:
+    """Run agent once and return concatenated final response text (uses async API)."""
+    return asyncio.run(_collect_response_async(runner, session_id, content))
 
 
 class ReviewOrchestrator:

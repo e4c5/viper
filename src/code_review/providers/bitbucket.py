@@ -55,6 +55,12 @@ class BitbucketProvider(ProviderInterface):
             r.raise_for_status()
             return r.json() if r.content else None
 
+    def _put(self, path: str, json: dict) -> Any:
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.put(path, headers=self._headers(), json=json)
+            r.raise_for_status()
+            return r.json() if r.content else None
+
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff for the PR."""
         path = self._path(owner, repo, "pullrequests", str(pr_number), "diff")
@@ -170,6 +176,16 @@ class BitbucketProvider(ProviderInterface):
             return pr_info_from_api_dict(data, "description") if isinstance(data, dict) else None
         except Exception:
             return None
+
+    def update_pr_description(
+        self, owner: str, repo: str, pr_number: int, description: str, title: str | None = None
+    ) -> None:
+        """Update the PR description via PUT .../pullrequests/:id (description.raw for body)."""
+        path = self._path(owner, repo, "pullrequests", str(pr_number))
+        payload: dict = {"description": {"raw": description}}
+        if title is not None:
+            payload["title"] = title
+        self._put(path, payload)
 
     def capabilities(self) -> ProviderCapabilities:
         # PR labels are not supported by Bitbucket Cloud API.

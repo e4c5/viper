@@ -64,6 +64,13 @@ class GitHubProvider(ProviderInterface):
             r.raise_for_status()
             return r.json() if r.content else None
 
+    def _patch(self, path: str, json: Any) -> Any:
+        url = f"{self._base_url}{path}"
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.patch(url, headers=self._headers(), json=json)
+            r.raise_for_status()
+            return r.json() if r.content else None
+
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff for the PR (Accept: application/vnd.github.v3.diff)."""
         path = f"/repos/{owner}/{repo}/pulls/{pr_number}"
@@ -155,6 +162,15 @@ class GitHubProvider(ProviderInterface):
             return pr_info_from_api_dict(data, "body") if isinstance(data, dict) else None
         except Exception:
             return None
+
+    def update_pr_description(
+        self, owner: str, repo: str, pr_number: int, description: str, title: str | None = None
+    ) -> None:
+        """Update the PR body (and optionally title) via PATCH /repos/.../pulls/{number}."""
+        payload: dict[str, str] = {"body": description}
+        if title is not None:
+            payload["title"] = title
+        self._patch(f"/repos/{owner}/{repo}/pulls/{pr_number}", payload)
 
     def capabilities(self) -> ProviderCapabilities:
         """GitHub supports suggestion blocks; resolved is per-conversation, not per-comment."""

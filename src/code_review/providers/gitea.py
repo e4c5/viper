@@ -219,6 +219,15 @@ class GiteaProvider(ProviderInterface):
         except Exception:
             return None
 
+    def update_pr_description(
+        self, owner: str, repo: str, pr_number: int, description: str, title: str | None = None
+    ) -> None:
+        """Update the PR body (and optionally title) via PATCH /repos/.../pulls/{index}."""
+        payload: dict[str, str] = {"body": description}
+        if title is not None:
+            payload["title"] = title
+        self._patch(f"/repos/{owner}/{repo}/pulls/{pr_number}", payload)
+
     def capabilities(self) -> ProviderCapabilities:
         """
         Return provider capability flags.

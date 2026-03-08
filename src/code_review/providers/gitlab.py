@@ -59,6 +59,12 @@ class GitLabProvider(ProviderInterface):
             r.raise_for_status()
             return r.json() if r.content else None
 
+    def _put(self, path: str, json: dict) -> Any:
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.put(path, headers=self._headers(), json=json)
+            r.raise_for_status()
+            return r.json() if r.content else None
+
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff by concatenating MR diffs."""
         path = self._path(owner, repo, "merge_requests", str(pr_number), "diffs")
@@ -245,6 +251,16 @@ class GitLabProvider(ProviderInterface):
             return pr_info_from_api_dict(data, "description") if isinstance(data, dict) else None
         except Exception:
             return None
+
+    def update_pr_description(
+        self, owner: str, repo: str, pr_number: int, description: str, title: str | None = None
+    ) -> None:
+        """Update the MR description (and optionally title) via PUT .../merge_requests/:iid."""
+        path = self._path(owner, repo, "merge_requests", str(pr_number))
+        payload: dict[str, str] = {"description": description}
+        if title is not None:
+            payload["title"] = title
+        self._put(path, payload)
 
     def capabilities(self) -> ProviderCapabilities:
         """

@@ -240,6 +240,18 @@ class ProviderInterface(ABC):
         """Post a PR-level comment (e.g. when inline positioning fails or finding is file-level)."""
         raise NotImplementedError("post_pr_summary_comment not implemented for this provider")
 
+    def update_pr_description(
+        self, owner: str, repo: str, pr_number: int, description: str, title: str | None = None
+    ) -> None:
+        """
+        Update the pull request description (and optionally title) in the SCM.
+
+        Used when the PR has no meaningful description so Viper can set an
+        auto-generated summary as the actual PR body instead of only posting a comment.
+        Default: NotImplementedError (provider does not support updating PR description).
+        """
+        raise NotImplementedError("update_pr_description not implemented for this provider")
+
     def capabilities(self) -> ProviderCapabilities:
         """Return provider capability flags."""
         return ProviderCapabilities(resolvable_comments=False, supports_suggestions=False)
