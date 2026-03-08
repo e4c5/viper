@@ -34,6 +34,16 @@ USER_ID = "reviewer"
 AGENT_VERSION = getattr(code_review, "__version__", "0.1.0")
 logger = logging.getLogger(__name__)
 
+# Suppress expected "non-text parts" warning from google-genai when the model returns
+# tool/function-call parts; we only use text parts in _collect_response_async.
+def _filter_non_text_parts_warning(record: logging.LogRecord) -> bool:
+    msg = record.getMessage()
+    return "non-text parts" not in msg
+
+
+_genai_logger = logging.getLogger("google_genai.types")
+_genai_logger.addFilter(_filter_non_text_parts_warning)
+
 # Fraction of context window reserved for diff content; rest for system prompt, tools, response.
 # Configurable via LLM_DIFF_BUDGET_RATIO env var.
 try:
@@ -436,9 +446,14 @@ def _log_run_complete(
 
 
 async def _collect_response_async(
-    runner, session_id: str, content: types.Content
+    runner, session_service, session_id: str, content: types.Content
 ) -> str:
     """Run agent once via run_async and return concatenated final response text."""
+    await session_service.create_session(
+        app_name=APP_NAME,
+        user_id=USER_ID,
+        session_id=session_id,
+    )
     parts: list[str] = []
     async for event in runner.run_async(
         user_id=USER_ID,
@@ -453,9 +468,11 @@ async def _collect_response_async(
     return "\n".join(parts)
 
 
-def _run_agent_and_collect_response(runner, session_id: str, content: types.Content) -> str:
+def _run_agent_and_collect_response(
+    runner, session_service, session_id: str, content: types.Content
+) -> str:
     """Run agent once and return concatenated final response text (uses async API)."""
-    return asyncio.run(_collect_response_async(runner, session_id, content))
+    return asyncio.run(_collect_response_async(runner, session_service, session_id, content))
 
 
 class ReviewOrchestrator:
@@ -635,11 +652,6 @@ class ReviewOrchestrator:
         agent = create_review_agent(provider, review_standards, findings_only=True)
         session_id = f"{owner}/{repo}/pr-{pr_number}/{uuid.uuid4().hex[:12]}"
         session_service = InMemorySessionService()
-        session_service.create_session_sync(
-            app_name=APP_NAME,
-            user_id=USER_ID,
-            session_id=session_id,
-        )
         runner = Runner(
             agent=agent,
             app_name=APP_NAME,
@@ -667,11 +679,6 @@ class ReviewOrchestrator:
         if use_file_by_file and paths:
             for file_path in paths:
                 file_session_id = f"{owner}/{repo}/pr-{pr_number}/file/{uuid.uuid4().hex[:12]}"
-                session_service.create_session_sync(
-                    app_name=APP_NAME,
-                    user_id=USER_ID,
-                    session_id=file_session_id,
-                )
                 msg = (
                     f"Review this PR: owner={owner}, repo={repo}, pr_number={pr_number}."
                     + (f" head_sha={head_sha}." if head_sha else "")
@@ -680,7 +687,7 @@ class ReviewOrchestrator:
                 )
                 content = types.Content(role="user", parts=[types.Part(text=msg)])
                 response_text = _run_agent_and_collect_response(
-                    runner, file_session_id, content
+                    runner, session_service, file_session_id, content
                 )
                 all_findings.extend(_findings_from_response(response_text))
         else:
@@ -688,7 +695,9 @@ class ReviewOrchestrator:
                 f" head_sha={head_sha}." if head_sha else ""
             )
             content = types.Content(role="user", parts=[types.Part(text=msg)])
-            response_text = _run_agent_and_collect_response(runner, session_id, content)
+            response_text = _run_agent_and_collect_response(
+                runner, session_service, session_id, content
+            )
             all_findings = _findings_from_response(response_text)
         return all_findings
 
