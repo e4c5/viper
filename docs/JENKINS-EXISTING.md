@@ -78,8 +78,6 @@ Pipeline jobs do not have a “Build Environment” section in the job configura
 | `SCM_PROVIDER` | `gitea` | `github` |
 | `SCM_URL` | `https://gitea.example.com` or `http://gitea:3000` | `https://api.github.com` |
 
-**Note:** The agent rejects `SCM_URL` values that use `localhost` or private IP ranges. Use a hostname (e.g. `http://gitea:3000` when Gitea is the Docker service name) or a public URL.
-
 For **GitLab**: `SCM_PROVIDER=gitlab`, `SCM_URL=https://gitlab.com` (or your GitLab URL).  
 For **Bitbucket Cloud**: `SCM_PROVIDER=bitbucket`, `SCM_URL=https://api.bitbucket.org`.  
 For **Bitbucket Data Center**: see [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for the `SCM_URL` format.

@@ -6,13 +6,6 @@ from urllib.parse import urlparse
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_PRIVATE_NETWORK_PREFIXES = (
-    "127.",
-    "10.",
-    "192.168.",
-    "169.254.",
-)
-
 _SCM_CONFIG: "SCMConfig | None" = None
 _LLM_CONFIG: "LLMConfig | None" = None
 
@@ -53,9 +46,6 @@ class SCMConfig(BaseSettings):
         parsed = urlparse(v)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError("SCM_URL must be a valid http(s) URL with non-empty host")
-        host = parsed.hostname or ""
-        if host.startswith(_PRIVATE_NETWORK_PREFIXES) or host in ("localhost",):
-            raise ValueError("SCM_URL must not point to localhost or private IP ranges")
         return v
 
     @field_validator("allowed_hosts")
