@@ -52,7 +52,7 @@ pipeline {
                         ? ['pr:opened', 'pr:modified', 'pr:from_ref_updated']
                         : ['opened', 'synchronize', 'synchronized']
                     def credId = 'SCM_TOKEN'
-                    def scmProvider = isBitbucket ? 'bitbucket' : (env.SCM_PROVIDER ?: 'gitea')
+                    def scmProvider = isBitbucket ? 'bitbucket_server' : (env.SCM_PROVIDER ?: 'gitea')
                     def scmUrl = isBitbucket
                         ? (env.SCM_URL ?: env.SCM_URL_BITBUCKET ?: '')
                         : (env.SCM_URL ?: 'http://gitea:3000')

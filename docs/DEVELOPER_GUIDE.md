@@ -231,16 +231,26 @@ Configuration is read via **Pydantic Settings** in `config.py`; no `.env` file i
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `SCM_PROVIDER` | No (default: gitea) | `gitea` \| `github` \| `gitlab` \| `bitbucket` |
+| `SCM_PROVIDER` | No (default: gitea) | `gitea` \| `github` \| `gitlab` \| `bitbucket` \| `bitbucket_server` |
 | `SCM_URL` | Yes | API base URL (e.g. `https://api.github.com`, `http://gitea:3000`) |
 | `SCM_TOKEN` | Yes | API token for the SCM |
-| `SCM_OWNER` | No | Repo owner (can be passed via CLI `--owner`) |
+| `SCM_OWNER` | No | Owner/workspace/project key (provider-specific; see below). Can be passed via CLI `--owner`. |
 | `SCM_REPO` | No | Repo name (can be passed via CLI `--repo`) |
 | `SCM_PR_NUM` | No | PR number (can be passed via CLI `--pr`) |
 | `SCM_HEAD_SHA` | No | Head commit SHA (can be passed via CLI `--head-sha`); required when posting comments |
 | `SCM_BASE_SHA` | No | Base commit SHA |
 | `SCM_SKIP_LABEL` | No | If PR has this label, skip review (default `skip-review`; empty = disabled) |
 | `SCM_SKIP_TITLE_PATTERN` | No | If PR title contains this, skip review (default `[skip-review]`) |
+
+**Provider-specific meaning of owner / repo:** The CLI and config use a single `--owner` and `--repo` for all providers, but their meaning depends on the SCM:
+
+| Provider | `owner` (e.g. `SCM_OWNER` / `--owner`) | `repo` (e.g. `SCM_REPO` / `--repo`) |
+|----------|----------------------------------------|-------------------------------------|
+| Gitea, GitHub, GitLab | Repository owner (user or organization name) | Repository name |
+| Bitbucket Cloud | **Workspace** (team or user namespace in Bitbucket Cloud) | Repo slug |
+| Bitbucket Data Center (`bitbucket_server`) | **Project key** (e.g. `AN` from `project.key` in the API) | Repo slug |
+
+For Bitbucket Data Center webhooks, `SCM_OWNER` is typically set from `$.pullRequest.toRef.repository.project.key` and `SCM_REPO` from `$.pullRequest.toRef.repository.slug`. See [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
 
 ### 6.2 LLM (`LLM_` prefix)
 

@@ -13,7 +13,7 @@ When your SCM is **Bitbucket Data Center** (or Server), use this guide. You crea
 | Webhook payload | `pullRequest`, `eventKey` (Bitbucket format) |
 | Env | `SCM_URL` = Bitbucket REST API base |
 
-**Caveat:** The code-review agent's Bitbucket provider targets **Bitbucket Cloud** API v2. Bitbucket Data Center is not a full drop-in supported backend: full native support for Data Center's `/rest/api/1.0` (diffs, comments, etc.) may require a dedicated provider. Until then, you may see failure modes around diffs or posting comments. This guide covers **triggering** the pipeline from Bitbucket DC and passing PR metadata; the agent still runs the same CLI with `--owner`, `--repo`, `--pr`, `--head-sha`.
+**For Data Center:** Use **`SCM_PROVIDER=bitbucket_server`** (not `bitbucket`). The `bitbucket` provider is for Bitbucket **Cloud** API v2; the `bitbucket_server` provider uses Data Center's REST API 1.0 (`/rest/api/1.0`). Set **`SCM_URL`** to your server's REST API base including the path, e.g. `http://localhost:7990/rest/api/1.0` (no trailing slash).
 
 If you use Gitea, GitHub, or GitLab instead, follow [Jenkins (existing)](JENKINS-EXISTING.md). If you don't have an SCM or want to try this in a green field use the [Quick Start](QUICKSTART.md) 
 
@@ -21,7 +21,7 @@ If you use Gitea, GitHub, or GitLab instead, follow [Jenkins (existing)](JENKINS
 
 ## 1. Prerequisites
 
-- **Bitbucket Data Center / Server** (e.g. 7.21.x). Note: the agent's Bitbucket provider targets Cloud API v2; DC is not a full drop-in—diffs/comments on DC may require a dedicated provider and you may see failure modes until then.
+- **Bitbucket Data Center / Server** (e.g. 7.21.x). Use `SCM_PROVIDER=bitbucket_server` and `SCM_URL` with `/rest/api/1.0`.
 - Jenkins with **Generic Webhook Trigger** plugin.
 - Agent image: build with `docker build -t code-review-agent -f docker/Dockerfile.agent .` or pull from Docker Hub.
 
@@ -53,11 +53,12 @@ Add **Secret text** credentials with the IDs below (same as for Gitea/GitHub/Git
 
 In the Bitbucket job, set (job **Configure** → **Build Environment** or **Global properties**):
 
-- **`SCM_URL`** (or **`SCM_URL_BITBUCKET`**): Bitbucket REST API base, e.g.  
-  `https://bitbucket.example.com/rest/api/1.0`  
+- **`SCM_PROVIDER`**: Set to **`bitbucket_server`** (required for Data Center; do not use `bitbucket`, which is for Cloud).
+- **`SCM_URL`** (or **`SCM_URL_BITBUCKET`**): Bitbucket REST API 1.0 base, e.g.  
+  `http://localhost:7990/rest/api/1.0` or `https://bitbucket.example.com/rest/api/1.0`  
   (no trailing slash).
 
-Optional: `SCM_PROVIDER` is set to `bitbucket` by the pipeline; `LLM_PROVIDER`, `LLM_MODEL` as needed.
+Optional: `LLM_PROVIDER`, `LLM_MODEL` as needed.
 
 ---
 
@@ -103,6 +104,18 @@ In Bitbucket Data Center, for the repo:
 
 ---
 
-## 8. Limitations
+## 8. Running the agent locally against a Data Center PR
 
-As noted at the top of this guide: the Bitbucket provider targets Cloud API v2; Data Center is not a full drop-in, and full native support for DC's `/rest/api/1.0` (diffs, comments, etc.) may require a dedicated provider. This guide covers triggering the pipeline and passing PR metadata; the agent still runs the same CLI with `--owner`, `--repo`, `--pr`, `--head-sha`.
+Ensure your environment has Bitbucket Server settings (e.g. source your `.env` or export):
+
+- `SCM_PROVIDER=bitbucket_server`
+- `SCM_URL=http://localhost:7990/rest/api/1.0` (or your server URL including `/rest/api/1.0`)
+- `SCM_TOKEN=<your-token>`
+
+Then run (owner = project key, repo = repo slug):
+
+```bash
+code-review review --owner AN --repo antikythera-examples --pr 3 --print-findings
+```
+
+Use `--dry-run` to avoid posting comments.

@@ -15,7 +15,7 @@ class SCMConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="SCM_", extra="ignore")
 
-    provider: Literal["gitea", "github", "gitlab", "bitbucket"] = "gitea"
+    provider: Literal["gitea", "github", "gitlab", "bitbucket", "bitbucket_server"] = "gitea"
     url: str = Field(..., description="API base URL (may differ from UI for self-hosted)")
     token: SecretStr = Field(..., description="API token for authentication")
     owner: str = Field(default="", description="Repo owner/org")
