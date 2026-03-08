@@ -103,6 +103,8 @@ podman build -t code-review-agent -f docker/Dockerfile.agent .
 - **Rebuild required** whenever you change code under `src/` or runtime dependencies in `pyproject.toml`, so that the `code-review-agent` image picks up those changes.
 - The `docker/Dockerfile.agent` is structured so that dependency metadata (`pyproject.toml`) is copied before the source tree; Docker can therefore **cache the expensive `pip install` layer**, and most code-only edits only invalidate the final layers, keeping rebuilds relatively fast.
 
+**Making Jenkins use the new version:** See [Using a new version when code changes](JENKINS-UPDATING-AGENT.md).
+
 ---
 
 ## 5. Auto-trigger PR reviews (Gitea webhook → Jenkins)
@@ -132,7 +134,7 @@ In **Build Triggers**:
    `Expression type` = `JSONPath`
 2. In the same **Generic Webhook Trigger** section, set:
    `Optional filter` text = `$PR_ACTION`
-   `Optional filter` regexp = `^(opened|synchronize)$`
+   `Optional filter` regexp = `^(opened|synchronize|synchronized)$`
 3. Save the job.
 4. Re-open the job configuration if needed and copy the **Webhook URL** shown in the same **Generic Webhook Trigger** section.
 

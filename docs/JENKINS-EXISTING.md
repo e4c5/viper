@@ -125,10 +125,17 @@ If you don’t set `USE_INLINE_AGENT=true` and the node has no Docker/Podman, th
 
 ---
 
+## 6. Using a new version when the review tool code changes
+
+See [Using a new version of the review tool when code changes](JENKINS-UPDATING-AGENT.md) for how to make Jenkins pick up changes after you update Python code or dependencies.
+
+---
+
 ## Summary
 
 - **Existing Jenkins**: Add one Pipeline job (Script Path: `docker/jenkins/Jenkinsfile`), credentials `SCM_TOKEN` and `GOOGLE_API_KEY`, and SCM/LLM env vars.
 - **Webhooks**: Use Generic Webhook Trigger and your SCM’s webhook UI; if your SCM is Bitbucket Data Center, see [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
 - **Execution**: Use the prebuilt image (or build it) on agents with Docker/Podman, or install the CLI and set `USE_INLINE_AGENT=true` as in [Jenkins without Docker](JENKINS-NO-DOCKER.md).
+- **After code changes**: See [Using a new version when code changes](JENKINS-UPDATING-AGENT.md).
 
 For a full local stack (Gitea + Jenkins via Docker Compose), see [Quick Start](QUICKSTART.md).
