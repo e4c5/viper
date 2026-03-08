@@ -1,6 +1,7 @@
 // Single-SCM: set SCM_PROVIDER and SCM_URL in Manage Jenkins → Global properties → Environment variables.
-// Multi-SCM: use one job per SCM; same Script Path (this file). Set this job's parameter defaults
-//   SCM_PROVIDER and SCM_URL (e.g. gitea / https://gitea.example.com) in job → Configure → Parameters.
+// Multi-SCM: use one job per SCM; same Script Path (this file). Set SCM_PROVIDER and SCM_URL on the
+//   folder that contains the job (folder → Configure → Environment variables). Do not use job
+//   parameter defaults—they get overwritten when the script is loaded from SCM.
 // Credentials: ID "SCM_TOKEN", ID "GOOGLE_API_KEY" (folder or global).
 //
 // Self-contained; no load. Pipeline script from SCM (Script Path: docker/jenkins/Jenkinsfile) or paste inline.
