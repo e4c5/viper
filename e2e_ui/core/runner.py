@@ -11,13 +11,40 @@ import sys
 from contextlib import contextmanager
 from typing import Generator
 
-# Gitea-style webhook Post content parameters (JSONPath). Shared by single- and multi-SCM flows.
+# Webhook Post content parameters (JSONPath) per SCM. Used by single- and multi-SCM flows.
 GITEA_WEBHOOK_PARAMS = {
     "SCM_OWNER": "$.pull_request.base.repo.owner.login",
     "SCM_REPO": "$.pull_request.base.repo.name",
     "SCM_PR_NUM": "$.pull_request.number",
     "SCM_HEAD_SHA": "$.pull_request.head.sha",
     "PR_ACTION": "$.action",
+}
+GITHUB_WEBHOOK_PARAMS = {
+    "SCM_OWNER": "$.pull_request.base.repo.owner.login",
+    "SCM_REPO": "$.pull_request.base.repo.name",
+    "SCM_PR_NUM": "$.pull_request.number",
+    "SCM_HEAD_SHA": "$.pull_request.head.sha",
+    "PR_ACTION": "$.action",
+}
+GITLAB_WEBHOOK_PARAMS = {
+    "SCM_OWNER": "$.project.namespace.path",
+    "SCM_REPO": "$.project.path",
+    "SCM_PR_NUM": "$.object_attributes.iid",
+    "SCM_HEAD_SHA": "$.object_attributes.last_commit.id",
+    "PR_ACTION": "$.object_attributes.action",
+}
+BITBUCKET_WEBHOOK_PARAMS = {
+    "SCM_OWNER": "$.pullRequest.toRef.repository.project.key",
+    "SCM_REPO": "$.pullRequest.toRef.repository.slug",
+    "SCM_PR_NUM": "$.pullRequest.id",
+    "SCM_HEAD_SHA": "$.pullRequest.fromRef.latestCommit",
+    "PR_ACTION": "$.eventKey",
+}
+WEBHOOK_PARAMS_BY_PROVIDER = {
+    "gitea": GITEA_WEBHOOK_PARAMS,
+    "github": GITHUB_WEBHOOK_PARAMS,
+    "gitlab": GITLAB_WEBHOOK_PARAMS,
+    "bitbucket_server": BITBUCKET_WEBHOOK_PARAMS,
 }
 
 

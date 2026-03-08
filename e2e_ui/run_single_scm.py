@@ -7,7 +7,7 @@ All configuration via .env; see docs/E2E-UI-JENKINS.md and .env.example for requ
 from __future__ import annotations
 
 from e2e_ui.core.runner import (
-    GITEA_WEBHOOK_PARAMS,
+    WEBHOOK_PARAMS_BY_PROVIDER,
     ensure_playwright,
     get_credentials,
     get_jenkins_config,
@@ -37,11 +37,19 @@ def main() -> None:
             repo_url=repo_url,
             branch=branch,
         )
+        webhook_params = WEBHOOK_PARAMS_BY_PROVIDER.get(
+            scm_provider, WEBHOOK_PARAMS_BY_PROVIDER["gitea"]
+        )
+        filter_regex = (
+            "^pr:(opened|modified|from_ref_updated)$"
+            if scm_provider == "bitbucket_server"
+            else "^(opened|synchronize|synchronized)$"
+        )
         ui.configure_webhook_trigger(
             job_name="code-review",
-            post_content_params=GITEA_WEBHOOK_PARAMS,
+            post_content_params=webhook_params,
             filter_text="$PR_ACTION",
-            filter_regex="^(opened|synchronize)$",
+            filter_regex=filter_regex,
         )
         ui.open_job("code-review")
 

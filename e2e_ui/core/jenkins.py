@@ -43,7 +43,7 @@ class JenkinsUI:
         self._page.goto(self._base_url)
         self._page.get_by_role("link", name="New Item").click()
         self._page.get_by_role("textbox", name="Enter an item name").fill(name)
-        self._page.get_by_role("link", name="Folder").click()
+        self._page.get_by_role("radio", name="Folder").click()
         self._page.get_by_role("button", name="OK").click()
         self._page.wait_for_url(f"{self._base_url}/job/{name}/**", wait_until="networkidle")
 
@@ -118,7 +118,7 @@ class JenkinsUI:
         self._page.goto(prefix)
         self._page.get_by_role("link", name="New Item").click()
         self._page.get_by_role("textbox", name="Enter an item name").fill(name)
-        self._page.get_by_role("link", name="Pipeline").click()
+        self._page.get_by_role("radio", name="Pipeline").click()
         self._page.get_by_role("button", name="OK").click()
         self._page.wait_for_url(
             f"**/job/{name}/**",
