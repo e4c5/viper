@@ -17,6 +17,7 @@ from code_review.providers.base import (
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
+CONTENT_TYPE_JSON = "application/json"
 
 
 class BitbucketServerProvider(ProviderInterface):
@@ -43,7 +44,7 @@ class BitbucketServerProvider(ProviderInterface):
         with httpx.Client(timeout=self._timeout) as client:
             r = client.get(path, headers=self._headers(), params=params or {})
             r.raise_for_status()
-            if "application/json" in (r.headers.get("content-type") or ""):
+            if CONTENT_TYPE_JSON in (r.headers.get("content-type") or ""):
                 return r.json()
             return r.text
 
@@ -57,7 +58,7 @@ class BitbucketServerProvider(ProviderInterface):
         with httpx.Client(timeout=self._timeout) as client:
             r = client.post(
                 path,
-                headers={**self._headers(), "Content-Type": "application/json"},
+                headers={**self._headers(), "Content-Type": CONTENT_TYPE_JSON},
                 json=json,
             )
             r.raise_for_status()
@@ -67,7 +68,7 @@ class BitbucketServerProvider(ProviderInterface):
         with httpx.Client(timeout=self._timeout) as client:
             r = client.put(
                 path,
-                headers={**self._headers(), "Content-Type": "application/json"},
+                headers={**self._headers(), "Content-Type": CONTENT_TYPE_JSON},
                 json=json,
             )
             r.raise_for_status()
@@ -157,6 +158,22 @@ class BitbucketServerProvider(ProviderInterface):
             payload = {"text": c.body, "anchor": anchor}
             self._post(path, payload)
 
+    def _comment_from_activity(self, act: dict) -> ReviewComment | None:
+        """Parse one activity entry into a ReviewComment if it is a COMMENTED action."""
+        if not isinstance(act, dict) or act.get("action") != "COMMENTED":
+            return None
+        c = act.get("comment")
+        if not isinstance(c, dict):
+            return None
+        anchor = c.get("anchor") or {}
+        return ReviewComment(
+            id=str(c.get("id", "")),
+            path=anchor.get("path") or "",
+            line=int(anchor.get("line", 0) or 0),
+            body=c.get("text") or "",
+            resolved=bool(c.get("state") == "RESOLVED"),
+        )
+
     def get_existing_review_comments(
         self, owner: str, repo: str, pr_number: int
     ) -> list[ReviewComment]:
@@ -177,24 +194,9 @@ class BitbucketServerProvider(ProviderInterface):
             if not isinstance(values, list):
                 break
             for act in values:
-                if not isinstance(act, dict) or act.get("action") != "COMMENTED":
-                    continue
-                c = act.get("comment")
-                if not isinstance(c, dict):
-                    continue
-                anchor = c.get("anchor") or {}
-                path_str = anchor.get("path") or ""
-                line = int(anchor.get("line", 0) or 0)
-                body = c.get("text") or ""
-                result.append(
-                    ReviewComment(
-                        id=str(c.get("id", "")),
-                        path=path_str,
-                        line=line,
-                        body=body,
-                        resolved=bool(c.get("state") == "RESOLVED"),
-                    )
-                )
+                comment = self._comment_from_activity(act)
+                if comment is not None:
+                    result.append(comment)
             if data.get("isLastPage", True) or len(values) == 0:
                 break
             next_start = data.get("nextPageStart")
