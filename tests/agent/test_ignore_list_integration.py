@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from tests.conftest import runner_run_async_returning
 from code_review.diff.fingerprint import format_comment_body_with_marker
 from code_review.providers.base import FileInfo, ProviderCapabilities, ReviewComment
 
@@ -71,7 +72,7 @@ def test_manually_resolved_comment_does_not_block_changed_code(
     mock_event.content = MagicMock()
     mock_event.content.parts = [MagicMock(text=findings_json)]
     mock_runner_instance = MagicMock()
-    mock_runner_instance.run.return_value = iter([mock_event])
+    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
     provider.post_review_comments = MagicMock()
     provider.post_pr_summary_comment = MagicMock()

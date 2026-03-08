@@ -3,6 +3,7 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+from tests.conftest import runner_run_async_returning
 from code_review.providers.base import FileInfo
 
 
@@ -43,7 +44,7 @@ def test_run_review_emits_trace_id_and_run_complete(
     mock_event.content = MagicMock()
     mock_event.content.parts = [MagicMock(text=findings_json)]
     mock_runner_instance = MagicMock()
-    mock_runner_instance.run.return_value = iter([mock_event])
+    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
     with caplog.at_level(logging.INFO):
         with patch("google.adk.runners.Runner", return_value=mock_runner_instance):

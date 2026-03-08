@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from tests.conftest import runner_run_async_returning
 from code_review.diff.fingerprint import format_comment_body_with_marker
 from code_review.providers.base import (
     FileInfo,
@@ -122,7 +123,7 @@ def test_auto_resolve_stale_comments_when_capabilities_true(
         mock_event.content = MagicMock()
         mock_event.content.parts = [MagicMock(text=findings_json)]
         mock_runner_instance = MagicMock()
-        mock_runner_instance.run.return_value = iter([mock_event])
+        mock_runner_instance.run_async = runner_run_async_returning([mock_event])
         mock_runner_cls.return_value = mock_runner_instance
 
         result = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
@@ -180,7 +181,7 @@ def test_auto_resolve_not_called_when_capabilities_false(
         mock_event.content = MagicMock()
         mock_event.content.parts = [MagicMock(text=findings_json)]
         mock_runner_instance = MagicMock()
-        mock_runner_instance.run.return_value = iter([mock_event])
+        mock_runner_instance.run_async = runner_run_async_returning([mock_event])
         mock_runner_cls.return_value = mock_runner_instance
 
         result = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
@@ -228,7 +229,7 @@ def test_auto_resolve_not_called_in_dry_run(
         mock_event.content = MagicMock()
         mock_event.content.parts = [MagicMock(text=findings_json)]
         mock_runner_instance = MagicMock()
-        mock_runner_instance.run.return_value = iter([mock_event])
+        mock_runner_instance.run_async = runner_run_async_returning([mock_event])
         mock_runner_cls.return_value = mock_runner_instance
 
         result = run_review("o", "r", 1, head_sha="abc123", dry_run=True)

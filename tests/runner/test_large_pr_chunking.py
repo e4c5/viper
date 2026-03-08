@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from tests.conftest import runner_run_async_returning
 from code_review.providers.base import FileInfo
 
 
@@ -62,10 +63,10 @@ def test_large_pr_file_by_file_no_duplicate_posts(
         mock_event.is_final_response.return_value = True
         mock_event.content = MagicMock()
         mock_event.content.parts = [MagicMock(text=findings)]
-        return iter([mock_event])
+        return runner_run_async_returning([mock_event])()
 
     mock_runner_instance = MagicMock()
-    mock_runner_instance.run.side_effect = capture_run
+    mock_runner_instance.run_async = capture_run
 
     with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
         run_review("o", "r", 1, head_sha="abc123", dry_run=False)
@@ -121,10 +122,10 @@ def test_large_pr_file_by_file_uses_separate_sessions(
         mock_event.is_final_response.return_value = True
         mock_event.content = MagicMock()
         mock_event.content.parts = [MagicMock(text="[]")]
-        return iter([mock_event])
+        return runner_run_async_returning([mock_event])()
 
     mock_runner_instance = MagicMock()
-    mock_runner_instance.run.side_effect = capture_run
+    mock_runner_instance.run_async = capture_run
 
     with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
         run_review("o", "r", 1, head_sha="abc123", dry_run=True)
@@ -173,10 +174,10 @@ def test_large_pr_file_by_file_message_requests_file_diff(
         mock_event.is_final_response.return_value = True
         mock_event.content = MagicMock()
         mock_event.content.parts = [MagicMock(text="[]")]
-        return iter([mock_event])
+        return runner_run_async_returning([mock_event])()
 
     mock_runner_instance = MagicMock()
-    mock_runner_instance.run.side_effect = capture_run
+    mock_runner_instance.run_async = capture_run
 
     with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
         run_review("o", "r", 1, head_sha="sha1", dry_run=True)

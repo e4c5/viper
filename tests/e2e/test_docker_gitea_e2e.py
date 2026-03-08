@@ -13,6 +13,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from tests.conftest import runner_run_async_returning
+
 
 def _ensure_admin_and_token() -> str:
     """Ensure an admin user exists in the Gitea E2E instance and return a fresh token.
@@ -220,7 +222,7 @@ def test_e2e_docker_gitea_full_review(e2e_stack):
     mock_event.content = MagicMock()
     mock_event.content.parts = [MagicMock(text=findings_json)]
     mock_runner_instance = MagicMock()
-    mock_runner_instance.run.return_value = iter([mock_event])
+    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
     with (
         patch("code_review.runner.get_provider", return_value=mock_provider),

@@ -14,6 +14,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from tests.conftest import runner_run_async_returning
+
 try:
     import respx
 except ImportError:
@@ -117,7 +119,7 @@ def test_agent_vs_gitea_posts_findings_to_mocked_api(
     mock_event.content = MagicMock()
     mock_event.content.parts = [MagicMock(text=findings_json)]
     mock_runner_instance = MagicMock()
-    mock_runner_instance.run.return_value = iter([mock_event])
+    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
     mock_runner_class.return_value = mock_runner_instance
 
     to_post = run_review(owner, repo, pr_number, head_sha=head_sha, dry_run=False)

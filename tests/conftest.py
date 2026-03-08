@@ -7,6 +7,23 @@ import time
 import pytest
 import requests
 
+
+def runner_run_async_returning(events):
+    """Return a callable that when called returns an async generator yielding events.
+
+    Use for mocking google.adk.runners.Runner.run_async in tests.
+    The runner calls run_async(user_id=..., session_id=..., new_message=...);
+    the returned callable accepts *args, **kwargs and returns the async generator.
+    """
+    async def _agen():
+        for e in events:
+            yield e
+
+    def _wrapper(*args, **kwargs):
+        return _agen()
+
+    return _wrapper
+
 E2E_COMPOSE_FILE = "tests/e2e/docker-compose.e2e.yml"
 E2E_PROJECT_NAME = "code-review-e2e"
 

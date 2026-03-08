@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.conftest import runner_run_async_returning
 from code_review.agent import create_review_agent
 from code_review.providers.base import FileInfo, PRInfo, ProviderCapabilities
 
@@ -78,7 +79,7 @@ def test_run_review_ignore_list_and_posts_net_new(
     mock_get_provider.return_value = provider
     mock_get_context_window.return_value = 1_000_000
 
-    # Mock Runner.run to yield one final response with JSON findings (one duplicate, one net-new)
+    # Mock Runner.run_async to yield one final response with JSON findings (one duplicate, one net-new)
     findings_json = """[
         {"path":"foo.py","line":1,"severity":"critical","code":"x","message":"Duplicate finding."},
         {"path":"foo.py","line":2,"severity":"suggestion","code":"y","message":"Net new finding."}
@@ -88,7 +89,7 @@ def test_run_review_ignore_list_and_posts_net_new(
     mock_event.content = MagicMock()
     mock_event.content.parts = [MagicMock(text=findings_json)]
     mock_runner_instance = MagicMock()
-    mock_runner_instance.run.return_value = iter([mock_event])
+    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
     with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
         to_post = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
@@ -152,7 +153,7 @@ def test_run_review_raises_when_posting_without_head_sha(
     mock_event.content = MagicMock()
     mock_event.content.parts = [MagicMock(text=findings_json)]
     mock_runner_instance = MagicMock()
-    mock_runner_instance.run.return_value = iter([mock_event])
+    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
     with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
         with pytest.raises(ValueError, match="head_sha is required when posting"):
@@ -306,13 +307,16 @@ def test_run_review_uses_file_by_file_mode_when_diff_exceeds_budget(
     mock_event.content.parts = [MagicMock(text=findings_json)]
 
     mock_runner_instance = MagicMock()
-    # One run call per file (two files -> two iterators)
-    mock_runner_instance.run.side_effect = [iter([mock_event]), iter([mock_event])]
+    # One run_async call per file (two files -> two async generators)
+    mock_runner_instance.run_async.side_effect = [
+        runner_run_async_returning([mock_event])(),
+        runner_run_async_returning([mock_event])(),
+    ]
 
     with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
         result = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
 
     # We should get findings for each file (filtered down to postings)
     assert len(result) == 1
-    # Runner.run called once per file
-    assert mock_runner_instance.run.call_count == 2
+    # Runner.run_async called once per file
+    assert mock_runner_instance.run_async.call_count == 2

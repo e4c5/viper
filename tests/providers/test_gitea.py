@@ -282,6 +282,25 @@ def test_post_pr_summary_comment(mock_client):
     assert call_args[1]["json"]["body"] == "Summary: 2 Critical, 1 Suggestion"
 
 
+@patch.object(GiteaProvider, "_patch")
+def test_update_pr_description(mock_patch):
+    """update_pr_description PATCHes the pull request with body (and optional title)."""
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    p.update_pr_description("owner", "repo", 42, "**Title**: kafka\n\nThis PR updates 2 files.")
+    mock_patch.assert_called_once_with(
+        "/repos/owner/repo/pulls/42",
+        {"body": "**Title**: kafka\n\nThis PR updates 2 files."},
+    )
+
+
+@patch.object(GiteaProvider, "_patch")
+def test_update_pr_description_with_title(mock_patch):
+    """update_pr_description can also set the PR title."""
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    p.update_pr_description("o", "r", 1, "New body.", title="New title")
+    mock_patch.assert_called_once_with("/repos/o/r/pulls/1", {"body": "New body.", "title": "New title"})
+
+
 def test_capabilities():
     p = GiteaProvider("https://gitea.example.com", "tok")
     caps = p.capabilities()

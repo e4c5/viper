@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from tests.conftest import runner_run_async_returning
 from code_review.providers.base import FileInfo, ProviderCapabilities
 
 
@@ -42,7 +43,7 @@ def _exercise_error_path(
     mock_event.content = MagicMock()
     mock_event.content.parts = [MagicMock(text=findings_json)]
     mock_runner_instance = MagicMock()
-    mock_runner_instance.run.return_value = iter([mock_event])
+    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
     with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
         to_post = run_review("o", "r", 1, head_sha="abc123", dry_run=False)

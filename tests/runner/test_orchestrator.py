@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.conftest import runner_run_async_returning
 from code_review.runner import (
     ReviewOrchestrator,
     _generate_auto_pr_description,
@@ -24,7 +25,7 @@ def _orchestrator_run_env(
     mock_event.is_final_response.return_value = True
     mock_event.content = MagicMock()
     mock_event.content.parts = [MagicMock(text=findings_json)]
-    mock_runner_instance.run.return_value = iter([mock_event])
+    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
     with (
         patch("code_review.runner.get_context_window", return_value=1_000_000),
@@ -468,8 +469,9 @@ def test_generate_auto_pr_description_uses_title_and_paths():
 
 
 def test_maybe_post_started_review_comment_posts_when_description_missing():
-    """_maybe_post_started_review_comment posts a comment when description is empty/short."""
+    """When description is empty/short and provider cannot update PR, post full summary as comment."""
     provider = MagicMock()
+    provider.update_pr_description = MagicMock(side_effect=NotImplementedError())
     pr_info = MagicMock(title="T", description="")
     paths = ["foo.py", "bar.py"]
 
@@ -481,6 +483,25 @@ def test_maybe_post_started_review_comment_posts_when_description_missing():
     body = args[3]
     assert "Viper has started a review" in body
     assert "foo.py" in body or "bar.py" in body
+
+
+def test_maybe_post_started_review_comment_updates_pr_description_when_supported():
+    """When description is empty/short and provider supports it, update PR and post short comment."""
+    provider = MagicMock()
+    pr_info = MagicMock(title="kafka", description="")
+    paths = ["AGENTS.md", "README.md"]
+
+    _maybe_post_started_review_comment(provider, "o", "r", 1, pr_info, paths)
+
+    provider.update_pr_description.assert_called_once()
+    call_args = provider.update_pr_description.call_args[0]
+    assert call_args[:3] == ("o", "r", 1)
+    assert "kafka" in call_args[3] and "AGENTS.md" in call_args[3]
+    provider.post_pr_summary_comment.assert_called_once()
+    body = provider.post_pr_summary_comment.call_args[0][3]
+    assert "Viper has started a review" in body
+    assert "updated the PR description" in body
+    assert "AGENTS.md" not in body  # summary is in PR description, not in comment
 
 
 def test_maybe_post_started_review_comment_skips_when_description_present():
