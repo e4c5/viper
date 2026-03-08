@@ -190,4 +190,9 @@ class BitbucketProvider(ProviderInterface):
     def capabilities(self) -> ProviderCapabilities:
         # PR labels are not supported by Bitbucket Cloud API.
         # Skip-by-label is ineffective; see get_pr_info.
-        return ProviderCapabilities(resolvable_comments=False, supports_suggestions=False)
+        return ProviderCapabilities(
+            resolvable_comments=False,
+            supports_suggestions=False,
+            markup_hides_html_comment=False,
+            markup_supports_collapsible=False,
+        )

@@ -14,10 +14,17 @@ class ProviderCapabilities(BaseModel):
       (Currently false for all built-in providers.)
     - supports_suggestions: provider supports suggested-change / code suggestion blocks
      (e.g. GitHub, GitLab).
+    - markup_hides_html_comment: when True, HTML comments (e.g. <!-- ... -->) are hidden
+      in comment bodies, so the fingerprint marker can be prepended. When False (e.g. Bitbucket),
+      the marker is appended so the visible part of the comment is not prefixed by raw markup.
+    - markup_supports_collapsible: when True, <details>/<summary> render as collapsible
+      sections. When False, the agent prompt is formatted as plain text to avoid raw tags.
     """
 
     resolvable_comments: bool = False
     supports_suggestions: bool = False
+    markup_hides_html_comment: bool = True
+    markup_supports_collapsible: bool = True
 
 
 class FileInfo(BaseModel):

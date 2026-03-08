@@ -285,13 +285,18 @@ def _post_inline_comments_with_fallback(
     llm_cfg,
 ) -> int:
     """Build inline comments, post batch (or per-comment fallback), then summary. Returns count."""
+    caps = provider.capabilities()
     run_id = _build_idempotency_key(cfg, llm_cfg, owner, repo, pr_number, head_sha)
     comments: list[InlineComment] = []
     for f, fp in to_post:
-        body = finding_to_comment_body(f)
+        body = finding_to_comment_body(f, use_collapsible_prompt=caps.markup_supports_collapsible)
         if fp:
             body = format_comment_body_with_marker(
-                body, fp, AGENT_VERSION, run_id=run_id
+                body,
+                fp,
+                AGENT_VERSION,
+                run_id=run_id,
+                marker_at_end=not caps.markup_hides_html_comment,
             )
         comments.append(
             InlineComment(

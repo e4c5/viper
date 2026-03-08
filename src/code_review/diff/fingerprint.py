@@ -83,8 +83,12 @@ def format_comment_body_with_marker(
     fingerprint: str,
     version: str,
     run_id: str | None = None,
+    marker_at_end: bool = False,
 ) -> str:
-    """Prepend hidden marker to comment body for dedupe and idempotency."""
+    """Add hidden marker to comment body for dedupe and idempotency.
+    When marker_at_end is True (e.g. Bitbucket), append the marker so the visible
+    part of the comment is not prefixed by raw HTML; parse_marker_from_comment_body
+    finds the marker anywhere in the body."""
     parts = [f"fingerprint={fingerprint}", f"version={version}"]
     if run_id is not None:
         parts.append(f"run={run_id}")
@@ -93,6 +97,8 @@ def format_comment_body_with_marker(
     if sig:
         payload = payload + f";sig={sig}"
     marker = COMMENT_MARKER_PREFIX + payload + COMMENT_MARKER_SUFFIX
+    if marker_at_end:
+        return body + "\n\n" + marker
     return marker + "\n\n" + body
 
 

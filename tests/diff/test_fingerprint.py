@@ -53,8 +53,25 @@ def test_format_comment_body_with_marker():
     assert "fingerprint=fp123" in body
     assert "version=0.1.0" in body
     assert "Hello." in body
+    assert body.startswith("<!-- ")
+    assert body.endswith("Hello.")
     body_with_run = format_comment_body_with_marker("Hi.", "fp", "1.0", run_id="run-xyz")
     assert "run=run-xyz" in body_with_run
+
+
+def test_format_comment_body_with_marker_at_end():
+    """When marker_at_end=True (e.g. Bitbucket), visible text comes first; marker at end."""
+    body = format_comment_body_with_marker(
+        "Visible comment.", "fp99", "0.1.0", marker_at_end=True
+    )
+    assert body.startswith("Visible comment.")
+    assert body.endswith("-->")  # marker HTML comment at end
+    assert "<!-- code-review-agent:" in body
+    assert "fingerprint=fp99" in body
+    # Parser still finds the marker anywhere in body
+    out = parse_marker_from_comment_body(body)
+    assert out["fingerprint"] == "fp99"
+    assert out["version"] == "0.1.0"
 
 
 def test_parse_marker_from_comment_body():

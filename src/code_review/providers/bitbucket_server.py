@@ -192,4 +192,9 @@ class BitbucketServerProvider(ProviderInterface):
         self._put(path, payload)
 
     def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(resolvable_comments=False, supports_suggestions=False)
+        return ProviderCapabilities(
+            resolvable_comments=False,
+            supports_suggestions=False,
+            markup_hides_html_comment=False,
+            markup_supports_collapsible=False,
+        )

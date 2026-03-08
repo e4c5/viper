@@ -27,11 +27,16 @@ def _strip_leading_tags(text: str) -> str:
     return _LEADING_TAGS_RE.sub("", text).lstrip()
 
 
-def finding_to_comment_body(f: FindingV1) -> str:
+def finding_to_comment_body(
+    f: FindingV1,
+    use_collapsible_prompt: bool = True,
+) -> str:
     """
     Format a finding as inline comment body with a [Critical]/[Suggestion]/[Info] prefix.
     Location (path, line, optional end_line) is carried by the runner when posting;
     this returns only the body text.
+    When use_collapsible_prompt is False (e.g. Bitbucket), the agent prompt is
+    formatted as plain text instead of <details>/<summary> to avoid raw tags in the UI.
     """
     severity_key = f.severity.lower()
     label = SEVERITY_LABELS.get(severity_key, f"[{f.severity.title()}]")
@@ -43,15 +48,21 @@ def finding_to_comment_body(f: FindingV1) -> str:
     else:
         main = f"{label} {body}"
 
-    # Optionally append a collapsible block containing an agent fix prompt, when provided.
+    # Optionally append block containing an agent fix prompt, when provided.
     if f.agent_fix_prompt:
-        prompt_block = (
-            "\n\n"
-            "<details>\n"
-            "<summary>Prompt for AI Agents</summary>\n\n"
-            f"{f.agent_fix_prompt}\n"
-            "</details>"
-        )
+        if use_collapsible_prompt:
+            prompt_block = (
+                "\n\n"
+                "<details>\n"
+                "<summary>Prompt for AI Agents</summary>\n\n"
+                f"{f.agent_fix_prompt}\n"
+                "</details>"
+            )
+        else:
+            prompt_block = (
+                "\n\n---\n**Prompt for AI Agents**\n\n"
+                f"{f.agent_fix_prompt}"
+            )
         return main + prompt_block
 
     return main
