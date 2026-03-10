@@ -1,10 +1,31 @@
 """Abstract provider interface for SCM backends (Gitea, GitLab, Bitbucket)."""
 
+import logging
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, Field, model_validator
 
 from code_review.diff.parser import parse_unified_diff
+
+
+def _log_pr_info_warning(
+    logger: logging.Logger,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    exc: Exception,
+) -> None:
+    """Emit a standardised warning when get_pr_info fails and return None.
+
+    Centralised so the identical warning block is not repeated in every provider.
+    """
+    logger.warning(
+        "get_pr_info failed owner=%s repo=%s pr_number=%s: %s",
+        owner,
+        repo,
+        pr_number,
+        exc,
+    )
 
 
 class RateLimitError(Exception):

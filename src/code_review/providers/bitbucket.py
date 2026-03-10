@@ -12,6 +12,7 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    _log_pr_info_warning,
     pr_info_from_api_dict,
 )
 from code_review.providers.safety import truncate_repo_content
@@ -189,13 +190,7 @@ class BitbucketProvider(ProviderInterface):
             data = self._get(path)
             return pr_info_from_api_dict(data, "description") if isinstance(data, dict) else None
         except Exception as e:
-            logger.warning(
-                "get_pr_info failed owner=%s repo=%s pr_number=%s: %s",
-                owner,
-                repo,
-                pr_number,
-                e,
-            )
+            _log_pr_info_warning(logger, owner, repo, pr_number, e)
             return None
 
     def update_pr_description(

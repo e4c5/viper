@@ -15,6 +15,7 @@ from code_review.providers.base import (
     ProviderInterface,
     RateLimitError,
     ReviewComment,
+    _log_pr_info_warning,
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
@@ -230,13 +231,7 @@ class GiteaProvider(ProviderInterface):
             data = self._get(f"/repos/{owner}/{repo}/pulls/{pr_number}")
             return pr_info_from_api_dict(data, "body") if isinstance(data, dict) else None
         except Exception as e:
-            logger.warning(
-                "get_pr_info failed owner=%s repo=%s pr_number=%s: %s",
-                owner,
-                repo,
-                pr_number,
-                e,
-            )
+            _log_pr_info_warning(logger, owner, repo, pr_number, e)
             return None
 
     def update_pr_description(
