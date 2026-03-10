@@ -24,22 +24,18 @@ else
   CONTAINER_SOCKET=""
 fi
 
-if [[ -z "$CONTAINER_RUNTIME" || -z "$CONTAINER_SOCKET" ]]; then
-  if command -v podman &>/dev/null && podman info &>/dev/null; then
-    CONTAINER_RUNTIME=podman
-    CONTAINER_SOCKET="$(podman info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null)" || true
-    if [[ -z "$CONTAINER_SOCKET" || ! -e "$CONTAINER_SOCKET" ]]; then
-      [[ -S /var/run/podman/podman.sock ]] && CONTAINER_SOCKET=/var/run/podman/podman.sock
-      [[ -z "$CONTAINER_SOCKET" && -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock" ]] && CONTAINER_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
-    fi
+if [[ ( -z "$CONTAINER_RUNTIME" || -z "$CONTAINER_SOCKET" ) && command -v podman &>/dev/null && podman info &>/dev/null ]]; then
+  CONTAINER_RUNTIME=podman
+  CONTAINER_SOCKET="$(podman info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null)" || true
+  if [[ -z "$CONTAINER_SOCKET" || ! -e "$CONTAINER_SOCKET" ]]; then
+    [[ -S /var/run/podman/podman.sock ]] && CONTAINER_SOCKET=/var/run/podman/podman.sock
+    [[ -z "$CONTAINER_SOCKET" && -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock" ]] && CONTAINER_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
   fi
 fi
 
-if [[ -z "$CONTAINER_RUNTIME" || -z "$CONTAINER_SOCKET" ]]; then
-  if [[ -e /var/run/docker.sock ]] && command -v docker &>/dev/null && docker info &>/dev/null; then
-    CONTAINER_RUNTIME=docker
-    CONTAINER_SOCKET=/var/run/docker.sock
-  fi
+if [[ ( -z "$CONTAINER_RUNTIME" || -z "$CONTAINER_SOCKET" ) && -e /var/run/docker.sock && command -v docker &>/dev/null && docker info &>/dev/null ]]; then
+  CONTAINER_RUNTIME=docker
+  CONTAINER_SOCKET=/var/run/docker.sock
 fi
 
 # If "docker" is actually podman (e.g. docker symlink), use podman socket
@@ -51,8 +47,8 @@ if [[ "$CONTAINER_RUNTIME" = "docker" ]] && docker info 2>&1 | grep -qi podman; 
 fi
 
 if [[ -z "$CONTAINER_RUNTIME" || -z "$CONTAINER_SOCKET" || ! -e "$CONTAINER_SOCKET" ]]; then
-  echo "ERROR: Could not detect a container runtime and socket."
-  echo "  Install Docker or Podman and ensure the daemon is running, then run this script again."
+  echo "ERROR: Could not detect a container runtime and socket." >&2
+  echo "  Install Docker or Podman and ensure the daemon is running, then run this script again." >&2
   exit 1
 fi
 
