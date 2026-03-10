@@ -13,12 +13,11 @@ _LLM_CONFIG: "LLMConfig | None" = None
 class SCMConfig(BaseSettings):
     """SCM (Source Control) configuration."""
 
-    model_config = SettingsConfigDict(
-        env_prefix="SCM_",
-        extra="ignore",
-        env_file=".env",
-        env_file_encoding="utf-8",
-    )
+    # NOTE: The application intentionally does NOT load .env files automatically.
+    # All configuration must come from the real environment (process env vars,
+    # container/CI settings, etc.). This matches the documented contract in
+    # README/AGENTS: users are expected to `export` or `source` values themselves.
+    model_config = SettingsConfigDict(env_prefix="SCM_", extra="ignore")
 
     provider: Literal["gitea", "github", "gitlab", "bitbucket", "bitbucket_server"] = "gitea"
     url: str = Field(..., description="API base URL (may differ from UI for self-hosted)")
@@ -65,12 +64,8 @@ class SCMConfig(BaseSettings):
 class LLMConfig(BaseSettings):
     """LLM configuration."""
 
-    model_config = SettingsConfigDict(
-        env_prefix="LLM_",
-        extra="ignore",
-        env_file=".env",
-        env_file_encoding="utf-8",
-    )
+    # See note above: we do not auto-load .env; only real env vars are used.
+    model_config = SettingsConfigDict(env_prefix="LLM_", extra="ignore")
 
     provider: Literal["gemini", "openai", "anthropic", "ollama", "vertex"] = "gemini"
     model: str = "gemini-2.5-flash"

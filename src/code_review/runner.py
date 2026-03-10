@@ -724,10 +724,15 @@ class ReviewOrchestrator:
         head_sha: str,
         paths: list[str],
         use_file_by_file: bool,
+        full_diff: str = "",
     ) -> list[FindingV1]:
         """
         Run the agent (file-by-file or single shot), parse response into FindingV1 list.
         Returns all_findings (unfiltered).
+
+        When CODE_REVIEW_LOG_LEVEL=DEBUG, log exactly what we send to the LLM
+        (the user message text) and the raw text we receive back, before any
+        JSON parsing or filtering.
         """
         all_findings: list[FindingV1] = []
         if use_file_by_file and paths:
@@ -740,19 +745,55 @@ class ReviewOrchestrator:
                     f"Then output a JSON array of findings for this file only. Use path \"{file_path}\" in every finding. "
                     "If there are no issues in this file, output exactly []."
                 )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "LLM request (file-by-file) session=%s file=%s prompt=%s",
+                        file_session_id,
+                        file_path,
+                        msg,
+                    )
                 content = types.Content(role="user", parts=[types.Part(text=msg)])
                 response_text = _run_agent_and_collect_response(
                     runner, session_service, file_session_id, content
                 )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "LLM raw response (file-by-file) session=%s: %s",
+                        file_session_id,
+                        response_text,
+                    )
                 all_findings.extend(_findings_from_response(response_text))
         else:
+            # Single-shot mode: include the unified diff directly in the prompt so the
+            # LLM can review the changes even if tool calls are unavailable or flaky.
+            # We only reach this branch when the diff fits within the configured
+            # DIFF_TOKEN_BUDGET_RATIO, so including the full diff is safe.
             msg = f"Review this PR: owner={owner}, repo={repo}, pr_number={pr_number}." + (
                 f" head_sha={head_sha}." if head_sha else ""
             )
+            if full_diff:
+                msg += (
+                    "\n\nHere is the unified diff for this PR:\n"
+                    "```diff\n"
+                    f"{full_diff}\n"
+                    "```"
+                )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "LLM request (single-shot) session=%s prompt=%s",
+                    session_id,
+                    msg,
+                )
             content = types.Content(role="user", parts=[types.Part(text=msg)])
             response_text = _run_agent_and_collect_response(
                 runner, session_service, session_id, content
             )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "LLM raw response (single-shot) session=%s: %s",
+                    session_id,
+                    response_text,
+                )
             all_findings = _findings_from_response(response_text)
         return all_findings
 
@@ -973,22 +1014,28 @@ class ReviewOrchestrator:
             head_sha,
             paths,
             use_file_by_file,
+            full_diff=full_diff,
         )
 
         # Guardrail: only keep findings for files that are actually in the PR diff.
         # LLMs can occasionally emit findings for unrelated paths; we never want to post
         # comments on files outside the reviewed change set.
-        allowed_paths = set(paths)
-        if allowed_paths:
+        # Paths may include prefixes like dst:// or src:// (especially for Bitbucket);
+        # normalize both diff paths and finding paths before comparison so valid findings
+        # are not dropped just because of a prefix difference.
+        if paths:
+            allowed_normalized = {_normalize_path_for_anchor(p) for p in paths}
             filtered_findings: list[FindingV1] = []
             for f in all_findings:
-                if f.path in allowed_paths:
+                norm_path = _normalize_path_for_anchor(f.path or "")
+                if norm_path in allowed_normalized:
                     filtered_findings.append(f)
                 elif logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
-                        "Dropping finding for path not in diff: %s (allowed: %s)",
+                        "Dropping finding for path not in diff: %s (normalized=%s, allowed=%s)",
                         f.path,
-                        sorted(allowed_paths),
+                        norm_path,
+                        sorted(allowed_normalized),
                     )
             all_findings = filtered_findings
 
