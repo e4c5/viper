@@ -59,11 +59,16 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _normalize_path_for_anchor(file_path: str) -> str:
-    """Normalize path like Bitbucket provider (strip dst://, src://) for diff line matching."""
+    """Normalize path like Bitbucket provider (strip dst://, src://, a/, b/) for diff line matching."""
     p = (file_path or "").strip()
     for prefix in ("dst://", "src://"):
         if p.lower().startswith(prefix):
             p = p[len(prefix) :].lstrip("/")
+            break
+    p = p.lstrip("/")
+    for prefix in ("a/", "b/"):
+        if p.startswith(prefix):
+            p = p[len(prefix) :]
             break
     return p.lstrip("/") or file_path or ""
 

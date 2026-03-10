@@ -47,6 +47,8 @@ WEBHOOK_PARAMS_BY_PROVIDER = {
     "bitbucket_server": BITBUCKET_WEBHOOK_PARAMS,
 }
 
+SUPPORTED_SCM_PROVIDERS = {"gitea", "github", "gitlab", "bitbucket_server"}
+
 
 def ensure_playwright() -> None:
     """Ensure Playwright is installed; exit with message if not."""
@@ -107,11 +109,18 @@ def get_repo_and_branch() -> tuple[str, str]:
 
 def require_scm_env() -> tuple[str, str]:
     """Return (SCM_PROVIDER, SCM_URL). Exit if either not set. Use for single-SCM flow only."""
-    scm_provider = os.environ.get("SCM_PROVIDER", "").strip()
+    scm_provider_raw = os.environ.get("SCM_PROVIDER", "").strip()
+    scm_provider = scm_provider_raw.lower()
     scm_url = os.environ.get("SCM_URL", "").strip()
-    if not scm_provider or not scm_url:
+    if not scm_provider_raw or not scm_url:
         print(
             "Single-SCM script requires SCM_PROVIDER and SCM_URL in .env (e.g. SCM_PROVIDER=gitea, SCM_URL=https://gitea.example.com).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if scm_provider not in SUPPORTED_SCM_PROVIDERS:
+        print(
+            f"Invalid SCM_PROVIDER '{scm_provider_raw}'. Supported providers: {', '.join(sorted(SUPPORTED_SCM_PROVIDERS))}.",
             file=sys.stderr,
         )
         sys.exit(1)

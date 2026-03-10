@@ -43,7 +43,7 @@ def main() -> None:
         filter_regex = (
             "^pr:(opened|modified|from_ref_updated)$"
             if scm_provider == "bitbucket_server"
-            else "^(opened|synchronize|synchronized)$"
+            else "^(open|opened|synchronize|synchronized|update|updated)$"
         )
         ui.configure_webhook_trigger(
             job_name="code-review",
