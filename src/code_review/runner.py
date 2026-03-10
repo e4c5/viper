@@ -825,12 +825,6 @@ class ReviewOrchestrator:
                     exc_info=logger.isEnabledFor(logging.DEBUG),
                 )
                 continue
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "LLM raw response (file-by-file) session=%s: %s",
-                    file_session_id,
-                    response_text,
-                )
             all_findings.extend(_findings_from_response(response_text))
         return all_findings
 
@@ -869,12 +863,6 @@ class ReviewOrchestrator:
         response_text = _run_agent_and_collect_response(
             runner, session_service, session_id, content
         )
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "LLM raw response (single-shot) session=%s: %s",
-                session_id,
-                response_text,
-            )
         return _findings_from_response(response_text)
 
     def _attach_fingerprints_and_filter_findings(
