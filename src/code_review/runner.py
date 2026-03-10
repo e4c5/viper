@@ -35,6 +35,26 @@ USER_ID = "reviewer"
 AGENT_VERSION = getattr(code_review, "__version__", "0.1.0")
 logger = logging.getLogger(__name__)
 
+
+def _write_debug_log(
+    hypothesis_id: str, location: str, message: str, data: dict | None = None
+) -> None:
+    """Best-effort NDJSON debug logger for runtime investigation."""
+    try:
+        payload = {
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "timestamp": int(time.time() * 1000),
+        }
+        open(
+            os.path.expanduser("/opt/cursor/logs/debug.log"), "a", encoding="utf-8"
+        ).write(json.dumps(payload) + "\n")
+    except Exception:
+        # Debug logging must never affect review execution.
+        pass
+
 # Suppress expected "non-text parts" warning from google-genai when the model returns
 # tool/function-call parts; we only use text parts in _collect_response_async.
 def _filter_non_text_parts_warning(record: logging.LogRecord) -> bool:
@@ -493,30 +513,201 @@ def _log_run_complete(
     )
 
 
+def _is_retryable_llm_exception(exc: Exception) -> bool:
+    """Best-effort classifier for transient/retryable LLM invocation failures."""
+    retryable_statuses = {408, 429, 500, 502, 503, 504}
+    queue = [exc]
+    seen_ids: set[int] = set()
+    while queue:
+        cur = queue.pop(0)
+        if id(cur) in seen_ids:
+            continue
+        seen_ids.add(id(cur))
+        status_code = getattr(cur, "status_code", None)
+        if status_code is None:
+            response = getattr(cur, "response", None)
+            status_code = getattr(response, "status_code", None) if response is not None else None
+        if isinstance(status_code, int) and status_code in retryable_statuses:
+            return True
+        marker_text = f"{type(cur).__name__}: {cur}".lower()
+        if any(
+            marker in marker_text
+            for marker in (
+                "429",
+                "too many requests",
+                "rate limit",
+                "resource_exhausted",
+                "unavailable",
+                "deadline exceeded",
+                "timeout",
+                "timed out",
+                "temporarily unavailable",
+                "503",
+                "502",
+                "504",
+            )
+        ):
+            return True
+        cause = getattr(cur, "__cause__", None)
+        context = getattr(cur, "__context__", None)
+        if isinstance(cause, Exception):
+            queue.append(cause)
+        if isinstance(context, Exception):
+            queue.append(context)
+    return False
+
+
+def _coerce_max_retries(value) -> int:
+    """Convert a config value to non-negative int retries; fallback to 0."""
+    if not isinstance(value, (int, float, str)):
+        return 0
+    try:
+        return max(0, int(float(value)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coerce_timeout_seconds(value) -> float | None:
+    """Convert a config value to positive timeout seconds; otherwise None."""
+    if not isinstance(value, (int, float, str)):
+        return None
+    try:
+        timeout_val = float(value)
+    except (TypeError, ValueError):
+        return None
+    return timeout_val if timeout_val > 0 else None
+
+
 async def _collect_response_async(
-    runner, session_service, session_id: str, content: types.Content
+    runner,
+    session_service,
+    session_id: str,
+    content: types.Content,
+    *,
+    max_retries: int = 0,
+    timeout_seconds: float | None = None,
 ) -> str:
     """Run agent once via run_async and return concatenated final response text.
 
     When CODE_REVIEW_LOG_LEVEL=DEBUG, log the raw final text we received from the LLM.
     """
-    await session_service.create_session(
-        app_name=APP_NAME,
-        user_id=USER_ID,
-        session_id=session_id,
+    # region agent log
+    _write_debug_log(
+        "D",
+        "runner.py:_collect_response_async",
+        "Collect response start",
+        {"session_id": session_id},
     )
-    parts: list[str] = []
-    async for event in runner.run_async(
-        user_id=USER_ID,
-        session_id=session_id,
-        new_message=content,
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            for part in event.content.parts:
-                # Only use text parts; skip function_call etc. to avoid SDK warning
-                if getattr(part, "text", None):
-                    parts.append(part.text)
-    text = "\n".join(parts)
+    # endregion
+    retry_budget = max(0, int(max_retries or 0))
+    attempt = 0
+    text = ""
+    events_seen = 0
+    ignored_non_final_text_parts = 0
+    final_non_text_parts = 0
+    while True:
+        attempt_session_id = (
+            session_id if attempt == 0 else f"{session_id}-retry-{attempt}"
+        )
+        await session_service.create_session(
+            app_name=APP_NAME,
+            user_id=USER_ID,
+            session_id=attempt_session_id,
+        )
+        parts: list[str] = []
+        non_final_parts: list[str] = []
+        events_seen = 0
+        ignored_non_final_text_parts = 0
+        final_non_text_parts = 0
+        try:
+            async def _consume_run_async() -> None:
+                nonlocal events_seen, ignored_non_final_text_parts, final_non_text_parts
+                async for event in runner.run_async(
+                    user_id=USER_ID,
+                    session_id=attempt_session_id,
+                    new_message=content,
+                ):
+                    events_seen += 1
+                    event_is_final = bool(event.is_final_response())
+                    event_parts = (
+                        list(event.content.parts) if (event.content and event.content.parts) else []
+                    )
+                    text_parts = [p for p in event_parts if getattr(p, "text", None)]
+                    if (not event_is_final) and text_parts:
+                        ignored_non_final_text_parts += len(text_parts)
+                        # region agent log
+                        _write_debug_log(
+                            "A",
+                            "runner.py:_collect_response_async",
+                            "Ignoring non-final text parts",
+                            {
+                                "session_id": attempt_session_id,
+                                "event_index": events_seen,
+                                "ignored_text_parts": len(text_parts),
+                            },
+                        )
+                        # endregion
+                        for part in text_parts:
+                            non_final_parts.append(part.text)
+                    if event_is_final and event_parts and not text_parts:
+                        final_non_text_parts += len(event_parts)
+                        # region agent log
+                        _write_debug_log(
+                            "B",
+                            "runner.py:_collect_response_async",
+                            "Final event had non-text parts only",
+                            {
+                                "session_id": attempt_session_id,
+                                "event_index": events_seen,
+                                "parts_count": len(event_parts),
+                            },
+                        )
+                        # endregion
+                    if event_is_final and text_parts:
+                        for part in text_parts:
+                            parts.append(part.text)
+
+            if timeout_seconds and timeout_seconds > 0:
+                await asyncio.wait_for(_consume_run_async(), timeout=timeout_seconds)
+            else:
+                await _consume_run_async()
+        except Exception as e:
+            retryable = _is_retryable_llm_exception(e)
+            # region agent log
+            _write_debug_log(
+                "C",
+                "runner.py:_collect_response_async",
+                "run_async raised exception",
+                {
+                    "session_id": attempt_session_id,
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                    "retryable": retryable,
+                    "attempt": attempt + 1,
+                    "retry_budget": retry_budget,
+                },
+            )
+            # endregion
+            if retryable and attempt < retry_budget:
+                attempt += 1
+                continue
+            raise
+        text = "\n".join(parts) if parts else "\n".join(non_final_parts)
+        break
+    # region agent log
+    _write_debug_log(
+        "A",
+        "runner.py:_collect_response_async",
+        "Collect response complete",
+        {
+            "session_id": session_id,
+            "events_seen": events_seen,
+            "final_text_len": len(text),
+            "ignored_non_final_text_parts": ignored_non_final_text_parts,
+            "final_non_text_parts": final_non_text_parts,
+        },
+    )
+    # endregion
     if logger.isEnabledFor(logging.DEBUG):
         # Log raw agent output for debugging schema/JSON issues.
         logger.debug("LLM final response for session %s:\n%s", session_id, text)
@@ -528,10 +719,25 @@ async def _collect_response_async(
 
 
 def _run_agent_and_collect_response(
-    runner, session_service, session_id: str, content: types.Content
+    runner,
+    session_service,
+    session_id: str,
+    content: types.Content,
+    *,
+    max_retries: int = 0,
+    timeout_seconds: float | None = None,
 ) -> str:
     """Run agent once and return concatenated final response text (uses async API)."""
-    return asyncio.run(_collect_response_async(runner, session_service, session_id, content))
+    return asyncio.run(
+        _collect_response_async(
+            runner,
+            session_service,
+            session_id,
+            content,
+            max_retries=max_retries,
+            timeout_seconds=timeout_seconds,
+        )
+    )
 
 
 class ReviewOrchestrator:
@@ -723,6 +929,7 @@ class ReviewOrchestrator:
         runner,
         session_service,
         session_id: str,
+        llm_cfg,
         owner: str,
         repo: str,
         pr_number: int,
@@ -743,6 +950,7 @@ class ReviewOrchestrator:
             return self._run_file_by_file_mode(
                 runner,
                 session_service,
+                llm_cfg,
                 owner,
                 repo,
                 pr_number,
@@ -753,6 +961,7 @@ class ReviewOrchestrator:
             runner,
             session_service,
             session_id,
+            llm_cfg,
             owner,
             repo,
             pr_number,
@@ -764,6 +973,7 @@ class ReviewOrchestrator:
         self,
         runner,
         session_service,
+        llm_cfg,
         owner: str,
         repo: str,
         pr_number: int,
@@ -771,6 +981,8 @@ class ReviewOrchestrator:
         paths: list[str],
     ) -> list[FindingV1]:
         all_findings: list[FindingV1] = []
+        max_retries = _coerce_max_retries(getattr(llm_cfg, "max_retries", 0))
+        timeout_seconds = _coerce_timeout_seconds(getattr(llm_cfg, "timeout_seconds", None))
         for file_path in paths:
             file_session_id = f"{owner}/{repo}/pr-{pr_number}/file/{uuid.uuid4().hex[:12]}"
             msg = (
@@ -789,7 +1001,12 @@ class ReviewOrchestrator:
                 )
             content = types.Content(role="user", parts=[types.Part(text=msg)])
             response_text = _run_agent_and_collect_response(
-                runner, session_service, file_session_id, content
+                runner,
+                session_service,
+                file_session_id,
+                content,
+                max_retries=max_retries,
+                timeout_seconds=timeout_seconds,
             )
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
@@ -805,6 +1022,7 @@ class ReviewOrchestrator:
         runner,
         session_service,
         session_id: str,
+        llm_cfg,
         owner: str,
         repo: str,
         pr_number: int,
@@ -831,9 +1049,16 @@ class ReviewOrchestrator:
                 session_id,
                 msg,
             )
+        max_retries = _coerce_max_retries(getattr(llm_cfg, "max_retries", 0))
+        timeout_seconds = _coerce_timeout_seconds(getattr(llm_cfg, "timeout_seconds", None))
         content = types.Content(role="user", parts=[types.Part(text=msg)])
         response_text = _run_agent_and_collect_response(
-            runner, session_service, session_id, content
+            runner,
+            session_service,
+            session_id,
+            content,
+            max_retries=max_retries,
+            timeout_seconds=timeout_seconds,
         )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
@@ -1075,6 +1300,7 @@ class ReviewOrchestrator:
             runner,
             session_service,
             session_id,
+            llm_cfg,
             owner,
             repo,
             pr_number,
@@ -1093,17 +1319,33 @@ class ReviewOrchestrator:
         if paths:
             allowed_normalized = {_normalize_path_for_anchor(p) for p in paths}
             filtered_findings: list[FindingV1] = []
+            dropped_paths: list[str] = []
             for f in all_findings:
                 norm_path = _normalize_path_for_anchor(f.path or "")
                 if norm_path in allowed_normalized:
                     filtered_findings.append(f)
-                elif logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "Dropping finding for path not in diff: %s (normalized=%s, allowed=%s)",
-                        f.path,
-                        norm_path,
-                        sorted(allowed_normalized),
-                    )
+                else:
+                    dropped_paths.append(f.path)
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "Dropping finding for path not in diff: %s (normalized=%s, allowed=%s)",
+                            f.path,
+                            norm_path,
+                            sorted(allowed_normalized),
+                        )
+            # region agent log
+            _write_debug_log(
+                "E",
+                "runner.py:ReviewOrchestrator.run:path_filter",
+                "Path allowlist filtering applied",
+                {
+                    "findings_before": len(all_findings),
+                    "findings_after": len(filtered_findings),
+                    "allowed_paths_count": len(allowed_normalized),
+                    "dropped_paths_sample": dropped_paths[:5],
+                },
+            )
+            # endregion
             all_findings = filtered_findings
 
         to_post = self._attach_fingerprints_and_filter_findings(
