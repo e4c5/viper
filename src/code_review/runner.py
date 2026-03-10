@@ -35,26 +35,6 @@ USER_ID = "reviewer"
 AGENT_VERSION = getattr(code_review, "__version__", "0.1.0")
 logger = logging.getLogger(__name__)
 
-
-def _write_debug_log(
-    hypothesis_id: str, location: str, message: str, data: dict | None = None
-) -> None:
-    """Best-effort NDJSON debug logger for runtime investigation."""
-    try:
-        payload = {
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data or {},
-            "timestamp": int(time.time() * 1000),
-        }
-        open(
-            os.path.expanduser("/opt/cursor/logs/debug.log"), "a", encoding="utf-8"
-        ).write(json.dumps(payload) + "\n")
-    except Exception:
-        # Debug logging must never affect review execution.
-        pass
-
 # Suppress expected "non-text parts" warning from google-genai when the model returns
 # tool/function-call parts; we only use text parts in _collect_response_async.
 def _filter_non_text_parts_warning(record: logging.LogRecord) -> bool:
@@ -591,20 +571,9 @@ async def _collect_response_async(
 
     When CODE_REVIEW_LOG_LEVEL=DEBUG, log the raw final text we received from the LLM.
     """
-    # region agent log
-    _write_debug_log(
-        "D",
-        "runner.py:_collect_response_async",
-        "Collect response start",
-        {"session_id": session_id},
-    )
-    # endregion
     retry_budget = max(0, int(max_retries or 0))
     attempt = 0
     text = ""
-    events_seen = 0
-    ignored_non_final_text_parts = 0
-    final_non_text_parts = 0
     while True:
         attempt_session_id = (
             session_id if attempt == 0 else f"{session_id}-retry-{attempt}"
@@ -616,53 +585,21 @@ async def _collect_response_async(
         )
         parts: list[str] = []
         non_final_parts: list[str] = []
-        events_seen = 0
-        ignored_non_final_text_parts = 0
-        final_non_text_parts = 0
         try:
             async def _consume_run_async() -> None:
-                nonlocal events_seen, ignored_non_final_text_parts, final_non_text_parts
                 async for event in runner.run_async(
                     user_id=USER_ID,
                     session_id=attempt_session_id,
                     new_message=content,
                 ):
-                    events_seen += 1
                     event_is_final = bool(event.is_final_response())
                     event_parts = (
                         list(event.content.parts) if (event.content and event.content.parts) else []
                     )
                     text_parts = [p for p in event_parts if getattr(p, "text", None)]
                     if (not event_is_final) and text_parts:
-                        ignored_non_final_text_parts += len(text_parts)
-                        # region agent log
-                        _write_debug_log(
-                            "A",
-                            "runner.py:_collect_response_async",
-                            "Ignoring non-final text parts",
-                            {
-                                "session_id": attempt_session_id,
-                                "event_index": events_seen,
-                                "ignored_text_parts": len(text_parts),
-                            },
-                        )
-                        # endregion
                         for part in text_parts:
                             non_final_parts.append(part.text)
-                    if event_is_final and event_parts and not text_parts:
-                        final_non_text_parts += len(event_parts)
-                        # region agent log
-                        _write_debug_log(
-                            "B",
-                            "runner.py:_collect_response_async",
-                            "Final event had non-text parts only",
-                            {
-                                "session_id": attempt_session_id,
-                                "event_index": events_seen,
-                                "parts_count": len(event_parts),
-                            },
-                        )
-                        # endregion
                     if event_is_final and text_parts:
                         for part in text_parts:
                             parts.append(part.text)
@@ -673,41 +610,12 @@ async def _collect_response_async(
                 await _consume_run_async()
         except Exception as e:
             retryable = _is_retryable_llm_exception(e)
-            # region agent log
-            _write_debug_log(
-                "C",
-                "runner.py:_collect_response_async",
-                "run_async raised exception",
-                {
-                    "session_id": attempt_session_id,
-                    "error_type": type(e).__name__,
-                    "error": str(e),
-                    "retryable": retryable,
-                    "attempt": attempt + 1,
-                    "retry_budget": retry_budget,
-                },
-            )
-            # endregion
             if retryable and attempt < retry_budget:
                 attempt += 1
                 continue
             raise
         text = "\n".join(parts) if parts else "\n".join(non_final_parts)
         break
-    # region agent log
-    _write_debug_log(
-        "A",
-        "runner.py:_collect_response_async",
-        "Collect response complete",
-        {
-            "session_id": session_id,
-            "events_seen": events_seen,
-            "final_text_len": len(text),
-            "ignored_non_final_text_parts": ignored_non_final_text_parts,
-            "final_non_text_parts": final_non_text_parts,
-        },
-    )
-    # endregion
     if logger.isEnabledFor(logging.DEBUG):
         # Log raw agent output for debugging schema/JSON issues.
         logger.debug("LLM final response for session %s:\n%s", session_id, text)
@@ -1319,33 +1227,17 @@ class ReviewOrchestrator:
         if paths:
             allowed_normalized = {_normalize_path_for_anchor(p) for p in paths}
             filtered_findings: list[FindingV1] = []
-            dropped_paths: list[str] = []
             for f in all_findings:
                 norm_path = _normalize_path_for_anchor(f.path or "")
                 if norm_path in allowed_normalized:
                     filtered_findings.append(f)
-                else:
-                    dropped_paths.append(f.path)
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(
-                            "Dropping finding for path not in diff: %s (normalized=%s, allowed=%s)",
-                            f.path,
-                            norm_path,
-                            sorted(allowed_normalized),
-                        )
-            # region agent log
-            _write_debug_log(
-                "E",
-                "runner.py:ReviewOrchestrator.run:path_filter",
-                "Path allowlist filtering applied",
-                {
-                    "findings_before": len(all_findings),
-                    "findings_after": len(filtered_findings),
-                    "allowed_paths_count": len(allowed_normalized),
-                    "dropped_paths_sample": dropped_paths[:5],
-                },
-            )
-            # endregion
+                elif logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "Dropping finding for path not in diff: %s (normalized=%s, allowed=%s)",
+                        f.path,
+                        norm_path,
+                        sorted(allowed_normalized),
+                    )
             all_findings = filtered_findings
 
         to_post = self._attach_fingerprints_and_filter_findings(
