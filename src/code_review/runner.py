@@ -739,68 +739,109 @@ class ReviewOrchestrator:
         (the user message text) and the raw text we receive back, before any
         JSON parsing or filtering.
         """
-        all_findings: list[FindingV1] = []
         if use_file_by_file and paths:
-            for file_path in paths:
-                file_session_id = f"{owner}/{repo}/pr-{pr_number}/file/{uuid.uuid4().hex[:12]}"
-                msg = (
-                    f"Review exactly one file from this PR. owner={owner}, repo={repo}, pr_number={pr_number}."
-                    + (f" head_sha={head_sha}." if head_sha else " ")
-                    + f" Call get_pr_diff_for_file(owner, repo, pr_number, \"{file_path}\") to get the diff for this file. "
-                    f"Then output a JSON array of findings for this file only. Use path \"{file_path}\" in every finding. "
-                    "If there are no issues in this file, output exactly []."
-                )
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "LLM request (file-by-file) session=%s file=%s prompt=%s",
-                        file_session_id,
-                        file_path,
-                        msg,
-                    )
-                content = types.Content(role="user", parts=[types.Part(text=msg)])
-                response_text = _run_agent_and_collect_response(
-                    runner, session_service, file_session_id, content
-                )
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "LLM raw response (file-by-file) session=%s: %s",
-                        file_session_id,
-                        response_text,
-                    )
-                all_findings.extend(_findings_from_response(response_text))
-        else:
-            # Single-shot mode: include the unified diff directly in the prompt so the
-            # LLM can review the changes even if tool calls are unavailable or flaky.
-            # We only reach this branch when the diff fits within the configured
-            # DIFF_TOKEN_BUDGET_RATIO, so including the full diff is safe.
-            msg = f"Review this PR: owner={owner}, repo={repo}, pr_number={pr_number}." + (
-                f" head_sha={head_sha}." if head_sha else ""
+            return self._run_file_by_file_mode(
+                runner,
+                session_service,
+                owner,
+                repo,
+                pr_number,
+                head_sha,
+                paths,
             )
-            if full_diff:
-                msg += (
-                    "\n\nHere is the unified diff for this PR:\n"
-                    "```diff\n"
-                    f"{full_diff}\n"
-                    "```"
-                )
+        return self._run_single_shot_mode(
+            runner,
+            session_service,
+            session_id,
+            owner,
+            repo,
+            pr_number,
+            head_sha,
+            full_diff,
+        )
+
+    def _run_file_by_file_mode(
+        self,
+        runner,
+        session_service,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        head_sha: str,
+        paths: list[str],
+    ) -> list[FindingV1]:
+        all_findings: list[FindingV1] = []
+        for file_path in paths:
+            file_session_id = f"{owner}/{repo}/pr-{pr_number}/file/{uuid.uuid4().hex[:12]}"
+            msg = (
+                f"Review exactly one file from this PR. owner={owner}, repo={repo}, pr_number={pr_number}."
+                + (f" head_sha={head_sha}." if head_sha else " ")
+                + f' Call get_pr_diff_for_file(owner, repo, pr_number, "{file_path}") to get the diff for this file. '
+                f'Then output a JSON array of findings for this file only. Use path "{file_path}" in every finding. '
+                "If there are no issues in this file, output exactly []."
+            )
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
-                    "LLM request (single-shot) session=%s prompt=%s",
-                    session_id,
+                    "LLM request (file-by-file) session=%s file=%s prompt=%s",
+                    file_session_id,
+                    file_path,
                     msg,
                 )
             content = types.Content(role="user", parts=[types.Part(text=msg)])
             response_text = _run_agent_and_collect_response(
-                runner, session_service, session_id, content
+                runner, session_service, file_session_id, content
             )
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
-                    "LLM raw response (single-shot) session=%s: %s",
-                    session_id,
+                    "LLM raw response (file-by-file) session=%s: %s",
+                    file_session_id,
                     response_text,
                 )
-            all_findings = _findings_from_response(response_text)
+            all_findings.extend(_findings_from_response(response_text))
         return all_findings
+
+    def _run_single_shot_mode(
+        self,
+        runner,
+        session_service,
+        session_id: str,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        head_sha: str,
+        full_diff: str,
+    ) -> list[FindingV1]:
+        # Single-shot mode: include the unified diff directly in the prompt so the
+        # LLM can review the changes even if tool calls are unavailable or flaky.
+        # We only reach this branch when the diff fits within the configured
+        # DIFF_TOKEN_BUDGET_RATIO, so including the full diff is safe.
+        msg = f"Review this PR: owner={owner}, repo={repo}, pr_number={pr_number}." + (
+            f" head_sha={head_sha}." if head_sha else ""
+        )
+        if full_diff:
+            msg += (
+                "\n\nHere is the unified diff for this PR:\n"
+                "```diff\n"
+                f"{full_diff}\n"
+                "```"
+            )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "LLM request (single-shot) session=%s prompt=%s",
+                session_id,
+                msg,
+            )
+        content = types.Content(role="user", parts=[types.Part(text=msg)])
+        response_text = _run_agent_and_collect_response(
+            runner, session_service, session_id, content
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "LLM raw response (single-shot) session=%s: %s",
+                session_id,
+                response_text,
+            )
+        return _findings_from_response(response_text)
 
     def _attach_fingerprints_and_filter_findings(
         self,
@@ -913,6 +954,27 @@ class ReviewOrchestrator:
             duration_seconds=_duration_ms / 1000.0,
         )
         return [f for f, _ in to_post]
+
+    @staticmethod
+    def _print_findings_summary(
+        print_findings: bool, to_post: list[tuple[FindingV1, str]]
+    ) -> None:
+        if not print_findings:
+            return
+        if to_post:
+            for f, _ in to_post:
+                print(f"{f.path}:{f.line} [{f.severity}] {f.get_body()}")
+        else:
+            print("No findings to post.")
+
+    @staticmethod
+    def _log_post_counts(
+        dry_run: bool, planned_count: int, successful_post_count: int
+    ) -> None:
+        if dry_run:
+            logger.info("Dry run: would post %d comment(s)", planned_count)
+        else:
+            logger.info("Posted %d comment(s)", successful_post_count)
 
     def run(self) -> list[FindingV1]:
         """
@@ -1060,12 +1122,7 @@ class ReviewOrchestrator:
             len(to_post),
         )
 
-        if print_findings:
-            if to_post:
-                for f, _ in to_post:
-                    print(f"{f.path}:{f.line} [{f.severity}] {f.get_body()}")
-            else:
-                print("No findings to post.")
+        self._print_findings_summary(print_findings, to_post)
 
         successful_post_count = self._post_findings_and_summary(
             provider,
@@ -1080,10 +1137,7 @@ class ReviewOrchestrator:
             existing,
             full_diff=full_diff,
         )
-        if dry_run:
-            logger.info("Dry run: would post %d comment(s)", len(to_post))
-        else:
-            logger.info("Posted %d comment(s)", successful_post_count)
+        self._log_post_counts(dry_run, len(to_post), successful_post_count)
 
         return self._record_observability_and_build_result(
             trace_id,
