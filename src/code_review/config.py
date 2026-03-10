@@ -13,7 +13,12 @@ _LLM_CONFIG: "LLMConfig | None" = None
 class SCMConfig(BaseSettings):
     """SCM (Source Control) configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="SCM_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="SCM_",
+        extra="ignore",
+        env_file=".env",
+        env_file_encoding="utf-8",
+    )
 
     provider: Literal["gitea", "github", "gitlab", "bitbucket", "bitbucket_server"] = "gitea"
     url: str = Field(..., description="API base URL (may differ from UI for self-hosted)")
@@ -60,7 +65,12 @@ class SCMConfig(BaseSettings):
 class LLMConfig(BaseSettings):
     """LLM configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="LLM_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="LLM_",
+        extra="ignore",
+        env_file=".env",
+        env_file_encoding="utf-8",
+    )
 
     provider: Literal["gemini", "openai", "anthropic", "ollama", "vertex"] = "gemini"
     model: str = "gemini-2.5-flash"

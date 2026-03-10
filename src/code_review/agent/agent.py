@@ -32,6 +32,13 @@ output format.
 Use get_file_lines when you need surrounding context for a specific line
 range.
 
+Valid file paths:
+- Only report findings for files that are actually part of the current PR diff.
+- Treat the paths that appear in the diff (or are passed to you when reviewing a single file)
+  as the complete allowlist of valid paths.
+- Do NOT invent new file paths or report findings on files that are not in the diff.
+- If you are unsure about a path, do not emit a finding for it.
+
 If language detection is ambiguous, call detect_language_context.
 Otherwise use the provided language/framework.
 

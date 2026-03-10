@@ -1,6 +1,7 @@
 """Bitbucket Server / Data Center REST API 1.0 (project key = owner, repo slug = repo)."""
 
 from typing import Any
+import logging
 
 import httpx
 
@@ -15,6 +16,8 @@ from code_review.providers.base import (
     pr_info_from_api_dict,
 )
 from code_review.providers.safety import truncate_repo_content
+
+logger = logging.getLogger("code_review")
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 CONTENT_TYPE_JSON = "application/json"
@@ -31,6 +34,10 @@ class BitbucketServerProvider(ProviderInterface):
         self._base_url = base_url.rstrip("/")
         self._token = token
         self._timeout = timeout
+        # Cache (owner, repo, ref, path) combinations that returned 404 from the raw API
+        # so we don't hammer Bitbucket or spam logs when the LLM repeatedly asks for
+        # content of a file that doesn't exist at this ref (e.g. deleted/renamed files).
+        self._missing_files: set[tuple[str, str, str, str]] = set()
 
     def _headers(self) -> dict[str, str]:
         if not self._token:
@@ -82,8 +89,27 @@ class BitbucketServerProvider(ProviderInterface):
 
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
         """Return file content at ref (raw endpoint with at=ref)."""
+        cache_key = (owner, repo, str(ref), path)
+        if cache_key in self._missing_files:
+            return ""
         url = self._path(owner, repo, "raw", path.lstrip("/"))
-        raw = self._get_raw_bytes(url, params={"at": ref})
+        try:
+            raw = self._get_raw_bytes(url, params={"at": ref})
+        except httpx.HTTPStatusError as e:
+            # Treat 404 as "file not present at this ref" instead of failing the whole run.
+            # This can happen for renamed/deleted paths or when diff paths don't exist at `ref`.
+            if e.response is not None and e.response.status_code == 404:
+                if cache_key not in self._missing_files:
+                    self._missing_files.add(cache_key)
+                    logger.warning(
+                        "get_file_content 404 for path=%s owner=%s repo=%s ref=%s (Bitbucket raw API)",
+                        path,
+                        owner,
+                        repo,
+                        ref,
+                    )
+                return ""
+            raise
         text = raw.decode("utf-8", errors="replace")
         return truncate_repo_content(text, max_bytes=MAX_REPO_FILE_BYTES)
 

@@ -448,7 +448,16 @@ def _findings_from_response(response_text: str) -> list[FindingV1]:
             if "anchor" in item and "fingerprint_hint" not in item:
                 item = {**item, "fingerprint_hint": item.get("anchor")}
             findings.append(FindingV1.model_validate(item))
-        except Exception:
+        except Exception as e:
+            # Be tolerant of partial/malformed items, but surface details at DEBUG level
+            # so it's clear we're skipping something the model tried to return.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Skipping invalid finding item from LLM response: %r (error: %s)",
+                    item,
+                    e,
+                    exc_info=True,
+                )
             continue
     return findings
 
@@ -482,7 +491,10 @@ def _log_run_complete(
 async def _collect_response_async(
     runner, session_service, session_id: str, content: types.Content
 ) -> str:
-    """Run agent once via run_async and return concatenated final response text."""
+    """Run agent once via run_async and return concatenated final response text.
+
+    When CODE_REVIEW_LOG_LEVEL=DEBUG, log the raw final text we received from the LLM.
+    """
     await session_service.create_session(
         app_name=APP_NAME,
         user_id=USER_ID,
@@ -499,7 +511,15 @@ async def _collect_response_async(
                 # Only use text parts; skip function_call etc. to avoid SDK warning
                 if getattr(part, "text", None):
                     parts.append(part.text)
-    return "\n".join(parts)
+    text = "\n".join(parts)
+    if logger.isEnabledFor(logging.DEBUG):
+        # Log raw agent output for debugging schema/JSON issues.
+        logger.debug("LLM final response for session %s:\n%s", session_id, text)
+    # Optional: also echo raw response to stdout when explicitly requested.
+    # This is controlled by CODE_REVIEW_PRINT_RAW_RESPONSE=1 for ad-hoc debugging.
+    if os.getenv("CODE_REVIEW_PRINT_RAW_RESPONSE", "").strip() in ("1", "true", "TRUE"):
+        print(f"RAW LLM RESPONSE (session={session_id}):\n{text}")
+    return text
 
 
 def _run_agent_and_collect_response(
@@ -955,6 +975,23 @@ class ReviewOrchestrator:
             use_file_by_file,
         )
 
+        # Guardrail: only keep findings for files that are actually in the PR diff.
+        # LLMs can occasionally emit findings for unrelated paths; we never want to post
+        # comments on files outside the reviewed change set.
+        allowed_paths = set(paths)
+        if allowed_paths:
+            filtered_findings: list[FindingV1] = []
+            for f in all_findings:
+                if f.path in allowed_paths:
+                    filtered_findings.append(f)
+                elif logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "Dropping finding for path not in diff: %s (allowed: %s)",
+                        f.path,
+                        sorted(allowed_paths),
+                    )
+            all_findings = filtered_findings
+
         to_post = self._attach_fingerprints_and_filter_findings(
             all_findings,
             provider,
@@ -972,8 +1009,11 @@ class ReviewOrchestrator:
         )
 
         if print_findings:
-            for f, _ in to_post:
-                print(f"{f.path}:{f.line} [{f.severity}] {f.get_body()}")
+            if to_post:
+                for f, _ in to_post:
+                    print(f"{f.path}:{f.line} [{f.severity}] {f.get_body()}")
+            else:
+                print("No findings to post.")
 
         successful_post_count = self._post_findings_and_summary(
             provider,
