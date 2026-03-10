@@ -9,6 +9,8 @@ import re
 import time
 import uuid
 from collections import Counter
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 from google.genai import types
 
@@ -537,6 +539,63 @@ def _is_retryable_llm_exception(exc: Exception) -> bool:
     return False
 
 
+def _extract_retry_after_seconds(exc: Exception) -> float | None:
+    """Extract Retry-After delay from nested exception response headers if present."""
+    queue = [exc]
+    seen_ids: set[int] = set()
+    while queue:
+        cur = queue.pop(0)
+        if id(cur) in seen_ids:
+            continue
+        seen_ids.add(id(cur))
+        response = getattr(cur, "response", None)
+        headers = getattr(response, "headers", None) if response is not None else None
+        retry_after_val = None
+        if headers:
+            try:
+                retry_after_val = headers.get("retry-after")
+            except Exception:
+                retry_after_val = None
+        if retry_after_val:
+            raw = str(retry_after_val).strip()
+            if raw:
+                try:
+                    secs = float(raw)
+                    if secs > 0:
+                        return secs
+                except ValueError:
+                    try:
+                        target = parsedate_to_datetime(raw)
+                        if target.tzinfo is None:
+                            target = target.replace(tzinfo=timezone.utc)
+                        delta = (target - datetime.now(timezone.utc)).total_seconds()
+                        if delta > 0:
+                            return delta
+                    except Exception:
+                        pass
+        cause = getattr(cur, "__cause__", None)
+        context = getattr(cur, "__context__", None)
+        if isinstance(cause, Exception):
+            queue.append(cause)
+        if isinstance(context, Exception):
+            queue.append(context)
+    return None
+
+
+def _compute_retry_delay_seconds(exc: Exception, retry_number: int) -> float:
+    """
+    Compute retry delay in seconds.
+
+    - Prefer server-provided Retry-After when available.
+    - Otherwise use exponential backoff: 1s, 2s, 4s, ... capped at 30s.
+    """
+    retry_after = _extract_retry_after_seconds(exc)
+    if retry_after is not None:
+        return min(60.0, max(0.5, retry_after))
+    backoff = 2 ** max(0, retry_number - 1)
+    return min(30.0, float(backoff))
+
+
 def _coerce_max_retries(value) -> int:
     """Convert a config value to non-negative int retries; fallback to 0."""
     if not isinstance(value, (int, float, str)):
@@ -611,6 +670,16 @@ async def _collect_response_async(
         except Exception as e:
             retryable = _is_retryable_llm_exception(e)
             if retryable and attempt < retry_budget:
+                next_retry_number = attempt + 1
+                delay_seconds = _compute_retry_delay_seconds(e, next_retry_number)
+                logger.warning(
+                    "Transient LLM error; retrying in %.2fs (retry %d/%d): %s",
+                    delay_seconds,
+                    next_retry_number,
+                    retry_budget,
+                    e,
+                )
+                await asyncio.sleep(delay_seconds)
                 attempt += 1
                 continue
             raise

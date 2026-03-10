@@ -1,14 +1,19 @@
 """Targeted reproductions for LLM response-stream regressions in runner."""
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from google.genai import types
 
 from tests.conftest import runner_run_async_returning
 from code_review.providers.base import FileInfo
-from code_review.runner import _collect_response_async, _findings_from_response, run_review
+from code_review.runner import (
+    _collect_response_async,
+    _compute_retry_delay_seconds,
+    _findings_from_response,
+    run_review,
+)
 
 
 class _SessionServiceStub:
@@ -111,10 +116,14 @@ def test_run_review_retries_run_async_rate_limit_and_recovers(
     mock_runner = MagicMock()
     mock_runner.run_async = _run_async
 
-    with patch("google.adk.runners.Runner", return_value=mock_runner):
+    sleep_mock = AsyncMock()
+    with patch("google.adk.runners.Runner", return_value=mock_runner), patch(
+        "code_review.runner.asyncio.sleep", new=sleep_mock
+    ):
         result = run_review("o", "r", 1, head_sha="abc123", dry_run=True)
 
     assert call_count["count"] == 2
+    sleep_mock.assert_awaited_once()
     assert len(result) == 1
     assert result[0].line == 2
 
@@ -162,8 +171,25 @@ def test_run_review_raises_after_retry_budget_exhausted(
     mock_runner = MagicMock()
     mock_runner.run_async = _run_async
 
-    with patch("google.adk.runners.Runner", return_value=mock_runner):
+    sleep_mock = AsyncMock()
+    with patch("google.adk.runners.Runner", return_value=mock_runner), patch(
+        "code_review.runner.asyncio.sleep", new=sleep_mock
+    ):
         with pytest.raises(RuntimeError, match="429 Too Many Requests"):
             run_review("o", "r", 1, head_sha="abc123", dry_run=True)
 
     assert call_count["count"] == 2
+    sleep_mock.assert_awaited_once()
+
+
+def test_compute_retry_delay_uses_retry_after_header():
+    """Retry-After header is honored instead of immediate retry."""
+
+    class _RateLimitError(Exception):
+        pass
+
+    err = _RateLimitError("429 Too Many Requests")
+    err.response = MagicMock(headers={"retry-after": "3"})
+
+    delay = _compute_retry_delay_seconds(err, retry_number=1)
+    assert delay == 3.0
