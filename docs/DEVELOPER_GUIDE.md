@@ -258,7 +258,7 @@ For Bitbucket Data Center webhooks, `SCM_OWNER` is typically set from `$.pullReq
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `LLM_PROVIDER` | No (default: gemini) | `gemini` \| `openai` \| `anthropic` \| `ollama` \| `vertex` |
+| `LLM_PROVIDER` | No (default: gemini) | `gemini` \| `openai` \| `anthropic` \| `ollama` \| `vertex` \| `openrouter` |
 | `LLM_MODEL` | No | Model name (e.g. `gemini-2.5-flash`) |
 | `LLM_CONTEXT_WINDOW` | No | Context size in tokens (default 128000) |
 | `LLM_MAX_OUTPUT_TOKENS` | No | Max output tokens (default 4096) |
@@ -270,7 +270,7 @@ For Bitbucket Data Center webhooks, `SCM_OWNER` is typically set from `$.pullReq
 > **Note (timeouts & retries)**  
 > The current Google ADK Python APIs used by this project do not yet expose a straightforward way to wire `LLM_TIMEOUT_SECONDS` and `LLM_MAX_RETRIES` through to the underlying LLM client. These fields are therefore **configuration-only** for now and reserved for future use, as described in the Plan’s Phase 1 “Timeouts + retry” section.
 
-Provider-specific keys (used by ADK/LiteLLM, not by `config.py`): `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`; for Ollama, `OLLAMA_API_BASE` (default `http://localhost:11434`).
+Provider-specific keys (used by ADK/LiteLLM, not by `config.py`): `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`; for Ollama, `OLLAMA_API_BASE` (default `http://localhost:11434`).
 
 ### 6.3 Logging
 

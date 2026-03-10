@@ -9,21 +9,21 @@ def get_configured_model() -> Any:
     """
     Return the configured LLM instance for ADK.
     Reads LLM_PROVIDER and LLM_MODEL from env/config.
-    Uses LiteLLM for OpenAI/Anthropic/Ollama; string for Gemini (ADK registry).
+    Uses LiteLLM for OpenAI/Anthropic/Ollama/OpenRouter; string for Gemini/Vertex (ADK registry).
     """
     config = get_llm_config()
 
-    if config.provider == "gemini":
+    if config.provider in {"gemini", "vertex"}:
         return config.model
-    if config.provider == "vertex":
-        return config.model
-    # Use LiteLLM for OpenAI, Anthropic, Ollama
+    # Use LiteLLM for OpenAI, Anthropic, Ollama, OpenRouter
     if config.provider == "openai":
         litellm_model = f"openai/{config.model}"
     elif config.provider == "anthropic":
         litellm_model = f"anthropic/{config.model}"
     elif config.provider == "ollama":
         litellm_model = f"ollama_chat/{config.model}"
+    elif config.provider == "openrouter":
+        litellm_model = f"openrouter/{config.model}"
     else:
         litellm_model = config.model
 

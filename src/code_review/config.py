@@ -67,7 +67,9 @@ class LLMConfig(BaseSettings):
     # See note above: we do not auto-load .env; only real env vars are used.
     model_config = SettingsConfigDict(env_prefix="LLM_", extra="ignore")
 
-    provider: Literal["gemini", "openai", "anthropic", "ollama", "vertex"] = "gemini"
+    provider: Literal[
+        "gemini", "openai", "anthropic", "ollama", "vertex", "openrouter"
+    ] = "gemini"
     model: str = "gemini-2.5-flash"
     context_window: int = Field(
         default=128_000,
