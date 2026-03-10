@@ -26,7 +26,7 @@ from code_review.diff.parser import iter_new_lines
 from code_review.formatters.comment import finding_to_comment_body
 from code_review.models import get_context_window
 from code_review.providers import get_provider
-from code_review.providers.base import InlineComment
+from code_review.providers.base import InlineComment, RateLimitError
 from code_review.schemas.findings import FindingV1
 from code_review.standards import detect_from_paths, get_review_standards
 
@@ -356,7 +356,15 @@ def _post_inline_comments_with_fallback(
                 e,
             )
         return count
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "post_review_comments (batch) failed owner=%s repo=%s pr_number=%s: %s; "
+            "falling back to per-comment posting",
+            owner,
+            repo,
+            pr_number,
+            e,
+        )
         return _post_comments_one_by_one(
             provider, owner, repo, pr_number, head_sha, comments
         )
@@ -386,7 +394,17 @@ def _post_comments_one_by_one(
                 head_sha=head_sha,
             )
             count += 1
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "post_review_comment failed owner=%s repo=%s pr_number=%s path=%s line=%s: %s; "
+                "falling back to PR summary comment",
+                owner,
+                repo,
+                pr_number,
+                c.path,
+                c.line,
+                e,
+            )
             summary_body = f"**{c.path}:{c.line}**\n\n{c.body}"
             try:
                 provider.post_pr_summary_comment(
@@ -788,9 +806,25 @@ class ReviewOrchestrator:
                     msg,
                 )
             content = types.Content(role="user", parts=[types.Part(text=msg)])
-            response_text = _run_agent_and_collect_response(
-                runner, session_service, file_session_id, content
-            )
+            try:
+                response_text = _run_agent_and_collect_response(
+                    runner, session_service, file_session_id, content
+                )
+            except RateLimitError as e:
+                logger.warning(
+                    "Rate limit hit while reviewing file=%s (skipping): %s",
+                    file_path,
+                    e,
+                )
+                continue
+            except Exception as e:
+                logger.warning(
+                    "Error reviewing file=%s (skipping): %s",
+                    file_path,
+                    e,
+                    exc_info=logger.isEnabledFor(logging.DEBUG),
+                )
+                continue
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     "LLM raw response (file-by-file) session=%s: %s",

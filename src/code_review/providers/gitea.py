@@ -1,5 +1,6 @@
 """Gitea API provider."""
 
+import logging
 import time
 from typing import Any
 
@@ -12,11 +13,14 @@ from code_review.providers.base import (
     PRInfo,
     ProviderCapabilities,
     ProviderInterface,
+    RateLimitError,
     ReviewComment,
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
 from code_review.providers.safety import truncate_repo_content
+
+logger = logging.getLogger(__name__)
 
 
 class GiteaProvider(ProviderInterface):
@@ -33,7 +37,7 @@ class GiteaProvider(ProviderInterface):
             "Accept": "application/json",
         }
 
-    _RETRY_STATUSES = (429, 502, 503, 504)
+    _RETRY_STATUSES = (502, 503, 504)
     _RETRY_DELAY_SECONDS = 1.0
 
     def _request_with_retry(
@@ -44,9 +48,18 @@ class GiteaProvider(ProviderInterface):
         max_retries: int = 1,
         **kwargs: Any,
     ) -> httpx.Response:
-        """Perform request with one retry on 429/5xx."""
+        """Perform request with one retry on transient server errors (502, 503, 504).
+
+        Rate limit errors (429) are not retried; a RateLimitError is raised
+        immediately so callers can skip to the next task rather than making
+        the rate limit situation worse.
+        """
         with httpx.Client(timeout=self._timeout) as client:
             r = client.request(method, url, headers=self._headers(), **kwargs)
+            if r.status_code == 429:
+                raise RateLimitError(
+                    f"Rate limit exceeded (HTTP 429) for {method} {url}: {r.text}"
+                )
             if r.status_code in self._RETRY_STATUSES and max_retries > 0:
                 time.sleep(self._RETRY_DELAY_SECONDS)
                 r = client.request(method, url, headers=self._headers(), **kwargs)
@@ -216,7 +229,14 @@ class GiteaProvider(ProviderInterface):
         try:
             data = self._get(f"/repos/{owner}/{repo}/pulls/{pr_number}")
             return pr_info_from_api_dict(data, "body") if isinstance(data, dict) else None
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "get_pr_info failed owner=%s repo=%s pr_number=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
             return None
 
     def update_pr_description(

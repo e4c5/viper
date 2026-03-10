@@ -7,6 +7,15 @@ from pydantic import BaseModel, Field, model_validator
 from code_review.diff.parser import parse_unified_diff
 
 
+class RateLimitError(Exception):
+    """Raised when the SCM API returns a 429 Too Many Requests response.
+
+    This is a known error; callers should skip to the next task rather than
+    retrying, because retrying a rate-limited request will only worsen the
+    situation.
+    """
+
+
 class ProviderCapabilities(BaseModel):
     """
     Provider capability flags for branching behavior.

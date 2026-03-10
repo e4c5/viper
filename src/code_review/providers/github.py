@@ -1,6 +1,7 @@
 """GitHub API provider (for local testing without Gitea)."""
 
 import base64
+import logging
 from typing import Any
 
 import httpx
@@ -19,6 +20,7 @@ from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 DEFAULT_BASE_URL = "https://api.github.com"
+logger = logging.getLogger(__name__)
 
 
 class GitHubProvider(ProviderInterface):
@@ -160,7 +162,14 @@ class GitHubProvider(ProviderInterface):
         try:
             data = self._get(f"/repos/{owner}/{repo}/pulls/{pr_number}")
             return pr_info_from_api_dict(data, "body") if isinstance(data, dict) else None
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "get_pr_info failed owner=%s repo=%s pr_number=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
             return None
 
     def update_pr_description(

@@ -1,5 +1,6 @@
 """Bitbucket Cloud API provider (workspace = owner, repo_slug = repo)."""
 
+import logging
 from typing import Any
 
 import httpx
@@ -17,6 +18,7 @@ from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 DEFAULT_BASE_URL = "https://api.bitbucket.org/2.0"
+logger = logging.getLogger(__name__)
 
 
 class BitbucketProvider(ProviderInterface):
@@ -186,7 +188,14 @@ class BitbucketProvider(ProviderInterface):
             path = self._path(owner, repo, "pullrequests", str(pr_number))
             data = self._get(path)
             return pr_info_from_api_dict(data, "description") if isinstance(data, dict) else None
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "get_pr_info failed owner=%s repo=%s pr_number=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
             return None
 
     def update_pr_description(

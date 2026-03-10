@@ -151,7 +151,14 @@ class BitbucketServerProvider(ProviderInterface):
             from_id = (from_ref.get("latestCommit") or {}).get("id") or from_ref.get("id")
             to_id = (to_ref.get("latestCommit") or {}).get("id") or to_ref.get("id")
             return (from_id, to_id)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "_get_pr_diff_refs failed owner=%s repo=%s pr_number=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
             return (None, None)
 
     def post_review_comments(
@@ -259,7 +266,14 @@ class BitbucketServerProvider(ProviderInterface):
             title = data.get("title", "") or ""
             description = data.get("description", "") or ""
             return PRInfo(title=title, labels=[], description=description)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "get_pr_info failed owner=%s repo=%s pr_number=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
             return None
 
     def update_pr_description(
