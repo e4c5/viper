@@ -19,13 +19,13 @@ from code_review.providers.base import FileInfo
 from code_review.runner import _diff_visible_new_lines, _normalize_path_for_anchor
 from tests.conftest import runner_run_async_returning
 
-# A minimal unified diff that changes only lines 10-12 of foo.py.
-# Context lines 8, 9, 13, 14 are also visible; line 1 and line 99 are NOT.
+# A minimal unified diff that changes only lines 10-11 of foo.py.
+# Context lines 8, 9, 12, 13 are also visible; line 1 and line 99 are NOT.
 SAMPLE_DIFF = """\
 diff --git a/foo.py b/foo.py
 --- a/foo.py
 +++ b/foo.py
-@@ -8,7 +8,7 @@
+@@ -8,5 +8,6 @@
  context_line_8
  context_line_9
 -old_line_10

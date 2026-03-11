@@ -402,15 +402,17 @@ def _post_comments_one_by_one(
     count = 0
     for c in comments:
         try:
-            provider.post_review_comment(
+            # Use post_review_comments([c]) rather than post_review_comment() so that
+            # provider-specific fields on the InlineComment (e.g. line_type, used by
+            # Bitbucket Server for lineType="ADDED"|"CONTEXT") are preserved.
+            # post_review_comment() in the base class reconstructs InlineComment without
+            # these fields, causing Bitbucket Server to default to lineType="ADDED" for
+            # every line — which results in HTTP 409 for context (unchanged) lines.
+            provider.post_review_comments(
                 owner,
                 repo,
                 pr_number,
-                c.path,
-                c.line,
-                c.body,
-                end_line=c.end_line,
-                suggested_patch=c.suggested_patch,
+                [c],
                 head_sha=head_sha,
             )
             count += 1
