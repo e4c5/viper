@@ -22,7 +22,7 @@ You are a code review agent. You will receive PR details
 
 When reviewing the full PR, the unified diff will already be included in the user
 message between triple-backtick diff fences. Use it directly — do NOT call any tool
-to re-fetch the full diff.
+to re-fetch the full diff.  No tools are available in this mode.
 
 When asked to review a specific file only, call get_pr_diff_for_file(owner, repo,
 pr_number, path) with that exact path to fetch that file's diff.
@@ -77,6 +77,8 @@ def create_review_agent(
     provider: ProviderInterface,
     review_standards: str = "",
     findings_only: bool = True,
+    *,
+    disable_tools: bool = False,
 ) -> Agent:
     """Create the code review LlmAgent in findings-only mode.
 
@@ -84,6 +86,12 @@ def create_review_agent(
     existing comments, applying idempotency/ignore logic, and posting comments.
 
     The findings_only parameter is retained for backwards compatibility but has no effect.
+
+    Pass disable_tools=True for single-shot mode: the full diff is already embedded in
+    the user message so the agent needs no tools.  Without this, the agent may call
+    get_pr_diff_for_file / get_file_content for every file, which causes triangular token
+    accumulation (each LLM turn re-bills all prior context) and leads to multi-million
+    token usage on large PRs.
     """
     from google.adk.agents import Agent
     from google.genai import types
@@ -94,13 +102,14 @@ def create_review_agent(
         max_output_tokens=llm_cfg.max_output_tokens,
     )
 
-    tools = create_findings_only_tools(provider)
     instruction = FINDINGS_ONLY_INSTRUCTION
-    # Debug mode: disable tool calls when LLM_DISABLE_TOOL_CALLS is set.
-    # This constructs the Agent without function tools so tests can exercise
-    # runner logic without invoking SCM-backed tools.
-    if getattr(llm_cfg, "disable_tool_calls", False):
+    # Disable tools when:
+    # 1. Explicitly requested via disable_tools=True (single-shot mode: diff is in the message)
+    # 2. LLM_DISABLE_TOOL_CALLS env var is set (debug/test override)
+    if disable_tools or getattr(llm_cfg, "disable_tool_calls", False):
         tools = []
+    else:
+        tools = create_findings_only_tools(provider)
     if review_standards:
         instruction = instruction.rstrip() + "\n\n" + review_standards
 

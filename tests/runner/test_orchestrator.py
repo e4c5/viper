@@ -352,7 +352,8 @@ def test_detect_languages_for_files_returns_detected_and_review_standards():
 def test_create_agent_and_runner_returns_session_id_service_runner(mock_create_agent):
     """_create_agent_and_runner returns (session_id, session_service, runner).
 
-    Called with findings_only=True.
+    Called with findings_only=True.  The default (use_file_by_file=False) means
+    single-shot mode so disable_tools=True is passed to create_review_agent.
     """
     mock_agent = MagicMock()
     mock_create_agent.return_value = mock_agent
@@ -373,7 +374,9 @@ def test_create_agent_and_runner_returns_session_id_service_runner(mock_create_a
             provider, review_standards, "o", "r", 42
         )
 
-    mock_create_agent.assert_called_once_with(provider, review_standards, findings_only=True)
+    mock_create_agent.assert_called_once_with(
+        provider, review_standards, findings_only=True, disable_tools=True
+    )
     assert session_id.startswith("o/r/pr-42/")
     assert len(session_id) > len("o/r/pr-42/")
     assert session_service is mock_svc

@@ -717,16 +717,35 @@ class ReviewOrchestrator:
         return (detected, review_standards)
 
     def _create_agent_and_runner(
-        self, provider, review_standards: str, owner: str, repo: str, pr_number: int
+        self,
+        provider,
+        review_standards: str,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        *,
+        use_file_by_file: bool = False,
     ):
         """
         Build the findings-only agent, session service, and ADK Runner.
         Returns (session_id, session_service, runner).
+
+        In single-shot mode (use_file_by_file=False) tools are disabled: the full diff
+        is already embedded in the user message, so there is nothing to fetch.  Allowing
+        tools in single-shot mode causes the LLM to make per-file tool calls whose
+        responses accumulate in the session history — every subsequent LLM turn re-bills
+        all prior context, creating triangular token growth that reaches millions of tokens
+        on large PRs with a wide context window.
         """
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
 
-        agent = create_review_agent(provider, review_standards, findings_only=True)
+        agent = create_review_agent(
+            provider,
+            review_standards,
+            findings_only=True,
+            disable_tools=not use_file_by_file,
+        )
         session_id = f"{owner}/{repo}/pr-{pr_number}/{uuid.uuid4().hex[:12]}"
         session_service = InMemorySessionService()
         runner = Runner(
@@ -1082,16 +1101,17 @@ class ReviewOrchestrator:
             )
         _, review_standards = self._detect_languages_for_files(paths)
 
-        session_id, session_service, runner = self._create_agent_and_runner(
-            provider, review_standards, owner, repo, pr_number
-        )
-
         diff_budget = int(get_context_window() * DIFF_TOKEN_BUDGET_RATIO)
         use_file_by_file = _estimate_tokens(full_diff) > diff_budget
         if use_file_by_file:
             logger.info("Running agent on %d file(s) (file-by-file)", len(paths))
         else:
             logger.info("Running agent (single shot)")
+
+        session_id, session_service, runner = self._create_agent_and_runner(
+            provider, review_standards, owner, repo, pr_number,
+            use_file_by_file=use_file_by_file
+        )
 
         all_findings = self._run_agent_and_collect_findings(
             runner,
