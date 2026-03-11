@@ -128,17 +128,28 @@ class BitbucketProvider(ProviderInterface):
         head_sha: str = "",
     ) -> None:
         """Post inline comments (Bitbucket Cloud: content.raw + inline.from/to/path).
-        Path is normalized so it matches the diff and comments appear on the file diff view."""
+        Path is normalized so it matches the diff and comments appear on the file diff view.
+
+        For single-line comments `from` is omitted (null) per the Bitbucket Cloud API
+        spec — setting `from` equal to `to` is treated as a zero-length range and may
+        cause the API to reject the comment or display it outside the diff view.
+        `from` is only set for genuine multi-line range comments (end_line != line).
+        """
         path = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
         for c in comments:
             anchor_path = self._anchor_path_for_diff(c.path)
+            end = c.end_line if c.end_line is not None else c.line
+            inline: dict[str, Any] = {
+                "path": anchor_path,
+                "to": end,
+            }
+            # Only set 'from' for genuine multi-line range comments.
+            # For single-line comments, omitting 'from' (null) is the correct API form.
+            if c.end_line is not None and c.end_line != c.line:
+                inline["from"] = c.line
             payload: dict[str, Any] = {
                 "content": {"raw": c.body},
-                "inline": {
-                    "path": anchor_path,
-                    "from": c.line,
-                    "to": c.end_line if c.end_line is not None else c.line,
-                },
+                "inline": inline,
             }
             self._post(path, payload)
 

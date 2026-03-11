@@ -22,7 +22,7 @@ from code_review.diff.fingerprint import (
     parse_marker_from_comment_body,
     surrounding_content_hash,
 )
-from code_review.diff.parser import iter_new_lines
+from code_review.diff.parser import iter_new_lines, parse_unified_diff
 from code_review.formatters.comment import finding_to_comment_body
 from code_review.models import get_context_window
 from code_review.providers import get_provider
@@ -78,6 +78,26 @@ def _added_lines_in_diff(diff_text: str) -> set[tuple[str, int]]:
     out: set[tuple[str, int]] = set()
     for path, new_ln, _ in iter_new_lines(diff_text):
         out.add((_normalize_path_for_anchor(path), new_ln))
+    return out
+
+
+def _diff_visible_new_lines(diff_text: str) -> set[tuple[str, int]]:
+    """Set of (normalized_path, new_line) for every line visible in the new-file diff.
+
+    Includes both ADDED ('+' prefix) and CONTEXT (' ' prefix) lines — any line
+    shown in the diff's new-file view that an SCM can anchor an inline comment to.
+    Removed ('-' prefix) lines are excluded because they don't appear in the new-file view.
+
+    Used as a guardrail: findings for lines outside this set cannot be placed inline
+    and would appear only as PR-level activity comments on Bitbucket Cloud (and are
+    rejected by GitHub/Gitea position-based APIs).
+    """
+    out: set[tuple[str, int]] = set()
+    for hunk in parse_unified_diff(diff_text):
+        norm_path = _normalize_path_for_anchor(hunk.path)
+        for _content, _old_ln, new_ln in hunk.lines:
+            if new_ln is not None:  # ADDED (old_ln=None) and CONTEXT (old_ln!=None)
+                out.add((norm_path, new_ln))
     return out
 
 
@@ -1157,6 +1177,29 @@ class ReviewOrchestrator:
                         sorted(allowed_normalized),
                     )
             all_findings = filtered_findings
+
+        # Guardrail: only keep findings for lines that are actually visible in the diff.
+        # Comments on lines outside diff hunks cannot be placed inline: Bitbucket Cloud
+        # rejects them (causing fallback to PR-level activity comments) and GitHub/Gitea
+        # reject them via position-based APIs.  In single-shot mode the LLM receives the
+        # full multi-file diff and may report lines that are in the file but outside any
+        # hunk (e.g. unchanged code far from the changed region).  Filtering here ensures
+        # every posted comment appears inline in the diff view.
+        if full_diff:
+            visible_lines = _diff_visible_new_lines(full_diff)
+            if visible_lines:
+                line_filtered: list[FindingV1] = []
+                for f in all_findings:
+                    norm_path = _normalize_path_for_anchor(f.path or "")
+                    if (norm_path, f.line) in visible_lines:
+                        line_filtered.append(f)
+                    else:
+                        logger.debug(
+                            "Dropping finding for line not visible in diff: %s:%d",
+                            f.path,
+                            f.line,
+                        )
+                all_findings = line_filtered
 
         to_post = self._attach_fingerprints_and_filter_findings(
             all_findings,

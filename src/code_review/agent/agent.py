@@ -80,6 +80,16 @@ Read the entire diff carefully and identify code quality issues, including but n
 limited to: bugs, security vulnerabilities, performance problems, logic errors,
 missing error handling, and style violations.
 
+IMPORTANT — Line numbers:
+- Every finding's line number MUST correspond to a line actually shown in the diff.
+- Use the new-file line numbers from the '@@ -old_start,count +new_start,count @@'
+  hunk headers to determine which absolute line numbers are visible.
+- Only report findings for lines with '+' prefix (added lines) or ' ' prefix
+  (context/unchanged lines shown in the diff hunk).
+- Do NOT report findings for lines that are not shown in the diff, even if you can
+  infer their content from surrounding context. Such lines cannot be placed inline
+  in the diff review view.
+
 Valid file paths:
 - Only report findings for files that appear in the diff.
 - Do NOT invent paths or report findings for files not present in the diff.

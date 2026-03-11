@@ -80,6 +80,56 @@ def test_post_review_comments(mock_client):
 
 
 @patch("code_review.providers.bitbucket.httpx.Client")
+def test_post_review_comments_single_line_no_from(mock_client):
+    """Single-line comments must NOT include 'from' in the inline anchor.
+
+    The Bitbucket Cloud API spec says 'from' is the start of a multi-line range;
+    for single-line comments it should be omitted (null).  Setting 'from' equal to
+    'to' on an added/context line can cause the API to reject the comment (returning
+    4xx) or silently downgrade it to an activity-feed comment instead of an inline
+    diff comment.
+    """
+    mock_post = MagicMock()
+    mock_post.raise_for_status = MagicMock()
+    mock_post.json.return_value = {"id": 1}
+    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+
+    p = BitbucketProvider("https://api.bitbucket.org/2.0", "tok")
+    p.post_review_comments(
+        "owner",
+        "repo",
+        1,
+        [InlineComment(path="foo.py", line=42, body="Issue here")],
+    )
+    payload = mock_client.return_value.__enter__.return_value.post.call_args[1]["json"]
+    assert "from" not in payload["inline"], (
+        "Single-line comments must omit 'from' so Bitbucket Cloud places them inline "
+        "in the diff view rather than rejecting or demoting them to PR-level comments"
+    )
+    assert payload["inline"]["to"] == 42
+
+
+@patch("code_review.providers.bitbucket.httpx.Client")
+def test_post_review_comments_multiline_includes_from(mock_client):
+    """Multi-line range comments (end_line != line) MUST include 'from'."""
+    mock_post = MagicMock()
+    mock_post.raise_for_status = MagicMock()
+    mock_post.json.return_value = {"id": 1}
+    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+
+    p = BitbucketProvider("https://api.bitbucket.org/2.0", "tok")
+    p.post_review_comments(
+        "owner",
+        "repo",
+        1,
+        [InlineComment(path="foo.py", line=10, end_line=15, body="Range comment")],
+    )
+    payload = mock_client.return_value.__enter__.return_value.post.call_args[1]["json"]
+    assert payload["inline"]["from"] == 10
+    assert payload["inline"]["to"] == 15
+
+
+@patch("code_review.providers.bitbucket.httpx.Client")
 def test_get_existing_review_comments(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
