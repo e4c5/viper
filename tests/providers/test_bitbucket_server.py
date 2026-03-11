@@ -148,6 +148,34 @@ def test_post_review_comments_uses_line_type_context(mock_client):
     )
 
 
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_post_review_comments_uses_base_to_head_hash_direction_for_to_file(mock_client):
+    """For fileType='TO', anchor hashes must be destination/base -> source/head."""
+    mock_post = MagicMock()
+    mock_post.raise_for_status = MagicMock()
+    mock_post.json.return_value = {"id": 1}
+    mock_get = MagicMock()
+    mock_get.headers = {"content-type": "application/json"}
+    mock_get.json.return_value = {
+        "fromRef": {"latestCommit": "source_head_hash"},
+        "toRef": {"latestCommit": "target_base_hash"},
+    }
+    http = mock_client.return_value.__enter__.return_value
+    http.get.return_value = mock_get
+    http.post.return_value = mock_post
+
+    p = BitbucketServerProvider("http://bb:7990/rest/api/1.0", "tok")
+    p.post_review_comments(
+        "PROJ", "repo", 1,
+        [InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")],
+        head_sha="source_head_hash",
+    )
+    payload = http.post.call_args[1]["json"]
+    assert payload["anchor"]["fileType"] == "TO"
+    assert payload["anchor"]["fromHash"] == "target_base_hash"
+    assert payload["anchor"]["toHash"] == "source_head_hash"
+
+
 # ---------------------------------------------------------------------------
 # _post_comments_one_by_one — fallback preserves line_type
 # ---------------------------------------------------------------------------

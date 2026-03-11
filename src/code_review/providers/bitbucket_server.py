@@ -186,13 +186,18 @@ class BitbucketServerProvider(ProviderInterface):
         """Post inline comments (Server API: text + anchor with path/line/lineType/fileType/refs).
         Path is normalized. lineType must match the line in the diff: ADDED for '+' lines, CONTEXT
         for unchanged lines; otherwise Bitbucket Server may show the comment at file level instead
-        of on the line. fromHash/toHash place the anchor in the correct diff."""
+        of on the line.
+
+        Bitbucket Server expects anchor commit range direction to match fileType:
+        for fileType="TO", fromHash must be the destination/base commit and toHash
+        must be the source/head commit. Using the opposite direction triggers 409
+        PullRequestOutOfDateException on Data Center."""
         if not comments:
             return
         path = self._path(owner, repo, "pull-requests", str(pr_number), "comments")
-        from_hash, to_hash = self._get_pr_diff_refs(owner, repo, pr_number)
-        if to_hash is None and head_sha:
-            to_hash = head_sha
+        source_hash, target_hash = self._get_pr_diff_refs(owner, repo, pr_number)
+        if source_hash is None and head_sha:
+            source_hash = head_sha
         for c in comments:
             anchor_path = self._anchor_path_for_diff(c.path)
             line_type = getattr(c, "line_type", None) or "ADDED"
@@ -202,9 +207,10 @@ class BitbucketServerProvider(ProviderInterface):
                 "lineType": line_type,
                 "fileType": "TO",
             }
-            if from_hash and to_hash:
-                anchor["fromHash"] = from_hash
-                anchor["toHash"] = to_hash
+            # For fileType="TO", Bitbucket Server expects base->head direction.
+            if source_hash and target_hash:
+                anchor["fromHash"] = target_hash
+                anchor["toHash"] = source_hash
                 anchor["diffType"] = "EFFECTIVE"
             payload = {"text": c.body, "anchor": anchor}
             self._post(path, payload)
