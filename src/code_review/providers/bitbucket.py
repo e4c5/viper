@@ -13,6 +13,7 @@ from code_review.providers.base import (
     ProviderInterface,
     ReviewComment,
     _log_pr_info_warning,
+    normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
 from code_review.providers.safety import truncate_repo_content
@@ -110,14 +111,8 @@ class BitbucketProvider(ProviderInterface):
         return result
 
     def _anchor_path_for_diff(self, file_path: str) -> str:
-        """Normalize path so it matches the PR diff (enables inline comments on the diff view).
-        Strips dst:// and src:// prefixes so e.g. dst://src/main/java/foo.java -> src/main/java/foo.java."""
-        p = (file_path or "").strip()
-        for prefix in ("dst://", "src://"):
-            if p.lower().startswith(prefix):
-                p = p[len(prefix) :].lstrip("/")
-                break
-        return p.lstrip("/") or file_path or ""
+        """Normalize path so it matches the PR diff (enables inline comments on the diff view)."""
+        return normalize_diff_anchor_path(file_path)
 
     def post_review_comments(
         self,

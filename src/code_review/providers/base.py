@@ -89,6 +89,21 @@ def pr_info_from_api_dict(data: dict, description_key: str = "body") -> PRInfo:
     return PRInfo(title=title, labels=labels, description=description)
 
 
+def normalize_diff_anchor_path(file_path: str) -> str:
+    """Normalize a file path so it matches PR diffs across providers.
+
+    Strips dst:// and src:// prefixes so e.g. dst://src/main/java/foo.java ->
+    src/main/java/foo.java, and removes leading slashes. Falls back to the
+    original value if normalization results in an empty string.
+    """
+    p = (file_path or "").strip()
+    for prefix in ("dst://", "src://"):
+        if p.lower().startswith(prefix):
+            p = p[len(prefix) :].lstrip("/")
+            break
+    return p.lstrip("/") or file_path or ""
+
+
 def file_infos_from_pull_file_list(files: list) -> list[FileInfo]:
     """Build list of FileInfo from a provider API list of file dicts (filename/path, status, additions, deletions)."""
     if not isinstance(files, list):
