@@ -103,20 +103,10 @@ class BitbucketProvider(ProviderInterface):
         for entry in values:
             if not isinstance(entry, dict):
                 continue
-            file_path = (
-                (entry.get("new") or {}).get("path")
-                or (entry.get("old") or {}).get("path")
-                or ""
-            )
+            file_path = self._file_path_from_diffstat_entry(entry)
             if not file_path:
                 continue
-            raw_status = entry.get("status")
-            if raw_status == "removed":
-                status = "removed"
-            elif raw_status == "added":
-                status = "added"
-            else:
-                status = "modified"
+            status = self._status_from_diffstat(entry.get("status"))
             files.append(FileInfo(path=file_path, status=status, additions=0, deletions=0))
 
         next_url = data.get("next")
@@ -124,6 +114,18 @@ class BitbucketProvider(ProviderInterface):
             return files, None
         stripped = next_url.strip()
         return files, stripped or None
+
+    @staticmethod
+    def _file_path_from_diffstat_entry(entry: dict[str, Any]) -> str:
+        return ((entry.get("new") or {}).get("path") or (entry.get("old") or {}).get("path") or "")
+
+    @staticmethod
+    def _status_from_diffstat(raw_status: Any) -> str:
+        status_map = {
+            "removed": "removed",
+            "added": "added",
+        }
+        return status_map.get(raw_status, "modified")
 
     def _anchor_path_for_diff(self, file_path: str) -> str:
         """Normalize path so it matches the PR diff (enables inline comments on the diff view)."""

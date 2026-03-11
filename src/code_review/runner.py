@@ -1050,6 +1050,69 @@ class ReviewOrchestrator:
         else:
             logger.info("Posted %d comment(s)", successful_post_count)
 
+    @staticmethod
+    def _filter_findings_to_pr_paths(
+        findings: list[FindingV1], paths: list[str]
+    ) -> list[FindingV1]:
+        if not paths:
+            return findings
+        allowed_normalized = {_normalize_path_for_anchor(p) for p in paths}
+        filtered_findings: list[FindingV1] = []
+        for finding in findings:
+            norm_path = _normalize_path_for_anchor(finding.path or "")
+            if norm_path in allowed_normalized:
+                filtered_findings.append(finding)
+            elif logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Dropping finding for path not in diff: %s (normalized=%s, allowed=%s)",
+                    finding.path,
+                    norm_path,
+                    sorted(allowed_normalized),
+                )
+        return filtered_findings
+
+    @staticmethod
+    def _filter_findings_to_visible_diff_lines(
+        findings: list[FindingV1], full_diff: str
+    ) -> list[FindingV1]:
+        if not full_diff:
+            return findings
+        visible_lines = _diff_visible_new_lines(full_diff)
+        if not visible_lines:
+            return findings
+        line_filtered: list[FindingV1] = []
+        for finding in findings:
+            norm_path = _normalize_path_for_anchor(finding.path or "")
+            if (norm_path, finding.line) in visible_lines:
+                line_filtered.append(finding)
+            else:
+                logger.debug(
+                    "Dropping finding for line not visible in diff: %s:%d",
+                    finding.path,
+                    finding.line,
+                )
+        return line_filtered
+
+    def _filter_findings_by_diff_scope(
+        self, findings: list[FindingV1], paths: list[str], full_diff: str
+    ) -> list[FindingV1]:
+        # Guardrail: only keep findings for files that are actually in the PR diff.
+        # LLMs can occasionally emit findings for unrelated paths; we never want to post
+        # comments on files outside the reviewed change set.
+        # Paths may include prefixes like dst:// or src:// (especially for Bitbucket);
+        # normalize both diff paths and finding paths before comparison so valid findings
+        # are not dropped just because of a prefix difference.
+        path_filtered = self._filter_findings_to_pr_paths(findings, paths)
+
+        # Guardrail: only keep findings for lines that are actually visible in the diff.
+        # Comments on lines outside diff hunks cannot be placed inline: Bitbucket Cloud
+        # rejects them (causing fallback to PR-level activity comments) and GitHub/Gitea
+        # reject them via position-based APIs. In single-shot mode the LLM receives the
+        # full multi-file diff and may report lines that are in the file but outside any
+        # hunk (e.g. unchanged code far from the changed region). Filtering here ensures
+        # every posted comment appears inline in the diff view.
+        return self._filter_findings_to_visible_diff_lines(path_filtered, full_diff)
+
     def run(self) -> list[FindingV1]:
         """
         Execute the full review flow. Returns list of findings that were posted
@@ -1159,50 +1222,7 @@ class ReviewOrchestrator:
             full_diff=full_diff,
         )
 
-        # Guardrail: only keep findings for files that are actually in the PR diff.
-        # LLMs can occasionally emit findings for unrelated paths; we never want to post
-        # comments on files outside the reviewed change set.
-        # Paths may include prefixes like dst:// or src:// (especially for Bitbucket);
-        # normalize both diff paths and finding paths before comparison so valid findings
-        # are not dropped just because of a prefix difference.
-        if paths:
-            allowed_normalized = {_normalize_path_for_anchor(p) for p in paths}
-            filtered_findings: list[FindingV1] = []
-            for f in all_findings:
-                norm_path = _normalize_path_for_anchor(f.path or "")
-                if norm_path in allowed_normalized:
-                    filtered_findings.append(f)
-                elif logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "Dropping finding for path not in diff: %s (normalized=%s, allowed=%s)",
-                        f.path,
-                        norm_path,
-                        sorted(allowed_normalized),
-                    )
-            all_findings = filtered_findings
-
-        # Guardrail: only keep findings for lines that are actually visible in the diff.
-        # Comments on lines outside diff hunks cannot be placed inline: Bitbucket Cloud
-        # rejects them (causing fallback to PR-level activity comments) and GitHub/Gitea
-        # reject them via position-based APIs.  In single-shot mode the LLM receives the
-        # full multi-file diff and may report lines that are in the file but outside any
-        # hunk (e.g. unchanged code far from the changed region).  Filtering here ensures
-        # every posted comment appears inline in the diff view.
-        if full_diff:
-            visible_lines = _diff_visible_new_lines(full_diff)
-            if visible_lines:
-                line_filtered: list[FindingV1] = []
-                for f in all_findings:
-                    norm_path = _normalize_path_for_anchor(f.path or "")
-                    if (norm_path, f.line) in visible_lines:
-                        line_filtered.append(f)
-                    else:
-                        logger.debug(
-                            "Dropping finding for line not visible in diff: %s:%d",
-                            f.path,
-                            f.line,
-                        )
-                all_findings = line_filtered
+        all_findings = self._filter_findings_by_diff_scope(all_findings, paths, full_diff)
 
         to_post = self._attach_fingerprints_and_filter_findings(
             all_findings,
