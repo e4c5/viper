@@ -975,11 +975,18 @@ class ReviewOrchestrator:
                 provider, owner, repo, pr_number, head_sha, to_post, cfg, llm_cfg, full_diff=full_diff
             )
         # For providers that omit the fingerprint marker from inline comment bodies
-        # (e.g. Bitbucket Server), the run_id is never stored in any posted comment,
-        # so _idempotency_key_seen_in_comments never fires and the runner re-processes
-        # the same PR on every CI trigger.  Post a dedicated PR-level marker comment so
-        # future runs can detect this run and short-circuit before running the agent.
-        if head_sha and provider.capabilities().omit_fingerprint_marker_in_body:
+        # (e.g. Bitbucket Server), there is no run_id persisted when inline posting
+        # completely fails. In that specific case, post a dedicated PR-level marker
+        # comment so future runs can short-circuit instead of infinite re-processing.
+        #
+        # When at least one inline comment is posted successfully, avoid posting this
+        # marker comment because it appears as a visible, out-of-place activity entry.
+        if (
+            head_sha
+            and to_post
+            and count == 0
+            and provider.capabilities().omit_fingerprint_marker_in_body
+        ):
             _post_run_marker_comment(provider, owner, repo, pr_number, cfg, llm_cfg, head_sha)
         return count
 

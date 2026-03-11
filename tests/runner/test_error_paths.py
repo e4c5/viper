@@ -274,8 +274,8 @@ def test_run_marker_comment_posted_for_omit_marker_providers(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
     """For providers with omit_fingerprint_marker_in_body=True (e.g. Bitbucket Server),
-    a PR-level run-marker comment must be posted after every non-dry run so the
-    idempotency check can fire on subsequent runs and prevent re-processing the same PR.
+    a PR-level run-marker comment must be posted when inline posting fully fails so
+    idempotency can short-circuit subsequent runs.
 
     Without this comment, the run_id is never stored anywhere (inline markers are
     suppressed) and _idempotency_key_seen_in_comments returns False on every run,
@@ -288,7 +288,7 @@ def test_run_marker_comment_posted_for_omit_marker_providers(
             supports_suggestions=False,
             omit_fingerprint_marker_in_body=True,
         )
-        provider.post_review_comments = MagicMock()
+        provider.post_review_comments = MagicMock(side_effect=RuntimeError("409 Conflict"))
         provider.post_pr_summary_comment = MagicMock()
 
     findings_json = (
@@ -304,7 +304,7 @@ def test_run_marker_comment_posted_for_omit_marker_providers(
     )
 
     assert len(to_post) == 1
-    # A PR-level marker comment must have been posted (for idempotency on next run).
+    # Inline posting failed entirely, so a PR-level marker comment must be posted.
     assert provider.post_pr_summary_comment.call_count >= 1
     # The last call must contain the code-review-agent run marker in its body.
     last_body = provider.post_pr_summary_comment.call_args_list[-1][0][3]
@@ -354,4 +354,42 @@ def test_run_marker_comment_not_posted_for_standard_providers(
         body = call_args[0][3] if call_args[0] else call_args[1].get("body", "")
         assert "run=" not in str(body) or "code-review-agent:" not in str(body), (
             "No run-marker PR comment expected for providers that embed markers in inline bodies"
+        )
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_llm_config")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_marker_comment_not_posted_when_inline_succeeds_for_omit_marker_providers(
+    mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
+):
+    """For omit-marker providers, successful inline posts must not add a visible run-marker comment."""
+
+    def configure_provider(provider):
+        provider.capabilities.return_value = ProviderCapabilities(
+            resolvable_comments=False,
+            supports_suggestions=False,
+            omit_fingerprint_marker_in_body=True,
+        )
+        provider.post_review_comments = MagicMock()
+        provider.post_pr_summary_comment = MagicMock()
+
+    findings_json = (
+        '[{"path":"foo.py","line":1,"severity":"suggestion","code":"x","message":"Fix."}]'
+    )
+    _to_post, provider = _exercise_error_path(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_llm_config,
+        mock_get_context_window,
+        findings_json,
+        configure_provider,
+    )
+
+    # Inline post succeeded, so no separate marker comment should be added.
+    for call_args in provider.post_pr_summary_comment.call_args_list:
+        body = call_args[0][3] if call_args[0] else call_args[1].get("body", "")
+        assert "run=" not in str(body) or "code-review-agent:" not in str(body), (
+            "No visible run-marker comment expected when inline posting succeeded"
         )
