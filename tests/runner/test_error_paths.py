@@ -101,6 +101,23 @@ def _exercise_file_by_file_skip(
     return results
 
 
+def _build_file_by_file_run_async_side_effect(call_count, error_factory, findings: str):
+    """Factory for run_async side effects used in file-by-file skip tests."""
+
+    def run_async_side_effect(*, new_message, **kwargs):
+        call_count[0] += 1
+        text = new_message.parts[0].text if new_message.parts else ""
+        if '"a.py"' in text:
+            raise error_factory()
+        mock_event = MagicMock()
+        mock_event.is_final_response.return_value = True
+        mock_event.content = MagicMock()
+        mock_event.content.parts = [MagicMock(text=findings)]
+        return runner_run_async_returning([mock_event])()
+
+    return run_async_side_effect
+
+
 @patch("code_review.runner.get_context_window")
 @patch("code_review.runner.get_llm_config")
 @patch("code_review.runner.get_provider")
@@ -203,18 +220,11 @@ def test_file_by_file_skips_file_on_rate_limit_error(
 ):
     """File-by-file mode skips a file and continues when a RateLimitError is raised."""
     call_count = [0]
+    findings = '[{"path":"b.py","line":1,"severity":"info","code":"ok","message":"Fine."}]'
 
-    def run_async_side_effect(*, new_message, **kwargs):
-        call_count[0] += 1
-        text = new_message.parts[0].text if new_message.parts else ""
-        if '"a.py"' in text:
-            raise RateLimitError("HTTP 429 Too Many Requests")
-        findings = '[{"path":"b.py","line":1,"severity":"info","code":"ok","message":"Fine."}]'
-        mock_event = MagicMock()
-        mock_event.is_final_response.return_value = True
-        mock_event.content = MagicMock()
-        mock_event.content.parts = [MagicMock(text=findings)]
-        return runner_run_async_returning([mock_event])()
+    run_async_side_effect = _build_file_by_file_run_async_side_effect(
+        call_count, lambda: RateLimitError("HTTP 429 Too Many Requests"), findings
+    )
 
     results = _exercise_file_by_file_skip(
         mock_get_scm_config,
@@ -239,18 +249,13 @@ def test_file_by_file_skips_file_on_generic_error(
 ):
     """File-by-file mode skips a file and continues when an unexpected error is raised."""
     call_count = [0]
+    findings = (
+        '[{"path":"b.py","line":2,"severity":"suggestion","code":"s","message":"Improve."}]'
+    )
 
-    def run_async_side_effect(*, new_message, **kwargs):
-        call_count[0] += 1
-        text = new_message.parts[0].text if new_message.parts else ""
-        if '"a.py"' in text:
-            raise RuntimeError("unexpected LLM error")
-        findings = '[{"path":"b.py","line":2,"severity":"suggestion","code":"s","message":"Improve."}]'
-        mock_event = MagicMock()
-        mock_event.is_final_response.return_value = True
-        mock_event.content = MagicMock()
-        mock_event.content.parts = [MagicMock(text=findings)]
-        return runner_run_async_returning([mock_event])()
+    run_async_side_effect = _build_file_by_file_run_async_side_effect(
+        call_count, lambda: RuntimeError("unexpected LLM error"), findings
+    )
 
     results = _exercise_file_by_file_skip(
         mock_get_scm_config,

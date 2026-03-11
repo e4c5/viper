@@ -95,20 +95,15 @@ _FINDINGS_WITH_OUT_OF_DIFF_LINE = (
 )
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
-def test_runner_drops_findings_for_lines_outside_diff(
-    mock_scm, mock_get_provider, mock_llm, mock_context_window
+def _run_review_with_mocked_bitbucket_runner(
+    mock_scm,
+    mock_get_provider,
+    mock_llm,
+    mock_context_window,
+    findings_json: str,
+    head_sha: str,
 ):
-    """Runner must filter out findings for lines not visible in the diff.
-
-    Without this guardrail, Bitbucket Cloud receives an inline comment request for
-    a line that's not in any diff hunk.  The API rejects it (4xx), the runner falls
-    back to post_pr_summary_comment, and the comment appears in the Activity feed
-    with a **path:line** heading instead of inline in the diff view.
-    """
+    """Shared setup for Bitbucket runner guardrail tests."""
     from code_review.runner import run_review
 
     mock_scm.return_value = MagicMock(
@@ -122,7 +117,6 @@ def test_runner_drops_findings_for_lines_outside_diff(
 
     provider = MagicMock()
     provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    # Diff only covers lines 8-13 in the new file; line 1 is outside all hunks.
     provider.get_pr_diff.return_value = SAMPLE_DIFF
     provider.get_file_content.return_value = "\n" * 20
     provider.get_existing_review_comments.return_value = []
@@ -139,12 +133,38 @@ def test_runner_drops_findings_for_lines_outside_diff(
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
     mock_event.content = MagicMock()
-    mock_event.content.parts = [MagicMock(text=_FINDINGS_WITH_OUT_OF_DIFF_LINE)]
+    mock_event.content.parts = [MagicMock(text=findings_json)]
     mock_runner = MagicMock()
     mock_runner.run_async = runner_run_async_returning([mock_event])
 
     with patch("google.adk.runners.Runner", return_value=mock_runner):
-        findings = run_review("owner", "repo", 1, head_sha="sha1", dry_run=True)
+        return run_review("owner", "repo", 1, head_sha=head_sha, dry_run=True)
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_llm_config")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_runner_drops_findings_for_lines_outside_diff(
+    mock_scm, mock_get_provider, mock_llm, mock_context_window
+) -> None:
+    """Runner must filter out findings for lines not visible in the diff.
+
+    Without this guardrail, Bitbucket Cloud receives an inline comment request for
+    a line that's not in any diff hunk.  The API rejects it (4xx), the runner falls
+    back to post_pr_summary_comment, and the comment appears in the Activity feed
+    with a **path:line** heading instead of inline in the diff view.
+    """
+
+    # Diff only covers lines 8-13 in the new file; line 1 is outside all hunks.
+    findings = _run_review_with_mocked_bitbucket_runner(
+        mock_scm,
+        mock_get_provider,
+        mock_llm,
+        mock_context_window,
+        _FINDINGS_WITH_OUT_OF_DIFF_LINE,
+        head_sha="sha1",
+    )
 
     # Only the finding on line 10 (visible in the diff) should survive.
     assert len(findings) == 1, (
@@ -160,48 +180,22 @@ def test_runner_drops_findings_for_lines_outside_diff(
 @patch("code_review.runner.get_scm_config")
 def test_runner_keeps_context_line_findings(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
-):
+) -> None:
     """Context (unchanged) lines shown in the diff should NOT be filtered out."""
-    from code_review.runner import run_review
-
-    mock_scm.return_value = MagicMock(
-        provider="bitbucket",
-        url="https://api.bitbucket.org/2.0",
-        token="x",
-        skip_label="",
-        skip_title_pattern="",
-    )
-    mock_llm.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
-
-    provider = MagicMock()
-    provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    provider.get_pr_diff.return_value = SAMPLE_DIFF
-    provider.get_file_content.return_value = "\n" * 20
-    provider.get_existing_review_comments.return_value = []
-    provider.capabilities.return_value = MagicMock(
-        resolvable_comments=False,
-        supports_suggestions=False,
-        markup_hides_html_comment=False,
-        markup_supports_collapsible=False,
-        omit_fingerprint_marker_in_body=True,
-    )
-    mock_get_provider.return_value = provider
-    mock_context_window.return_value = 1_000_000
 
     # Line 8 is a context line visible in the diff — it should NOT be filtered.
     context_line_finding = (
         '[{"path":"foo.py","line":8,"severity":"suggestion","code":"c","message":"context line issue"}]'
     )
 
-    mock_event = MagicMock()
-    mock_event.is_final_response.return_value = True
-    mock_event.content = MagicMock()
-    mock_event.content.parts = [MagicMock(text=context_line_finding)]
-    mock_runner = MagicMock()
-    mock_runner.run_async = runner_run_async_returning([mock_event])
-
-    with patch("google.adk.runners.Runner", return_value=mock_runner):
-        findings = run_review("owner", "repo", 1, head_sha="sha2", dry_run=True)
+    findings = _run_review_with_mocked_bitbucket_runner(
+        mock_scm,
+        mock_get_provider,
+        mock_llm,
+        mock_context_window,
+        context_line_finding,
+        head_sha="sha2",
+    )
 
     assert len(findings) == 1, "Context-line finding must be kept (context lines are diff-visible)"
     assert findings[0].line == 8

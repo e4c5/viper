@@ -9,7 +9,7 @@ from code_review.providers.bitbucket_server import BitbucketServerProvider, _ext
 
 
 def test_get_provider_bitbucket_server():
-    p = get_provider("bitbucket_server", "http://bb:7990/rest/api/1.0", "token")
+    p = get_provider("bitbucket_server", "https://bb:7990/rest/api/1.0", "token")
     assert isinstance(p, BitbucketServerProvider)
 
 
@@ -71,7 +71,7 @@ def test_get_pr_diff_refs_string_latest_commit(mock_client):
     }
     mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
 
-    p = BitbucketServerProvider("http://bb:7990/rest/api/1.0", "tok")
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
     from_id, to_id = p._get_pr_diff_refs("PROJ", "my-repo", 42)
     assert from_id == "fromhash111"
     assert to_id == "tohash222"
@@ -82,7 +82,7 @@ def test_get_pr_diff_refs_returns_none_none_on_error(mock_client):
     """_get_pr_diff_refs returns (None, None) gracefully when the API call fails."""
     mock_client.return_value.__enter__.return_value.get.side_effect = RuntimeError("network error")
 
-    p = BitbucketServerProvider("http://bb:7990/rest/api/1.0", "tok")
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
     from_id, to_id = p._get_pr_diff_refs("PROJ", "my-repo", 1)
     assert from_id is None
     assert to_id is None
@@ -93,9 +93,8 @@ def test_get_pr_diff_refs_returns_none_none_on_error(mock_client):
 # ---------------------------------------------------------------------------
 
 
-@patch("code_review.providers.bitbucket_server.httpx.Client")
-def test_post_review_comments_uses_line_type_added(mock_client):
-    """ADDED lines must be posted with lineType='ADDED'."""
+def _setup_post_review_comments_mocks(mock_client):
+    """Shared httpx.Client mocking for post_review_comments tests."""
     mock_post = MagicMock()
     mock_post.raise_for_status = MagicMock()
     mock_post.json.return_value = {"id": 1}
@@ -109,8 +108,16 @@ def test_post_review_comments_uses_line_type_added(mock_client):
     http.get.return_value = mock_get
     http.post.return_value = mock_post
 
-    p = BitbucketServerProvider("http://bb:7990/rest/api/1.0", "tok")
-    p.post_review_comments(
+    provider = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    return provider, http
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_post_review_comments_uses_line_type_added(mock_client):
+    """ADDED lines must be posted with lineType='ADDED'."""
+    provider, http = _setup_post_review_comments_mocks(mock_client)
+
+    provider.post_review_comments(
         "PROJ", "repo", 1,
         [InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")],
         head_sha="sha1",
@@ -123,21 +130,9 @@ def test_post_review_comments_uses_line_type_added(mock_client):
 @patch("code_review.providers.bitbucket_server.httpx.Client")
 def test_post_review_comments_uses_line_type_context(mock_client):
     """CONTEXT lines must be posted with lineType='CONTEXT' to avoid Bitbucket Server 409."""
-    mock_post = MagicMock()
-    mock_post.raise_for_status = MagicMock()
-    mock_post.json.return_value = {"id": 1}
-    mock_get = MagicMock()
-    mock_get.headers = {"content-type": "application/json"}
-    mock_get.json.return_value = {
-        "fromRef": {"latestCommit": "fromhash"},
-        "toRef": {"latestCommit": "tohash"},
-    }
-    http = mock_client.return_value.__enter__.return_value
-    http.get.return_value = mock_get
-    http.post.return_value = mock_post
+    provider, http = _setup_post_review_comments_mocks(mock_client)
 
-    p = BitbucketServerProvider("http://bb:7990/rest/api/1.0", "tok")
-    p.post_review_comments(
+    provider.post_review_comments(
         "PROJ", "repo", 1,
         [InlineComment(path="foo.java", line=8, body="Context issue", line_type="CONTEXT")],
         head_sha="sha1",
@@ -164,7 +159,7 @@ def test_post_review_comments_uses_base_to_head_hash_direction_for_to_file(mock_
     http.get.return_value = mock_get
     http.post.return_value = mock_post
 
-    p = BitbucketServerProvider("http://bb:7990/rest/api/1.0", "tok")
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
     p.post_review_comments(
         "PROJ", "repo", 1,
         [InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")],
