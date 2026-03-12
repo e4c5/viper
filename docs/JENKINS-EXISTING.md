@@ -57,7 +57,7 @@ In **Manage Jenkins → Credentials → System → Global credentials (unrestric
 | Credential ID | Kind | Purpose |
 |---------------|------|--------|
 | `SCM_TOKEN` | Secret text | SCM API token (Gitea, GitHub, GitLab, or Bitbucket Cloud) with repo read + comment on PRs |
-| `GOOGLE_API_KEY` | Secret text | LLM API key (or use your provider’s key and set `LLM_PROVIDER` / `LLM_MODEL`) |
+| `LLM_API_KEY` | Secret text | LLM API key; provider is determined by `LLM_PROVIDER` (e.g. gemini, openai, openrouter) |
 
 If your SCM is **Bitbucket Data Center**, use the same credential ID `SCM_TOKEN` (with your Bitbucket token) and follow [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for webhook setup.
 
@@ -82,7 +82,7 @@ For **GitLab**: `SCM_PROVIDER=gitlab`, `SCM_URL=https://gitlab.com` (or your Git
 For **Bitbucket Cloud**: `SCM_PROVIDER=bitbucket`, `SCM_URL=https://api.bitbucket.org`.  
 For **Bitbucket Data Center**: see [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for the `SCM_URL` format.
 
-LLM (optional): set `LLM_PROVIDER` and `LLM_MODEL` if you want to override the defaults (for example `LLM_PROVIDER=gemini`, `LLM_MODEL=gemini-2.5-flash`) and ensure the API key is in credentials (e.g. `GOOGLE_API_KEY`).
+LLM (optional): set `LLM_PROVIDER` and `LLM_MODEL` to override defaults (e.g. `LLM_PROVIDER=gemini`, `LLM_MODEL=gemini-2.5-flash`). The pipeline uses the single credential `LLM_API_KEY` for whichever provider you choose.
 
 ---
 
@@ -131,7 +131,7 @@ See [Using a new version of the review tool when code changes](JENKINS-UPDATING-
 
 ## Summary
 
-- **Existing Jenkins**: Add one Pipeline job (Script Path: `docker/jenkins/Jenkinsfile`), credentials `SCM_TOKEN` and `GOOGLE_API_KEY`, and SCM/LLM env vars.
+- **Existing Jenkins**: Add one Pipeline job (Script Path: `docker/jenkins/Jenkinsfile`), credentials `SCM_TOKEN` and `LLM_API_KEY`, and SCM/LLM env vars.
 - **Webhooks**: Use Generic Webhook Trigger and your SCM’s webhook UI; if your SCM is Bitbucket Data Center, see [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
 - **Execution**: Use the prebuilt image (or build it) on agents with Docker/Podman, or install the CLI and set `USE_INLINE_AGENT=true` as in [Jenkins without Docker](JENKINS-NO-DOCKER.md).
 - **After code changes**: See [Using a new version when code changes](JENKINS-UPDATING-AGENT.md).

@@ -37,5 +37,4 @@ def ensureSecretText = { String id, String secretText, String description ->
 }
 
 ensureSecretText('SCM_TOKEN', env.get('SCM_TOKEN'), 'SCM API token')
-ensureSecretText('GOOGLE_API_KEY', env.get('GOOGLE_API_KEY'), 'Google Gemini API key')
-ensureSecretText('OPENAI_API_KEY', env.get('OPENAI_API_KEY'), 'OpenAI API key')
+ensureSecretText('LLM_API_KEY', env.get('LLM_API_KEY'), 'LLM API key (used with LLM_PROVIDER)')

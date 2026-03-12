@@ -33,7 +33,7 @@ Tests mirror `src/`: `tests/test_runner.py`, `tests/providers/`, `tests/runner/`
 
 ## Conventions
 
-- **Configuration**: All env-based; no `.env` loading by default. SCM: `SCM_PROVIDER`, `SCM_URL`, `SCM_TOKEN`, … LLM: `LLM_PROVIDER`, `LLM_MODEL`, … See `config.py` and `.env.example`.
+- **Configuration**: All env-based; no `.env` loading by default. SCM: `SCM_PROVIDER`, `SCM_URL`, `SCM_TOKEN`, … LLM: `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY` (single key for the chosen provider). See `config.py` and `.env.example`.
 - **New SCM**: Implement `ProviderInterface` in `providers/<name>.py`, register in `get_provider()` in `providers/__init__.py`, add tests under `tests/providers/test_<name>.py` with mocked HTTP.
 - **Agent behavior**: Instruction and tools are in `agent/agent.py` and `agent/tools/`. Findings-only mode: agent has no post/get_existing tools; runner does filtering and posting.
 - **Testing**: Use `MockProvider` or `MagicMock` for the provider; **patch `google.adk.runners.Runner`** so `run()` yields a final event with JSON findings (no real LLM). Run: `pytest` (exclude `tests/e2e` unless `RUN_E2E=1`).

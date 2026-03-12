@@ -2,7 +2,7 @@
 // Multi-SCM: use one job per SCM; same Script Path (this file). Set SCM_PROVIDER and SCM_URL on the
 //   folder that contains the job (folder → Configure → Environment variables). Do not use job
 //   parameter defaults—they get overwritten when the script is loaded from SCM.
-// Credentials: ID "SCM_TOKEN", ID "GOOGLE_API_KEY" (folder or global).
+// Credentials: ID "SCM_TOKEN", ID "LLM_API_KEY" (folder or global). LLM_PROVIDER + LLM_API_KEY determine the LLM.
 //
 // Self-contained; no load. Pipeline script from SCM (Script Path: docker/jenkins/Jenkinsfile) or paste inline.
 
@@ -10,7 +10,7 @@ pipeline {
     agent any
 
     environment {
-        GOOGLE_API_KEY = credentials('GOOGLE_API_KEY')
+        LLM_API_KEY = credentials('LLM_API_KEY')
     }
 
     parameters {
@@ -88,7 +88,10 @@ pipeline {
                     }
 
                     def useInlineAgent = env.USE_INLINE_AGENT == 'true' || env.USE_INLINE_AGENT == '1'
-                    withCredentials([string(credentialsId: credId, variable: 'SCM_TOKEN')]) {
+                    withCredentials([
+                        string(credentialsId: credId, variable: 'SCM_TOKEN'),
+                        string(credentialsId: 'LLM_API_KEY', variable: 'LLM_API_KEY'),
+                    ]) {
                         withEnv([
                             "CONTAINER_RUNTIME=${containerRuntime}",
                             "REVIEW_IMAGE=${image}",
@@ -108,7 +111,7 @@ pipeline {
                                 set -o pipefail 2>/dev/null || true
                                 if [ "$USE_INLINE_AGENT" = "true" ] || [ "$USE_INLINE_AGENT" = "1" ]; then
                                     export SCM_PROVIDER="$REVIEW_SCM_PROVIDER" SCM_URL="$REVIEW_SCM_URL" SCM_TOKEN="$SCM_TOKEN"
-                                    export LLM_PROVIDER="$REVIEW_LLM_PROVIDER" LLM_MODEL="$REVIEW_LLM_MODEL"
+                                    export LLM_PROVIDER="$REVIEW_LLM_PROVIDER" LLM_MODEL="$REVIEW_LLM_MODEL" LLM_API_KEY="$LLM_API_KEY"
                                     export CODE_REVIEW_LOG_LEVEL=INFO
                                     code-review --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA" --print-findings
                                 else
@@ -128,8 +131,8 @@ pipeline {
                                         -e SCM_HEAD_SHA="$REVIEW_SCM_HEAD_SHA" \
                                         -e LLM_PROVIDER="$REVIEW_LLM_PROVIDER" \
                                         -e LLM_MODEL="$REVIEW_LLM_MODEL" \
+                                        -e LLM_API_KEY="$LLM_API_KEY" \
                                         -e PYTHONUNBUFFERED=1 \
-                                        -e GOOGLE_API_KEY \
                                         -e CODE_REVIEW_LOG_LEVEL=INFO \
                                         "$REVIEW_IMAGE" --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA" --print-findings \
                                     || { echo "HINT: Podman issues? Set USE_INLINE_AGENT=true (docs/QUICKSTART.md)."; exit 1; }

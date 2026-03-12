@@ -75,10 +75,10 @@ On every Jenkins **agent** (or controller, if builds run on the controller) that
    - Examples:
      - Gitea: `SCM_PROVIDER=gitea`, `SCM_URL=https://gitea.example.com` (or `http://gitea:3000` if Jenkins can resolve that host).
      - GitHub: `SCM_PROVIDER=github`, `SCM_URL=https://api.github.com`.
-   - LLM: set `LLM_PROVIDER`, `LLM_MODEL`, and the provider API key (e.g. `GOOGLE_API_KEY`) as usual. The pipeline already passes these via parameters or env.
+   - LLM: set `LLM_PROVIDER`, `LLM_MODEL`, and `LLM_API_KEY` as usual. The pipeline already passes these via parameters or env.
 
 3. **Credentials** (unchanged):
-   - **Manage Jenkins** → **Credentials**: create Secret text credentials with IDs `SCM_TOKEN` and `GOOGLE_API_KEY` (or your LLM key ID). The existing Jenkinsfile reads these and passes them into the CLI.
+   - **Manage Jenkins** → **Credentials**: create Secret text credentials with IDs `SCM_TOKEN` and `LLM_API_KEY`. The existing Jenkinsfile reads these and passes them into the CLI; the chosen provider is determined by `LLM_PROVIDER`.
 
 4. **Pipeline script**: Use **Pipeline script from SCM** (Script Path `docker/jenkins/Jenkinsfile`) or paste the entire `Jenkinsfile` into **Pipeline script** (inline); the pipeline is self-contained. With `USE_INLINE_AGENT=true`, it will run `code-review --owner ... --repo ... --pr ... --head-sha ...` on the node and will not call Docker/Podman.
 

@@ -70,6 +70,10 @@ class LLMConfig(BaseSettings):
     provider: Literal[
         "gemini", "openai", "anthropic", "ollama", "vertex", "openrouter"
     ] = "gemini"
+    api_key: SecretStr | None = Field(
+        default=None,
+        description="API key for the configured LLM provider (single key; provider chosen via LLM_PROVIDER).",
+    )
     model: str = "gemini-2.5-flash"
     context_window: int = Field(
         default=128_000,
