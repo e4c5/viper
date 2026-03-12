@@ -16,7 +16,7 @@ from code_review.config import (
 
 def test_scm_config_invalid_url_raises():
     """SCM_URL must be http(s) with non-empty host."""
-    with patch.dict(os.environ, {"SCM_URL": "ftp://host", "SCM_TOKEN": "x"}, clear=False):
+    with patch.dict(os.environ, {"SCM_URL": "ftps://host", "SCM_TOKEN": "x"}, clear=False):
         with pytest.raises(ValueError, match="SCM_URL must be a valid"):
             SCMConfig()
     with patch.dict(os.environ, {"SCM_URL": "https://", "SCM_TOKEN": "x"}, clear=False):
