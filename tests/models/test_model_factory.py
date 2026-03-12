@@ -35,6 +35,17 @@ def test_get_configured_model_openai_uses_litellm_or_fallback(mock_get_config):
 
 
 @patch("code_review.models.get_llm_config")
+def test_get_configured_model_openrouter_uses_litellm_or_fallback(mock_get_config):
+    mock_get_config.return_value = MagicMock(provider="openrouter", model="gpt-4.1-mini")
+    result = get_configured_model()
+    # Either LiteLlm instance or model string if ImportError
+    if hasattr(result, "model"):
+        assert result.model == "openrouter/gpt-4.1-mini"
+    else:
+        assert result == "gpt-4.1-mini"
+
+
+@patch("code_review.models.get_llm_config")
 def test_get_context_window(mock_get_config):
     mock_get_config.return_value = MagicMock(context_window=64_000)
     assert get_context_window() == 64_000

@@ -83,7 +83,7 @@ existing Docker data is not affected.
    ```
 3. Run:
    ```bash
-   code-review review --owner <owner> --repo <repo> --pr <pr_number> --head-sha <commit_sha>
+   code-review --owner <owner> --repo <repo> --pr <pr_number> --head-sha <commit_sha>
    ```
 
 ---
@@ -95,7 +95,7 @@ For high-concurrency testing, you can introduce a separate orchestration service
 - Receives SCM webhooks or CI callbacks.
 - Enqueues review jobs and debounces by PR/head (latest `head_sha` wins).
 - Starts worker processes/containers that run:
-  - `code-review review --owner ... --repo ... --pr ... --head-sha ...`
+  - `code-review --owner ... --repo ... --pr ... --head-sha ...`
 
 In that setup:
 

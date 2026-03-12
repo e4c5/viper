@@ -1,161 +1,121 @@
-## Bitbucket Data Center Integration (Jenkins Webhook)
+# Bitbucket Data Center – Code review pipeline
 
-This document describes how to trigger the **code-review agent** from **Bitbucket Data Center / Server** pull requests using **Jenkins + Generic Webhook Trigger**.
+When your SCM is **Bitbucket Data Center** (or Server), use this guide. You create one pipeline job that uses the same `Jenkinsfile` as for Gitea/GitHub/GitLab, but with a Bitbucket-specific credential ID and webhook payload mapping.
 
-> **Status**
->
-> - Bitbucket **Cloud** is supported via the built‑in `BitbucketProvider` (`SCM_PROVIDER=bitbucket`, `SCM_URL=https://api.bitbucket.org/2.0`).
-> - Bitbucket **Data Center / Server** can currently:
->   - Trigger the Jenkins pipeline on PR events.
->   - Pass PR metadata (`owner`, `repo`, `PR number`, `head SHA`) into the pipeline.
-> - Full, native Data Center API support (diffs, files, comments via `/rest/api/1.0/...`) is a **future enhancement**; today the provider is Cloud‑oriented.
+---
+
+## Overview
+
+| Item | For Bitbucket Data Center |
+|------|----------------------------|
+| Script Path | `docker/jenkins/Jenkinsfile` |
+| Credential ID | `SCM_TOKEN` (same as other SCMs; use folder-scoped credentials so this job has its own token) |
+| Webhook payload | `pullRequest`, `eventKey` (Bitbucket format) |
+| Env | `SCM_URL` = Bitbucket REST API base |
+
+**For Data Center:** Use **`SCM_PROVIDER=bitbucket_server`** (not `bitbucket`). The `bitbucket` provider is for Bitbucket **Cloud** API v2; the `bitbucket_server` provider uses Data Center's REST API 1.0 (`/rest/api/1.0`). Set **`SCM_URL`** to your server's REST API base including the path, e.g. `http://localhost:7990/rest/api/1.0` (no trailing slash).
+
+If you use Gitea, GitHub, or GitLab instead, follow [Jenkins (existing)](JENKINS-EXISTING.md). If you don't have an SCM or want to try this in a green field use the [Quick Start](QUICKSTART.md) 
 
 ---
 
 ## 1. Prerequisites
 
-- A running Bitbucket Data Center / Server instance (e.g. 7.21.x).
-- Jenkins with:
-  - **Generic Webhook Trigger** plugin installed.
-  - The pipeline from this repo (`docker/jenkins/Jenkinsfile`) configured as a **Pipeline** job.
-- Jenkins credentials:
-  - `SCM_TOKEN` (Secret text) – Bitbucket API token or user PAT with repo read + comment permissions.
-  - LLM API key (e.g. `GOOGLE_API_KEY`) as Secret text.
-- The Jenkins job either:
-  - Uses the **Docker / Podman** path (default), or
-  - Uses **inline mode** (`USE_INLINE_AGENT=true`) as described in `docs/JENKINS-NO-DOCKER.md`.
+- **Bitbucket Data Center / Server** (e.g. 7.21.x). Use `SCM_PROVIDER=bitbucket_server` and `SCM_URL` with `/rest/api/1.0`.
+- Jenkins with **Generic Webhook Trigger** plugin.
+- Agent image: build with `docker build -t code-review-agent -f docker/Dockerfile.agent .` or pull from Docker Hub.
 
 ---
 
-## 2. Configure the Jenkins pipeline job
+## 2. Create the Bitbucket pipeline job
 
-Create (or reuse) a **Pipeline** job that uses `docker/jenkins/Jenkinsfile`:
+1. **New Item** → **Pipeline** (e.g. name: `code-review`).
+2. **Pipeline script from SCM** → point to this repo, **Script Path**: `docker/jenkins/Jenkinsfile`.  
+   Use **Pipeline script from SCM** (Script Path `docker/jenkins/Jenkinsfile`) or paste the entire Jenkinsfile into **Pipeline script** (inline); the pipeline is self-contained. The script detects Bitbucket from the webhook payload and uses `SCM_TOKEN` and your `SCM_URL`.
 
-- **Pipeline script from SCM** → point to this repo; `Script Path = docker/jenkins/Jenkinsfile`,  
-  **or**
-- **Pipeline script** → paste the contents of `docker/jenkins/Jenkinsfile`.
+---
 
-The pipeline expects these parameters/env vars to be populated from the webhook:
+## 3. Credentials
 
-- `SCM_OWNER` – Bitbucket project key (e.g. `AN`).
-- `SCM_REPO` – repository slug (e.g. `antitkythera-examples`).
-- `SCM_PR_NUM` – pull request id (e.g. `3`).
-- `SCM_HEAD_SHA` – head commit SHA of the PR source branch.
-- `PR_ACTION` – webhook action / event key.
+Add **Secret text** credentials with the IDs below (same as for Gitea/GitHub/GitLab). Prefer **folder-scoped** credentials so only this pipeline can use them:
 
-### 2.1. Generic Webhook Trigger – JSONPath mappings (Bitbucket DC)
+- **Folder-scoped (recommended):** Create a Folder (e.g. `code-review`), add these credentials in **Folder → Credentials**, and create the pipeline job inside that folder.
+- **Global:** **Manage Jenkins → Credentials → System → Global credentials** → Add Credentials.
 
-In the **Pipeline job → Configure → Build Triggers → Generic Webhook Trigger** section:
+| ID | Secret |
+|----|--------|
+| `SCM_TOKEN` | Bitbucket API token (repo read + comment on PRs) |
+| `GOOGLE_API_KEY` | LLM API key (or your provider’s key) |
 
-**Post content parameters** (all `Expression type = JSONPath`):
+---
 
-- **`SCM_OWNER`**
-  - Variable: `SCM_OWNER`
-  - Expression: `$.pullRequest.toRef.repository.project.key`
-- **`SCM_REPO`**
-  - Variable: `SCM_REPO`
-  - Expression: `$.pullRequest.toRef.repository.slug`
-- **`SCM_PR_NUM`**
-  - Variable: `SCM_PR_NUM`
-  - Expression: `$.pullRequest.id`
-- **`SCM_HEAD_SHA`**
-  - Variable: `SCM_HEAD_SHA`
-  - Expression: `$.pullRequest.fromRef.latestCommit`
-- **`PR_ACTION`**
-  - Variable: `PR_ACTION`
-  - Expression: `$.eventKey`
+## 4. Job environment variables
 
-These JSONPaths match a Bitbucket DC pull request payload similar to:
+In the Bitbucket job, set (job **Configure** → **Build Environment** or **Global properties**):
 
-```json
-{
-  "eventKey": "pr:opened",
-  "pullRequest": {
-    "id": 3,
-    "fromRef": {
-      "latestCommit": "0a9c380b7b37aea57cf61fd644843808c9dfbb67",
-      "repository": { "...": "..." }
-    },
-    "toRef": {
-      "repository": {
-        "project": { "key": "AN" },
-        "slug": "antitkythera-examples"
-      }
-    }
-  }
-}
+- **`SCM_PROVIDER`**: Set to **`bitbucket_server`** (required for Data Center; do not use `bitbucket`, which is for Cloud).
+- **`SCM_URL`** (or **`SCM_URL_BITBUCKET`**): Bitbucket REST API 1.0 base, e.g.  
+  `http://localhost:7990/rest/api/1.0` or `https://bitbucket.example.com/rest/api/1.0`  
+  (no trailing slash).
+
+Optional: `LLM_PROVIDER`, `LLM_MODEL` as needed.
+
+---
+
+## 5. Generic Webhook Trigger (Bitbucket payload)
+
+In the job → **Configure** → **Build Triggers** → **Generic Webhook Trigger**:
+
+**Post content parameters** (Expression type: **JSONPath**):
+
+| Variable | Expression |
+|----------|------------|
+| `SCM_OWNER` | `$.pullRequest.toRef.repository.project.key` |
+| `SCM_REPO` | `$.pullRequest.toRef.repository.slug` |
+| `SCM_PR_NUM` | `$.pullRequest.id` |
+| `SCM_HEAD_SHA` | `$.pullRequest.fromRef.latestCommit` |
+| `PR_ACTION` | `$.eventKey` |
+
+**Optional filter** (so only PR events trigger a build):
+
+- Text: `$PR_ACTION`
+- Regex: `^pr:(opened|modified|from_ref_updated)$`
+
+Save and copy the **Webhook URL** shown in this section.
+
+---
+
+## 6. Bitbucket webhook
+
+In Bitbucket Data Center, for the repo:
+
+1. **Repository settings** → **Webhooks** → **Add webhook**.
+2. **URL**: the Jenkins Generic Webhook Trigger URL from step 5.
+3. **Content type**: `application/json`.
+4. **Triggers**: pull request events (e.g. opened, updated, from ref updated).
+5. Save and check **Delivery history** for 2xx responses.
+
+---
+
+## 7. Summary
+
+- One pipeline job: **Script Path** `docker/jenkins/Jenkinsfile`, credential **`SCM_TOKEN`**, env **`SCM_URL`** (Bitbucket REST API base), and the Bitbucket webhook JSONPaths and filter from this doc.
+- The pipeline detects the Bitbucket payload from `PR_ACTION` and uses your token and URL.
+
+---
+
+## 8. Running the agent locally against a Data Center PR
+
+Ensure your environment has Bitbucket Server settings (e.g. source your `.env` or export):
+
+- `SCM_PROVIDER=bitbucket_server`
+- `SCM_URL=http://localhost:7990/rest/api/1.0` (or your server URL including `/rest/api/1.0`)
+- `SCM_TOKEN=<your-token>`
+
+Then run (owner = project key, repo = repo slug):
+
+```bash
+code-review --owner AN --repo antikythera-examples --pr 3 --print-findings
 ```
 
-### 2.2. Generic Webhook Trigger – event filter for Bitbucket
-
-Still in the **Generic Webhook Trigger** section, configure the **Optional filter** to allow the desired Bitbucket PR events:
-
-- **Optional filter text**: `$PR_ACTION`
-- **Optional filter regexp**: `^pr:(opened|modified|from_ref_updated)$`
-
-This keeps the job from firing on unrelated webhook events.
-
-### 2.3. Allowed actions in the Jenkinsfile
-
-The Jenkinsfile accepts both GitHub/Gitea‑style actions and Bitbucket Data Center `eventKey` values:
-
-- GitHub / Gitea: `opened`, `synchronize`
-- Bitbucket DC: `pr:opened`, `pr:modified`, `pr:from_ref_updated`
-
-If you customize Bitbucket’s event handling further, update the `allowedActions` list in `docker/jenkins/Jenkinsfile` accordingly.
-
----
-
-## 3. Configure the Bitbucket Data Center webhook
-
-For the target repository in Bitbucket Data Center:
-
-1. Open **Repository settings → Webhooks** and create a new webhook.
-2. **URL**: paste the Jenkins **Generic Webhook Trigger** URL from the job configuration.
-3. **Content type**: `application/json`.
-4. **Events / Triggers**:
-   - Enable pull request events such as:
-     - PR opened (`pr:opened`)
-     - PR updated / modified (`pr:modified`)
-     - PR from ref updated (`pr:from_ref_updated`, e.g. new commits on source branch)
-5. Save the webhook.
-6. Open the webhook’s **delivery history** and confirm that test deliveries or new PRs receive a **2xx** response from Jenkins.
-
-With this wiring, creating or updating a PR in Bitbucket DC will trigger the Jenkins job and populate the `SCM_*` parameters expected by the pipeline.
-
----
-
-## 4. SCM and LLM settings for Bitbucket
-
-Set **environment variables** in Jenkins (job or global) for SCM and LLM configuration:
-
-- **SCM**
-  - `SCM_PROVIDER=bitbucket`
-  - `SCM_URL`:
-    - For Bitbucket **Cloud**: `https://api.bitbucket.org/2.0`
-    - For Bitbucket **Data Center / Server**: use your base URL, but note that the current provider is Cloud‑oriented and does not yet support the `/rest/api/1.0/...` endpoints:
-      - Example: `https://bitbucket.example.com/rest/api/1.0`
-  - `SCM_TOKEN`: Bitbucket token / credentials (injected from Jenkins `SCM_TOKEN` Secret text).
-
-- **LLM**
-  - `LLM_PROVIDER`, `LLM_MODEL`: as in `README.md` / `docs/QUICKSTART.md`.
-  - API key from Jenkins credentials (e.g. `GOOGLE_API_KEY`).
-
-The pipeline passes these into the `code-review` CLI (inline mode) or into the one‑shot container environment, as documented in `docs/QUICKSTART.md` and `docs/JENKINS-NO-DOCKER.md`.
-
----
-
-## 5. Current limitations and future work
-
-- The existing `BitbucketProvider` (`src/code_review/providers/bitbucket.py`) is implemented for **Bitbucket Cloud v2.0** (`/2.0/repositories/{workspace}/{repo_slug}/...`).
-- Bitbucket Data Center / Server uses a different REST API under `/rest/api/1.0/projects/{projectKey}/repos/{repositorySlug}/...`.
-- To have **fully native** Data Center support (diffs, file content, comments, PR metadata) the project will need:
-  - A dedicated provider implementation targeting the `/rest/api/1.0` API.
-  - Registration of that provider in `get_provider()` with a distinct `SCM_PROVIDER` value (e.g. `bitbucket_dc`).
-  - Tests that mock the Bitbucket DC endpoints.
-
-Until that provider exists, this document focuses on wiring Bitbucket Data Center → Jenkins so that:
-
-- Webhooks reliably trigger the pipeline on PR events.
-- The PR metadata required by the runner (`owner`, `repo`, `PR number`, `head SHA`) is correctly passed through.
-
+Use `--dry-run` to avoid posting comments.

@@ -94,6 +94,113 @@ def test_post_review_comments(mock_client):
 
 
 @patch("code_review.providers.gitea.httpx.Client")
+def test_post_review_comments_with_diff_hunk(mock_client):
+    """When get_pr_diff returns a valid diff, comments include diff_hunk for diff view."""
+    from code_review.providers.base import InlineComment
+
+    diff_body = (
+        "diff --git a/foo.py b/foo.py\n"
+        "--- a/foo.py\n+++ b/foo.py\n"
+        "@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+    )
+    mock_diff = MagicMock()
+    mock_diff.text = diff_body
+    mock_diff.headers = {}
+    mock_diff.raise_for_status = MagicMock()
+    mock_post = MagicMock()
+    mock_post.raise_for_status = MagicMock()
+    mock_post.content = b""
+    mock_client.return_value.__enter__.return_value.request.side_effect = [
+        mock_diff,
+        mock_post,
+    ]
+
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    p.post_review_comments(
+        "owner",
+        "repo",
+        1,
+        [InlineComment(path="foo.py", line=2, body="[Suggestion] Consider y")],
+        head_sha="abc123",
+    )
+    calls = mock_client.return_value.__enter__.return_value.request.call_args_list
+    assert len(calls) >= 2
+    payload = calls[1][1]["json"]
+    assert len(payload["comments"]) == 1
+    assert payload["comments"][0]["path"] == "foo.py"
+    assert payload["comments"][0]["new_position"] == 2
+    assert "diff_hunk" in payload["comments"][0]
+    assert "@@" in payload["comments"][0]["diff_hunk"]
+    assert "+y" in payload["comments"][0]["diff_hunk"]
+
+
+@patch("code_review.providers.gitea.httpx.Client")
+def test_post_review_comments_path_normalized(mock_client):
+    """Path is normalized (no leading slash)."""
+    mock_post = MagicMock()
+    mock_post.raise_for_status = MagicMock()
+    mock_post.content = b""
+    mock_client.return_value.__enter__.return_value.request.return_value = mock_post
+
+    from code_review.providers.base import InlineComment
+
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    p.post_review_comments(
+        "owner",
+        "repo",
+        1,
+        [InlineComment(path="/src/foo.py", line=1, body="Comment")],
+        head_sha="sha",
+    )
+    payload = mock_client.return_value.__enter__.return_value.request.call_args[1]["json"]
+    assert payload["comments"][0]["path"] == "src/foo.py"
+
+
+@patch("code_review.providers.gitea.httpx.Client")
+def test_post_review_comments_get_pr_diff_raises(mock_client):
+    """When get_pr_diff raises, comments are still posted without diff_hunk."""
+    from code_review.providers.base import InlineComment
+
+    mock_client.return_value.__enter__.return_value.request.side_effect = [
+        Exception("network error"),
+        MagicMock(raise_for_status=MagicMock(), content=b""),
+    ]
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    p.post_review_comments(
+        "owner",
+        "repo",
+        1,
+        [InlineComment(path="foo.py", line=1, body="Comment")],
+        head_sha="sha",
+    )
+    payload = mock_client.return_value.__enter__.return_value.request.call_args_list[1][1]["json"]
+    assert payload["comments"][0]["path"] == "foo.py"
+    assert "diff_hunk" not in payload["comments"][0]
+
+
+@patch("code_review.providers.gitea.httpx.Client")
+def test_post_review_comments_empty_path_fallback(mock_client):
+    """When path is empty or only slashes, fallback to c.path."""
+    mock_post = MagicMock()
+    mock_post.raise_for_status = MagicMock()
+    mock_post.content = b""
+    mock_client.return_value.__enter__.return_value.request.return_value = mock_post
+
+    from code_review.providers.base import InlineComment
+
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    p.post_review_comments(
+        "owner",
+        "repo",
+        1,
+        [InlineComment(path="", line=1, body="Comment")],
+        head_sha="sha",
+    )
+    payload = mock_client.return_value.__enter__.return_value.request.call_args[1]["json"]
+    assert payload["comments"][0]["path"] == ""
+
+
+@patch("code_review.providers.gitea.httpx.Client")
 def test_get_existing_review_comments(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = [
@@ -173,6 +280,25 @@ def test_post_pr_summary_comment(mock_client):
     call_args = mock_client.return_value.__enter__.return_value.request.call_args
     assert "/issues/1/comments" in call_args[0][1]  # url is second positional arg
     assert call_args[1]["json"]["body"] == "Summary: 2 Critical, 1 Suggestion"
+
+
+@patch.object(GiteaProvider, "_patch")
+def test_update_pr_description(mock_patch):
+    """update_pr_description PATCHes the pull request with body (and optional title)."""
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    p.update_pr_description("owner", "repo", 42, "**Title**: kafka\n\nThis PR updates 2 files.")
+    mock_patch.assert_called_once_with(
+        "/repos/owner/repo/pulls/42",
+        {"body": "**Title**: kafka\n\nThis PR updates 2 files."},
+    )
+
+
+@patch.object(GiteaProvider, "_patch")
+def test_update_pr_description_with_title(mock_patch):
+    """update_pr_description can also set the PR title."""
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    p.update_pr_description("o", "r", 1, "New body.", title="New title")
+    mock_patch.assert_called_once_with("/repos/o/r/pulls/1", {"body": "New body.", "title": "New title"})
 
 
 def test_capabilities():

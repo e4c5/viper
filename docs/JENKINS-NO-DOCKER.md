@@ -80,7 +80,7 @@ On every Jenkins **agent** (or controller, if builds run on the controller) that
 3. **Credentials** (unchanged):
    - **Manage Jenkins** → **Credentials**: create Secret text credentials with IDs `SCM_TOKEN` and `GOOGLE_API_KEY` (or your LLM key ID). The existing Jenkinsfile reads these and passes them into the CLI.
 
-4. **Pipeline script**: Keep using `docker/jenkins/Jenkinsfile` (Pipeline script from SCM or paste). With `USE_INLINE_AGENT=true`, it will run `code-review --owner ... --repo ... --pr ... --head-sha ...` on the node and will not call Docker/Podman.
+4. **Pipeline script**: Use **Pipeline script from SCM** (Script Path `docker/jenkins/Jenkinsfile`) or paste the entire `Jenkinsfile` into **Pipeline script** (inline); the pipeline is self-contained. With `USE_INLINE_AGENT=true`, it will run `code-review --owner ... --repo ... --pr ... --head-sha ...` on the node and will not call Docker/Podman.
 
 ---
 

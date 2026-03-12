@@ -1,6 +1,8 @@
 # Quick Start Guide
 
-Get the code review agent running with Docker Compose (or Podman Compose), Gitea, Jenkins, and auto-triggered PR reviews.
+Follow this guide to get up and running with **Gitea and Jenkins** installed via Docker Compose. This is best for a quick try-out or for contributing to the project.
+
+**Already have Jenkins?** Use [Jenkins (existing installation)](JENKINS-EXISTING.md) to add the code-review pipeline to your current Jenkins instead. 
 
 ---
 
@@ -49,21 +51,21 @@ docker compose up -d --build
 
 1. Open http://localhost:8080. Default credentials are `admin` / `admin` (from `docker-compose.yml`).
 2. **Add credentials**:
-   - Go to **Manage Jenkins → Credentials → System → Global credentials (unrestricted)**.
-   - **Add Credentials** → Kind: **Secret text**.
+   - **Global:** **Manage Jenkins → Credentials → System → Global credentials (unrestricted)** → **Add Credentials** → Kind: **Secret text**.
+   - **Pipeline-specific (optional):** Create a **Folder** (e.g. `code-review`), open it → **Credentials** → add the same credentials there, and create the Pipeline job inside that folder so only it can use them.
    - Create:
      - ID: `SCM_TOKEN`, Secret: your Gitea API token.
      - ID: `GOOGLE_API_KEY` (or `OPENAI_API_KEY`, etc.), Secret: your LLM API key.
 3. Create a **Pipeline** job:
    - Click **New Item** (left nav) or **Create a job** (home page), then choose **Pipeline**.
-   - **Pipeline script from SCM** → point to this repo and set **Script Path** to `docker/jenkins/Jenkinsfile`,  
-     **or** use **Pipeline script** and paste the contents of `docker/jenkins/Jenkinsfile`.
-   - Do **not** add `SCM_*` parameters in the Jenkins UI when using **Pipeline script from SCM**.
+   - **Pipeline script from SCM** → point to this repo and set **Script Path** to `docker/jenkins/Jenkinsfile`, or use **Pipeline script** (inline) and paste the entire contents of `docker/jenkins/Jenkinsfile` (it is self-contained). See [Jenkins (existing)](JENKINS-EXISTING.md) for details.
+   - Do **not** add `SCM_*` parameters in the Jenkins UI when using webhooks.
 
 **How values are provided**
 - `SCM_TOKEN` and `GOOGLE_API_KEY` come from Jenkins **Credentials**.
 - `SCM_OWNER`, `SCM_REPO`, `SCM_PR_NUM`, and `SCM_HEAD_SHA` come from the webhook trigger mappings below.
-- `.env` is only used by Docker Compose to substitute values in `docker-compose.yml`.
+- `SCM_PROVIDER` and `SCM_URL` are implied by this Docker stack: the Jenkinsfile defaults to `SCM_PROVIDER=gitea` and `SCM_URL=http://gitea:3000` (the internal hostname from `docker-compose.yml`), so you usually do not need to set them manually here.
+- `.env` is only used by Docker Compose to substitute values in `docker-compose.yml`. If you later run Jenkins outside this stack or against a different SCM (GitHub/GitLab/Bitbucket), follow [Jenkins (existing installation)](JENKINS-EXISTING.md) to set `SCM_PROVIDER` / `SCM_URL` explicitly.
 
 ---
 
@@ -101,9 +103,13 @@ podman build -t code-review-agent -f docker/Dockerfile.agent .
 - **Rebuild required** whenever you change code under `src/` or runtime dependencies in `pyproject.toml`, so that the `code-review-agent` image picks up those changes.
 - The `docker/Dockerfile.agent` is structured so that dependency metadata (`pyproject.toml`) is copied before the source tree; Docker can therefore **cache the expensive `pip install` layer**, and most code-only edits only invalidate the final layers, keeping rebuilds relatively fast.
 
+**Making Jenkins use the new version:** See [Using a new version when code changes](JENKINS-UPDATING-AGENT.md).
+
 ---
 
 ## 5. Auto-trigger PR reviews (Gitea webhook → Jenkins)
+
+This section applies to **Gitea** (and GitHub-style) webhooks. If your SCM is **Bitbucket Data Center**, see [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for webhook setup.
 
 ### 5.1 Configure the Jenkins webhook trigger
 
@@ -128,7 +134,7 @@ In **Build Triggers**:
    `Expression type` = `JSONPath`
 2. In the same **Generic Webhook Trigger** section, set:
    `Optional filter` text = `$PR_ACTION`
-   `Optional filter` regexp = `^(opened|synchronize)$`
+   `Optional filter` regexp = `^(opened|synchronize|synchronized)$`
 3. Save the job.
 4. Re-open the job configuration if needed and copy the **Webhook URL** shown in the same **Generic Webhook Trigger** section.
 

@@ -12,6 +12,7 @@ from code_review.diff.parser import DiffHunk, iter_new_lines, parse_unified_diff
 from code_review.diff.position import (
     CommentablePosition,
     get_commentable_positions,
+    get_diff_hunk_for_line,
     position_for_line,
 )
 
@@ -22,6 +23,7 @@ __all__ = [
     "DiffHunk",
     "format_comment_body_with_marker",
     "get_commentable_positions",
+    "get_diff_hunk_for_line",
     "iter_new_lines",
     "normalize_anchor",
     "parse_marker_from_comment_body",

@@ -45,3 +45,36 @@ def position_for_line(diff_text: str, path: str, line: int) -> CommentablePositi
         if pos.path == path and pos.line_in_new_file == line:
             return pos
     return None
+
+
+def get_diff_hunk_for_line(diff_text: str, path: str, line: int) -> str | None:
+    """
+    Return the raw diff hunk (e.g. for GitHub/Gitea diff_hunk) that contains the given line
+    in the new file. Path comparison is normalized (no leading slash).
+    Returns None if no hunk contains (path, line).
+    """
+    path_norm = path.lstrip("/")
+    for hunk in parse_unified_diff(diff_text):
+        if hunk.path.lstrip("/") != path_norm:
+            continue
+        # Check if line is in this hunk's new-file range
+        new_end = hunk.new_start + hunk.new_count - 1
+        if not (hunk.new_start <= line <= new_end):
+            continue
+        # Rebuild hunk lines: @@ header then content lines with prefix
+        lines: list[str] = []
+        lines.append(
+            f"@@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},{hunk.new_count} @@"
+        )
+        for content, old_ln, new_ln in hunk.lines:
+            if old_ln is not None and new_ln is not None:
+                prefix = " "
+            elif new_ln is not None:
+                prefix = "+"
+            elif old_ln is not None:
+                prefix = "-"
+            else:
+                prefix = "\\"
+            lines.append(prefix + content)
+        return "\n".join(lines)
+    return None

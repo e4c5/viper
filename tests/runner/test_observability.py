@@ -1,8 +1,8 @@
 """Tests for run_review observability: trace_id and structured run_complete log (Phase 4.3)."""
 
-import logging
 from unittest.mock import MagicMock, patch
 
+from tests.conftest import runner_run_async_returning
 from code_review.providers.base import FileInfo
 
 
@@ -11,7 +11,7 @@ from code_review.providers.base import FileInfo
 @patch("code_review.runner.get_provider")
 @patch("code_review.runner.get_scm_config")
 def test_run_review_emits_trace_id_and_run_complete(
-    mock_scm, mock_get_provider, mock_llm, mock_context_window, caplog
+    mock_scm, mock_get_provider, mock_llm, mock_context_window
 ):
     """run_review logs run_complete with trace_id, owner, repo, pr_number, counts, duration_ms."""
     from code_review.runner import run_review
@@ -43,24 +43,41 @@ def test_run_review_emits_trace_id_and_run_complete(
     mock_event.content = MagicMock()
     mock_event.content.parts = [MagicMock(text=findings_json)]
     mock_runner_instance = MagicMock()
-    mock_runner_instance.run.return_value = iter([mock_event])
+    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
-    with caplog.at_level(logging.INFO):
+    run_complete_calls = []
+
+    def capture_run_complete(
+        trace_id, owner, repo, pr_number, files_count, findings_count, posts_count, duration_ms
+    ):
+        run_complete_calls.append(
+            (trace_id, owner, repo, pr_number, files_count, findings_count, posts_count, duration_ms)
+        )
+
+    with patch("code_review.runner._log_run_complete", side_effect=capture_run_complete):
         with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
             run_review("o", "r", 1, head_sha="abc123", dry_run=False)
 
-    run_complete_records = [r for r in caplog.records if r.getMessage() == "run_complete"]
-    assert len(run_complete_records) == 1
-    rec = run_complete_records[0]
-    assert getattr(rec, "trace_id", None) is not None
-    assert len(getattr(rec, "trace_id", "")) == 36  # UUID string length
-    assert getattr(rec, "owner", None) == "o"
-    assert getattr(rec, "repo", None) == "r"
-    assert getattr(rec, "pr_number", None) == 1
-    assert getattr(rec, "files_count", None) == 1
-    assert getattr(rec, "findings_count", None) == 1
-    assert getattr(rec, "posts_count", None) == 1
-    assert getattr(rec, "duration_ms", None) is not None
+    assert len(run_complete_calls) == 1
+    (
+        trace_id,
+        owner,
+        repo,
+        pr_number,
+        files_count,
+        findings_count,
+        posts_count,
+        duration_ms,
+    ) = run_complete_calls[0]
+    assert trace_id is not None
+    assert len(trace_id) == 36  # UUID string length
+    assert owner == "o"
+    assert repo == "r"
+    assert pr_number == 1
+    assert files_count == 1
+    assert findings_count == 1
+    assert posts_count == 1
+    assert duration_ms is not None
 
 
 @patch("code_review.runner.get_context_window")
@@ -68,7 +85,7 @@ def test_run_review_emits_trace_id_and_run_complete(
 @patch("code_review.runner.get_provider")
 @patch("code_review.runner.get_scm_config")
 def test_run_review_emits_run_complete_on_early_exit(
-    mock_scm, mock_get_provider, mock_llm, mock_context_window, caplog
+    mock_scm, mock_get_provider, mock_llm, mock_context_window
 ):
     """When run is skipped (e.g. skip label), run_complete is still logged with 0 counts."""
     from code_review.providers.base import PRInfo
@@ -87,13 +104,30 @@ def test_run_review_emits_run_complete_on_early_exit(
     mock_get_provider.return_value = provider
     mock_context_window.return_value = 1_000_000
 
-    with caplog.at_level(logging.INFO):
+    run_complete_calls = []
+
+    def capture_run_complete(
+        trace_id, owner, repo, pr_number, files_count, findings_count, posts_count, duration_ms
+    ):
+        run_complete_calls.append(
+            (trace_id, owner, repo, pr_number, files_count, findings_count, posts_count, duration_ms)
+        )
+
+    with patch("code_review.runner._log_run_complete", side_effect=capture_run_complete):
         result = run_review("o", "r", 1, head_sha="abc", dry_run=False)
 
     assert result == []
-    run_complete_records = [r for r in caplog.records if r.getMessage() == "run_complete"]
-    assert len(run_complete_records) == 1
-    rec = run_complete_records[0]
-    assert getattr(rec, "trace_id", None) is not None
-    assert getattr(rec, "posts_count", None) == 0
-    assert getattr(rec, "files_count", None) == 0
+    assert len(run_complete_calls) == 1
+    (
+        trace_id,
+        _owner,
+        _repo,
+        _pr_number,
+        files_count,
+        _findings_count,
+        posts_count,
+        _duration_ms,
+    ) = run_complete_calls[0]
+    assert trace_id is not None
+    assert posts_count == 0
+    assert files_count == 0

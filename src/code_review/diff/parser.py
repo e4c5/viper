@@ -22,6 +22,22 @@ def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
     Each hunk contains lines with (content, old_line, new_line).
     old_line/new_line are None for context lines in add/remove-only hunks.
     """
+    def _flush_current_hunk() -> None:
+        nonlocal current_lines, current_path, current_old_start, current_old_count
+        nonlocal current_new_start, current_new_count
+        if current_path and current_lines:
+            hunks.append(
+                DiffHunk(
+                    path=current_path,
+                    old_start=current_old_start,
+                    old_count=current_old_count,
+                    new_start=current_new_start,
+                    new_count=current_new_count,
+                    lines=current_lines,
+                )
+            )
+            current_lines = []
+
     hunks: list[DiffHunk] = []
     current_path = ""
     current_old_start = 0
@@ -35,18 +51,7 @@ def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
 
     for line in diff_text.splitlines():
         if line.startswith("diff --git "):
-            if current_path and current_lines:
-                hunks.append(
-                    DiffHunk(
-                        path=current_path,
-                        old_start=current_old_start,
-                        old_count=current_old_count,
-                        new_start=current_new_start,
-                        new_count=current_new_count,
-                        lines=current_lines,
-                    )
-                )
-                current_lines = []
+            _flush_current_hunk()
             # Parse path: "diff --git a/foo.py b/foo.py" -> use new file path (b/)
             parts = line.split()
             if len(parts) >= 4:
@@ -54,26 +59,15 @@ def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
             continue
 
         if line.startswith("--- ") or line.startswith("+++ "):
-            if line.startswith("+++ ") and not current_path and hunks:
-                pass
-            elif line.startswith("+++ b/"):
+            # Header lines can update the path for non-git diffs; the existing
+            # current_path is kept when appropriate.
+            if line.startswith("+++ b/"):
                 current_path = line[6:].strip()
             continue
 
         m = hunk_header.match(line)
         if m:
-            if current_path and current_lines:
-                hunks.append(
-                    DiffHunk(
-                        path=current_path,
-                        old_start=current_old_start,
-                        old_count=current_old_count,
-                        new_start=current_new_start,
-                        new_count=current_new_count,
-                        lines=current_lines,
-                    )
-                )
-                current_lines = []
+            _flush_current_hunk()
             current_old_start = int(m.group(1))
             current_old_count = int(m.group(2) or 1)
             current_new_start = int(m.group(3))
@@ -100,17 +94,7 @@ def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
         elif prefix == "\\":
             current_lines.append((rest, None, None))
 
-    if current_path and current_lines:
-        hunks.append(
-            DiffHunk(
-                path=current_path,
-                old_start=current_old_start,
-                old_count=current_old_count,
-                new_start=current_new_start,
-                new_count=current_new_count,
-                lines=current_lines,
-            )
-        )
+    _flush_current_hunk()
 
     return hunks
 

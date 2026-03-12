@@ -1,21 +1,27 @@
 """Gitea API provider."""
 
+import logging
 import time
 from typing import Any
 
 import httpx
 
+from code_review.diff.position import get_diff_hunk_for_line
 from code_review.providers.base import (
     FileInfo,
     InlineComment,
     PRInfo,
     ProviderCapabilities,
     ProviderInterface,
+    RateLimitError,
     ReviewComment,
+    _log_pr_info_warning,
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
 from code_review.providers.safety import truncate_repo_content
+
+logger = logging.getLogger(__name__)
 
 
 class GiteaProvider(ProviderInterface):
@@ -32,7 +38,7 @@ class GiteaProvider(ProviderInterface):
             "Accept": "application/json",
         }
 
-    _RETRY_STATUSES = (429, 502, 503, 504)
+    _RETRY_STATUSES = (502, 503, 504)
     _RETRY_DELAY_SECONDS = 1.0
 
     def _request_with_retry(
@@ -43,9 +49,18 @@ class GiteaProvider(ProviderInterface):
         max_retries: int = 1,
         **kwargs: Any,
     ) -> httpx.Response:
-        """Perform request with one retry on 429/5xx."""
+        """Perform request with one retry on transient server errors (502, 503, 504).
+
+        Rate limit errors (429) are not retried; a RateLimitError is raised
+        immediately so callers can skip to the next task rather than making
+        the rate limit situation worse.
+        """
         with httpx.Client(timeout=self._timeout) as client:
             r = client.request(method, url, headers=self._headers(), **kwargs)
+            if r.status_code == 429:
+                raise RateLimitError(
+                    f"Rate limit exceeded (HTTP 429) for {method} {url}: {r.text}"
+                )
             if r.status_code in self._RETRY_STATUSES and max_retries > 0:
                 time.sleep(self._RETRY_DELAY_SECONDS)
                 r = client.request(method, url, headers=self._headers(), **kwargs)
@@ -112,21 +127,35 @@ class GiteaProvider(ProviderInterface):
         comments: list[InlineComment],
         head_sha: str = "",
     ) -> None:
-        """Post inline review comments. Convert internal InlineComment to Gitea API payload."""
+        """Post inline review comments. Convert internal InlineComment to Gitea API payload.
+
+        Gitea shows comments in the diff (Files changed) when each comment has valid path,
+        new_position (line in new file), and commit_id. We fetch the PR diff and include
+        diff_hunk per comment when possible so the UI can pin the comment to the diff section.
+        """
         if not comments:
             return
-        # Gitea CreatePullReview: body, event (APPROVED/REQUEST_CHANGES/COMMENT), comments.
-        # Each comment: path, body, old_position (old file) / new_position (new file) in the diff.
-        # Our InlineComment.line is the 1-based line in the new file, so we always use new_position.
-        review_comments = [
-            {
-                "path": c.path,
+        diff_text: str | None = None
+        try:
+            diff_text = self.get_pr_diff(owner, repo, pr_number)
+        except Exception:
+            pass
+        review_comments: list[dict[str, Any]] = []
+        for c in comments:
+            path_norm = (c.path or "").lstrip("/")
+            if not path_norm:
+                path_norm = c.path or ""
+            item: dict[str, Any] = {
+                "path": path_norm,
                 "body": c.body,
                 "old_position": 0,
-                "new_position": c.line,
+                "new_position": int(c.line),
             }
-            for c in comments
-        ]
+            if diff_text:
+                hunk = get_diff_hunk_for_line(diff_text, c.path, c.line)
+                if hunk:
+                    item["diff_hunk"] = hunk
+            review_comments.append(item)
         payload: dict[str, Any] = {
             "body": "Code review comments",
             "event": "COMMENT",
@@ -201,8 +230,18 @@ class GiteaProvider(ProviderInterface):
         try:
             data = self._get(f"/repos/{owner}/{repo}/pulls/{pr_number}")
             return pr_info_from_api_dict(data, "body") if isinstance(data, dict) else None
-        except Exception:
+        except Exception as e:
+            _log_pr_info_warning(logger, owner, repo, pr_number, e)
             return None
+
+    def update_pr_description(
+        self, owner: str, repo: str, pr_number: int, description: str, title: str | None = None
+    ) -> None:
+        """Update the PR body (and optionally title) via PATCH /repos/.../pulls/{index}."""
+        payload: dict[str, str] = {"body": description}
+        if title is not None:
+            payload["title"] = title
+        self._patch(f"/repos/{owner}/{repo}/pulls/{pr_number}", payload)
 
     def capabilities(self) -> ProviderCapabilities:
         """

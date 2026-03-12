@@ -1,5 +1,6 @@
 """Bitbucket Cloud API provider (workspace = owner, repo_slug = repo)."""
 
+import logging
 from typing import Any
 
 import httpx
@@ -11,12 +12,15 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    _log_pr_info_warning,
+    normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 DEFAULT_BASE_URL = "https://api.bitbucket.org/2.0"
+logger = logging.getLogger(__name__)
 
 
 class BitbucketProvider(ProviderInterface):
@@ -55,6 +59,12 @@ class BitbucketProvider(ProviderInterface):
             r.raise_for_status()
             return r.json() if r.content else None
 
+    def _put(self, path: str, json: dict) -> Any:
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.put(path, headers=self._headers(), json=json)
+            r.raise_for_status()
+            return r.json() if r.content else None
+
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff for the PR."""
         path = self._path(owner, repo, "pullrequests", str(pr_number), "diff")
@@ -74,31 +84,52 @@ class BitbucketProvider(ProviderInterface):
         result: list[FileInfo] = []
         while url:
             data = self._get(url)
-            if not isinstance(data, dict):
+            page_files, next_url = self._parse_diffstat_page(data)
+            result.extend(page_files)
+            if not next_url:
                 break
-            values = data.get("values")
-            if isinstance(values, list):
-                for f in values:
-                    if not isinstance(f, dict):
-                        continue
-                    file_path = (
-                        (f.get("new") or {}).get("path") or (f.get("old") or {}).get("path") or ""
-                    )
-                    if not file_path:
-                        continue
-                    raw_status = f.get("status")
-                    if raw_status == "removed":
-                        status = "removed"
-                    elif raw_status == "added":
-                        status = "added"
-                    else:
-                        status = "modified"
-                    result.append(FileInfo(path=file_path, status=status, additions=0, deletions=0))
-            next_url = data.get("next")
-            if not next_url or not isinstance(next_url, str):
-                break
-            url = next_url.strip() or None
+            url = next_url
         return result
+
+    def _parse_diffstat_page(self, data: Any) -> tuple[list[FileInfo], str | None]:
+        """Parse one diffstat page into FileInfo objects and return (files, next_url)."""
+        if not isinstance(data, dict):
+            return [], None
+        values = data.get("values")
+        if not isinstance(values, list):
+            return [], None
+
+        files: list[FileInfo] = []
+        for entry in values:
+            if not isinstance(entry, dict):
+                continue
+            file_path = self._file_path_from_diffstat_entry(entry)
+            if not file_path:
+                continue
+            status = self._status_from_diffstat(entry.get("status"))
+            files.append(FileInfo(path=file_path, status=status, additions=0, deletions=0))
+
+        next_url = data.get("next")
+        if not next_url or not isinstance(next_url, str):
+            return files, None
+        stripped = next_url.strip()
+        return files, stripped or None
+
+    @staticmethod
+    def _file_path_from_diffstat_entry(entry: dict[str, Any]) -> str:
+        return ((entry.get("new") or {}).get("path") or (entry.get("old") or {}).get("path") or "")
+
+    @staticmethod
+    def _status_from_diffstat(raw_status: Any) -> str:
+        status_map = {
+            "removed": "removed",
+            "added": "added",
+        }
+        return status_map.get(raw_status, "modified")
+
+    def _anchor_path_for_diff(self, file_path: str) -> str:
+        """Normalize path so it matches the PR diff (enables inline comments on the diff view)."""
+        return normalize_diff_anchor_path(file_path)
 
     def post_review_comments(
         self,
@@ -108,16 +139,29 @@ class BitbucketProvider(ProviderInterface):
         comments: list[InlineComment],
         head_sha: str = "",
     ) -> None:
-        """Post inline comments (Bitbucket Cloud: content.raw + inline.from/to/path)."""
+        """Post inline comments (Bitbucket Cloud: content.raw + inline.from/to/path).
+        Path is normalized so it matches the diff and comments appear on the file diff view.
+
+        For single-line comments `from` is omitted (null) per the Bitbucket Cloud API
+        spec — setting `from` equal to `to` is treated as a zero-length range and may
+        cause the API to reject the comment or display it outside the diff view.
+        `from` is only set for genuine multi-line range comments (end_line != line).
+        """
         path = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
         for c in comments:
+            anchor_path = self._anchor_path_for_diff(c.path)
+            end = c.end_line if c.end_line is not None else c.line
+            inline: dict[str, Any] = {
+                "path": anchor_path,
+                "to": end,
+            }
+            # Only set 'from' for genuine multi-line range comments.
+            # For single-line comments, omitting 'from' (null) is the correct API form.
+            if c.end_line is not None and c.end_line != c.line:
+                inline["from"] = c.line
             payload: dict[str, Any] = {
                 "content": {"raw": c.body},
-                "inline": {
-                    "path": c.path,
-                    "from": c.line,
-                    "to": c.end_line if c.end_line is not None else c.line,
-                },
+                "inline": inline,
             }
             self._post(path, payload)
 
@@ -129,31 +173,44 @@ class BitbucketProvider(ProviderInterface):
         result: list[ReviewComment] = []
         while url:
             data = self._get(url)
-            if not isinstance(data, dict):
+            page_comments, next_url = self._comments_from_page(data)
+            result.extend(page_comments)
+            if not next_url:
                 break
-            values = data.get("values")
-            if isinstance(values, list):
-                for c in values:
-                    if not isinstance(c, dict):
-                        continue
-                    inline = c.get("inline") or {}
-                    path_str = inline.get("path") or ""
-                    line = int(inline.get("to") or inline.get("from") or 0)
-                    body = (c.get("content") or {}).get("raw") or ""
-                    result.append(
-                        ReviewComment(
-                            id=str(c.get("id", "")),
-                            path=path_str,
-                            line=line,
-                            body=body,
-                            resolved=False,
-                        )
-                    )
-            next_url = data.get("next")
-            if not next_url or not isinstance(next_url, str):
-                break
-            url = next_url.strip() or None
+            url = next_url
         return result
+
+    def _comments_from_page(self, data: Any) -> tuple[list[ReviewComment], str | None]:
+        """Parse one comments page. Returns (comments, next_url)."""
+        if not isinstance(data, dict):
+            return [], None
+        values = data.get("values")
+        if not isinstance(values, list):
+            return [], None
+
+        comments: list[ReviewComment] = []
+        for c in values:
+            if not isinstance(c, dict):
+                continue
+            inline = c.get("inline") or {}
+            path_str = inline.get("path") or ""
+            line = int(inline.get("to") or inline.get("from") or 0)
+            body = (c.get("content") or {}).get("raw") or ""
+            comments.append(
+                ReviewComment(
+                    id=str(c.get("id", "")),
+                    path=path_str,
+                    line=line,
+                    body=body,
+                    resolved=False,
+                )
+            )
+
+        next_url = data.get("next")
+        if not next_url or not isinstance(next_url, str):
+            return comments, None
+        stripped = next_url.strip()
+        return comments, stripped or None
 
     def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
         """Post PR-level comment (no inline)."""
@@ -168,10 +225,27 @@ class BitbucketProvider(ProviderInterface):
             path = self._path(owner, repo, "pullrequests", str(pr_number))
             data = self._get(path)
             return pr_info_from_api_dict(data, "description") if isinstance(data, dict) else None
-        except Exception:
+        except Exception as e:
+            _log_pr_info_warning(logger, owner, repo, pr_number, e)
             return None
+
+    def update_pr_description(
+        self, owner: str, repo: str, pr_number: int, description: str, title: str | None = None
+    ) -> None:
+        """Update the PR description via PUT .../pullrequests/:id (description.raw for body)."""
+        path = self._path(owner, repo, "pullrequests", str(pr_number))
+        payload: dict = {"description": {"raw": description}}
+        if title is not None:
+            payload["title"] = title
+        self._put(path, payload)
 
     def capabilities(self) -> ProviderCapabilities:
         # PR labels are not supported by Bitbucket Cloud API.
         # Skip-by-label is ineffective; see get_pr_info.
-        return ProviderCapabilities(resolvable_comments=False, supports_suggestions=False)
+        return ProviderCapabilities(
+            resolvable_comments=False,
+            supports_suggestions=False,
+            markup_hides_html_comment=False,
+            markup_supports_collapsible=False,
+            omit_fingerprint_marker_in_body=True,
+        )

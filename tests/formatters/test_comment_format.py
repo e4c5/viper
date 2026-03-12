@@ -3,8 +3,20 @@
 import pytest
 
 from code_review.diff.fingerprint import format_comment_body_with_marker
-from code_review.formatters.comment import SEVERITY_LABELS, finding_to_comment_body
+from code_review.formatters.comment import (
+    SEVERITY_LABELS,
+    _strip_path_prefixes,
+    finding_to_comment_body,
+)
 from code_review.schemas.findings import FindingV1
+
+
+def test_strip_path_prefixes():
+    """dst:// and src:// are removed from displayed text."""
+    assert _strip_path_prefixes("") == ""
+    assert _strip_path_prefixes("hello") == "hello"
+    assert _strip_path_prefixes("In dst://src/main/foo.java at line 1") == "In src/main/foo.java at line 1"
+    assert _strip_path_prefixes("File src://bar.py") == "File bar.py"
 
 
 def test_severity_labels_canonical():
@@ -103,3 +115,18 @@ def test_location_path_line_consistency():
     assert comment_tuple[0] == "src/bar.py"
     assert comment_tuple[1] == 42
     assert comment_tuple[2].startswith("[Suggestion]")
+
+
+def test_finding_to_comment_body_strips_dst_prefix_from_message_and_prompt():
+    """dst:// and src:// are stripped from message and agent_fix_prompt in the output."""
+    f = FindingV1(
+        path="dst://src/foo.py",
+        line=1,
+        severity="suggestion",
+        code="x",
+        message="In dst://src/foo.py at line 1, consider X.",
+        agent_fix_prompt="In the file dst://src/foo.py at line 1, do Y.",
+    )
+    body = finding_to_comment_body(f, use_collapsible_prompt=False)
+    assert "dst://" not in body
+    assert "In src/foo.py at line 1" in body or "In the file src/foo.py at line 1" in body

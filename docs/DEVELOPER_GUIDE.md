@@ -40,7 +40,7 @@ Design principles:
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  CLI (__main__.py)                                                       │
-│  code-review review --owner X --repo Y --pr N [--head-sha SHA]           │
+│  code-review --owner X --repo Y --pr N [--head-sha SHA]                   │
 └─────────────────────────────────────┬───────────────────────────────────┘
                                       │
                                       ▼
@@ -87,7 +87,7 @@ Design principles:
 ```
 src/code_review/
 ├── __init__.py
-├── __main__.py              # CLI: Typer app, review command → run_review()
+├── __main__.py              # CLI: Typer app → run_review()
 ├── config.py                 # SCMConfig, LLMConfig (Pydantic Settings); get_scm_config(), get_llm_config()
 ├── models.py                 # get_configured_model(), get_context_window(), get_max_output_tokens()
 ├── runner.py                 # run_review(); orchestration and ADK Runner
@@ -129,7 +129,7 @@ src/code_review/
 
 ### 4.1 CLI to Runner
 
-1. User runs: `code-review review --owner myorg --repo myrepo --pr 42 --head-sha abc123` (or sets `SCM_OWNER`, `SCM_REPO`, `SCM_PR_NUM`, `SCM_HEAD_SHA`).
+1. User runs: `code-review --owner myorg --repo myrepo --pr 42 --head-sha abc123` (or sets `SCM_OWNER`, `SCM_REPO`, `SCM_PR_NUM`, `SCM_HEAD_SHA`).
 2. `__main__.py` resolves owner, repo, pr, head_sha from options or env; validates; calls `run_review(owner, repo, pr_number, head_sha, dry_run=..., print_findings=...)`.
 
 ### 4.2 Runner Steps (summary)
@@ -231,10 +231,10 @@ Configuration is read via **Pydantic Settings** in `config.py`; no `.env` file i
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `SCM_PROVIDER` | No (default: gitea) | `gitea` \| `github` \| `gitlab` \| `bitbucket` |
+| `SCM_PROVIDER` | No (default: gitea) | `gitea` \| `github` \| `gitlab` \| `bitbucket` \| `bitbucket_server` |
 | `SCM_URL` | Yes | API base URL (e.g. `https://api.github.com`, `http://gitea:3000`) |
 | `SCM_TOKEN` | Yes | API token for the SCM |
-| `SCM_OWNER` | No | Repo owner (can be passed via CLI `--owner`) |
+| `SCM_OWNER` | No | Owner/workspace/project key (provider-specific; see below). Can be passed via CLI `--owner`. |
 | `SCM_REPO` | No | Repo name (can be passed via CLI `--repo`) |
 | `SCM_PR_NUM` | No | PR number (can be passed via CLI `--pr`) |
 | `SCM_HEAD_SHA` | No | Head commit SHA (can be passed via CLI `--head-sha`); required when posting comments |
@@ -242,11 +242,23 @@ Configuration is read via **Pydantic Settings** in `config.py`; no `.env` file i
 | `SCM_SKIP_LABEL` | No | If PR has this label, skip review (default `skip-review`; empty = disabled) |
 | `SCM_SKIP_TITLE_PATTERN` | No | If PR title contains this, skip review (default `[skip-review]`) |
 
+**Provider-specific meaning of owner / repo:** The CLI and config use a single `--owner` and `--repo` for all providers, but their meaning depends on the SCM:
+
+| Provider | `owner` (e.g. `SCM_OWNER` / `--owner`) | `repo` (e.g. `SCM_REPO` / `--repo`) |
+|----------|----------------------------------------|-------------------------------------|
+| Gitea, GitHub, GitLab | Repository owner (user or organization name) | Repository name |
+| Bitbucket Cloud | **Workspace** (team or user namespace in Bitbucket Cloud) | Repo slug |
+| Bitbucket Data Center (`bitbucket_server`) | **Project key** (e.g. `AN` from `project.key` in the API) | Repo slug |
+
+For Bitbucket Data Center webhooks, `SCM_OWNER` is typically set from `$.pullRequest.toRef.repository.project.key` and `SCM_REPO` from `$.pullRequest.toRef.repository.slug`. See [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
+
+**Bitbucket Server inline comments:** For comments to appear on the correct line in the Diff view (rather than at file level), the anchor must include `lineType` matching the line in the diff: `ADDED` for lines that are added (`+` in the diff), `CONTEXT` for unchanged lines. The runner sets `line_type` per comment from the PR diff so Bitbucket can place them correctly. If a comment still appears at file level, the server may have rejected the anchor (e.g. path/ref mismatch or API version differences).
+
 ### 6.2 LLM (`LLM_` prefix)
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `LLM_PROVIDER` | No (default: gemini) | `gemini` \| `openai` \| `anthropic` \| `ollama` \| `vertex` |
+| `LLM_PROVIDER` | No (default: gemini) | `gemini` \| `openai` \| `anthropic` \| `ollama` \| `vertex` \| `openrouter` |
 | `LLM_MODEL` | No | Model name (e.g. `gemini-2.5-flash`) |
 | `LLM_CONTEXT_WINDOW` | No | Context size in tokens (default 128000) |
 | `LLM_MAX_OUTPUT_TOKENS` | No | Max output tokens (default 4096) |
@@ -258,9 +270,53 @@ Configuration is read via **Pydantic Settings** in `config.py`; no `.env` file i
 > **Note (timeouts & retries)**  
 > The current Google ADK Python APIs used by this project do not yet expose a straightforward way to wire `LLM_TIMEOUT_SECONDS` and `LLM_MAX_RETRIES` through to the underlying LLM client. These fields are therefore **configuration-only** for now and reserved for future use, as described in the Plan’s Phase 1 “Timeouts + retry” section.
 
-Provider-specific keys (used by ADK/LiteLLM, not by `config.py`): `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`; for Ollama, `OLLAMA_API_BASE` (default `http://localhost:11434`).
+Provider-specific keys (used by ADK/LiteLLM, not by `config.py`): `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`; for Ollama, `OLLAMA_API_BASE` (default `http://localhost:11434`).
 
-### 6.3 Observability
+### 6.3 Logging
+
+Log level is controlled by **`CODE_REVIEW_LOG_LEVEL`**. Default is `WARNING` (quiet). Valid values (case-insensitive): `DEBUG`, `INFO`, `WARNING`, `ERROR`.
+
+**How to run with different log levels**
+
+1. **Environment variable** (same for CLI or container):
+
+   ```bash
+   # Progress messages: files fetched, agent run, findings count, comments posted
+   CODE_REVIEW_LOG_LEVEL=INFO code-review --owner <owner> --repo <repo> --pr <n> [--head-sha <sha>]
+
+   # Verbose (debug)
+   CODE_REVIEW_LOG_LEVEL=DEBUG code-review --owner <owner> --repo <repo> --pr <n>
+   ```
+
+2. **In `.env`** (remember to `source .env` or export before running; the app does not load `.env` automatically):
+
+   ```
+   CODE_REVIEW_LOG_LEVEL=INFO
+   ```
+
+3. **In CI/Jenkins**: Add `CODE_REVIEW_LOG_LEVEL=INFO` (or `DEBUG`) to the job’s environment or the container’s env so runs produce progress logs.
+
+**What you see at each level**
+
+| Level    | Typical output |
+|----------|-----------------|
+| `INFO`   | "Reviewing owner/repo PR N", "Fetched diff, K file(s)", "Running agent...", "Agent returned M finding(s), L to post", "Posted L comment(s)" (or "Dry run: would post L comment(s)"). |
+| `DEBUG`  | Same as INFO plus verbose library and internal messages. |
+| `WARNING`| Only warnings and errors (default). |
+| `ERROR`  | Only errors. |
+
+**Troubleshooting: "Agent returned 0 finding(s)" in file-by-file mode**
+
+When the PR diff is large, the runner splits work by file (file-by-file mode). Some models return fewer or no findings when given a single file at a time. To force **single-shot** mode (full diff in one request, like a small PR or Gitea run), set a higher diff budget so the full diff fits:
+
+```bash
+# Use 100% of context window for the diff so file-by-file is not used
+LLM_DIFF_BUDGET_RATIO=1.0 code-review --owner <owner> --repo <repo> --pr <n> [--head-sha <sha>]
+```
+
+Compare with and without this env var; if you get findings only with `LLM_DIFF_BUDGET_RATIO=1.0`, the issue is file-by-file behaviour. You can leave it at `1.0` for that run or increase `LLM_CONTEXT_WINDOW` so that 25% of it is larger than your typical diff.
+
+### 6.4 Observability
 
 - **Prometheus**: `CODE_REVIEW_METRICS=prometheus` or `CODE_REVIEW_PROMETHEUS=1`; optional deps: `pip install -e ".[observability]"`. Use `code_review.observability.get_prometheus_registry()` to expose `/metrics`.
 - **OpenTelemetry**: `CODE_REVIEW_TRACING=otel` or `CODE_REVIEW_OTEL=1`; set `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` for export.
@@ -306,7 +362,7 @@ Provider-specific keys (used by ADK/LiteLLM, not by `config.py`): `GOOGLE_API_KE
 For high-concurrency or multi-tenant scenarios, you can run this package as a **stateless worker** behind an external orchestration service.
 
 - **Worker contract**:
-  - CLI: `code-review review --owner ... --repo ... --pr ... --head-sha ...`
+  - CLI: `code-review --owner ... --repo ... --pr ... --head-sha ...`
   - Env: `SCM_*` and `LLM_*` as documented above.
   - One invocation of `run_review`:
     - Runs a single review for the given PR/head.

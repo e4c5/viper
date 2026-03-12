@@ -7,6 +7,23 @@ import time
 import pytest
 import requests
 
+
+def runner_run_async_returning(events):
+    """Return a callable that when called returns an async generator yielding events.
+
+    Use for mocking google.adk.runners.Runner.run_async in tests.
+    The runner calls run_async(user_id=..., session_id=..., new_message=...);
+    the returned callable accepts *args, **kwargs and returns the async generator.
+    """
+    async def _agen():
+        for e in events:
+            yield e
+
+    def _wrapper(*args, **kwargs):
+        return _agen()
+
+    return _wrapper
+
 E2E_COMPOSE_FILE = "tests/e2e/docker-compose.e2e.yml"
 E2E_PROJECT_NAME = "code-review-e2e"
 
@@ -69,31 +86,12 @@ def e2e_stack():
         f"{jenkins_url}/api/json",
     ]
 
-    def _service_ready(endpoints):
-        for url in endpoints:
-            try:
-                resp = requests.get(url, timeout=5)
-            except requests.RequestException:
-                continue
-            if 200 <= resp.status_code < 500:
-                return True
-        return False
-
-    start = time.time()
-    while True:
-        gitea_ready = _service_ready(gitea_health_endpoints)
-        jenkins_ready = _service_ready(jenkins_health_endpoints)
-
-        if gitea_ready and jenkins_ready:
-            break
-
-        if time.time() - start > timeout_seconds:
-            pytest.skip(
-                f"E2E stack failed to become ready within {timeout_seconds} seconds "
-                f"(Gitea ready={gitea_ready}, Jenkins ready={jenkins_ready})"
-            )
-
-        time.sleep(poll_interval)
+    _wait_for_services_ready(
+        gitea_health_endpoints,
+        jenkins_health_endpoints,
+        timeout_seconds=timeout_seconds,
+        poll_interval=poll_interval,
+    )
 
     try:
         yield
@@ -103,3 +101,38 @@ def e2e_stack():
             subprocess.run(down_cmd, check=False)
         except FileNotFoundError:
             pass
+
+
+def _service_ready(endpoints):
+    for url in endpoints:
+        try:
+            resp = requests.get(url, timeout=5)
+        except requests.RequestException:
+            continue
+        if 200 <= resp.status_code < 500:
+            return True
+    return False
+
+
+def _wait_for_services_ready(
+    gitea_endpoints,
+    jenkins_endpoints,
+    *,
+    timeout_seconds: int,
+    poll_interval: float,
+) -> None:
+    start = time.time()
+    while True:
+        gitea_ready = _service_ready(gitea_endpoints)
+        jenkins_ready = _service_ready(jenkins_endpoints)
+
+        if gitea_ready and jenkins_ready:
+            return
+
+        if time.time() - start > timeout_seconds:
+            pytest.skip(
+                f"E2E stack failed to become ready within {timeout_seconds} seconds "
+                f"(Gitea ready={gitea_ready}, Jenkins ready={jenkins_ready})"
+            )
+
+        time.sleep(poll_interval)

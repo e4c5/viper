@@ -1,10 +1,40 @@
 """Abstract provider interface for SCM backends (Gitea, GitLab, Bitbucket)."""
 
+import logging
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, Field, model_validator
 
 from code_review.diff.parser import parse_unified_diff
+
+
+def _log_pr_info_warning(
+    logger: logging.Logger,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    exc: Exception,
+) -> None:
+    """Emit a standardised warning when get_pr_info fails and return None.
+
+    Centralised so the identical warning block is not repeated in every provider.
+    """
+    logger.warning(
+        "get_pr_info failed owner=%s repo=%s pr_number=%s: %s",
+        owner,
+        repo,
+        pr_number,
+        exc,
+    )
+
+
+class RateLimitError(Exception):
+    """Raised when the SCM API returns a 429 Too Many Requests response.
+
+    This is a known error; callers should skip to the next task rather than
+    retrying, because retrying a rate-limited request will only worsen the
+    situation.
+    """
 
 
 class ProviderCapabilities(BaseModel):
@@ -14,10 +44,21 @@ class ProviderCapabilities(BaseModel):
       (Currently false for all built-in providers.)
     - supports_suggestions: provider supports suggested-change / code suggestion blocks
      (e.g. GitHub, GitLab).
+    - markup_hides_html_comment: when True, HTML comments (e.g. <!-- ... -->) are hidden
+      in comment bodies, so the fingerprint marker can be prepended. When False (e.g. Bitbucket),
+      the marker is appended so the visible part of the comment is not prefixed by raw markup.
+    - markup_supports_collapsible: when True, <details>/<summary> render as collapsible
+      sections. When False, the agent prompt is formatted as plain text to avoid raw tags.
+    - omit_fingerprint_marker_in_body: when True, do not add the HTML comment marker to
+      the comment body at all (avoids stray XML in UIs that display it). Dedup still uses
+      body_hash; fingerprint cannot be read back from existing comments.
     """
 
     resolvable_comments: bool = False
     supports_suggestions: bool = False
+    markup_hides_html_comment: bool = True
+    markup_supports_collapsible: bool = True
+    omit_fingerprint_marker_in_body: bool = False
 
 
 class FileInfo(BaseModel):
@@ -46,6 +87,21 @@ def pr_info_from_api_dict(data: dict, description_key: str = "body") -> PRInfo:
     ]
     description = data.get(description_key, "") or ""
     return PRInfo(title=title, labels=labels, description=description)
+
+
+def normalize_diff_anchor_path(file_path: str) -> str:
+    """Normalize a file path so it matches PR diffs across providers.
+
+    Strips dst:// and src:// prefixes so e.g. dst://src/main/java/foo.java ->
+    src/main/java/foo.java, and removes leading slashes. Falls back to the
+    original value if normalization results in an empty string.
+    """
+    p = (file_path or "").strip()
+    for prefix in ("dst://", "src://"):
+        if p.lower().startswith(prefix):
+            p = p[len(prefix) :].lstrip("/")
+            break
+    return p.lstrip("/") or file_path or ""
 
 
 def file_infos_from_pull_file_list(files: list) -> list[FileInfo]:
@@ -83,6 +139,8 @@ class InlineComment(BaseModel):
     each provider converts to its SCM API shape (inline, file-level, or PR-level fallback).
     When capabilities().supports_suggestions is True, providers may render suggested_patch
     as a suggestion block (e.g. GitHub/GitLab).
+    line_type: when set to "ADDED" or "CONTEXT", Bitbucket Server uses it in the anchor
+    so the comment attaches to the correct line in the diff (otherwise it may show as file-level).
     """
 
     path: str
@@ -94,6 +152,10 @@ class InlineComment(BaseModel):
     suggested_patch: str | None = Field(
         default=None,
         description="Optional suggested code change; used when provider supports_suggestions",
+    )
+    line_type: str | None = Field(
+        default=None,
+        description="For Bitbucket Server: 'ADDED' or 'CONTEXT' so the comment anchors to the diff line",
     )
 
     @model_validator(mode="after")
@@ -239,6 +301,18 @@ class ProviderInterface(ABC):
     def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
         """Post a PR-level comment (e.g. when inline positioning fails or finding is file-level)."""
         raise NotImplementedError("post_pr_summary_comment not implemented for this provider")
+
+    def update_pr_description(
+        self, owner: str, repo: str, pr_number: int, description: str, title: str | None = None
+    ) -> None:
+        """
+        Update the pull request description (and optionally title) in the SCM.
+
+        Used when the PR has no meaningful description so Viper can set an
+        auto-generated summary as the actual PR body instead of only posting a comment.
+        Default: NotImplementedError (provider does not support updating PR description).
+        """
+        raise NotImplementedError("update_pr_description not implemented for this provider")
 
     def capabilities(self) -> ProviderCapabilities:
         """Return provider capability flags."""

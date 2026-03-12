@@ -24,7 +24,7 @@ The focus here is **what changes belong in this repository only**.
 
 The CLI already exposes a stable entry point:
 
-- Command: `code-review review`
+- Command: `code-review`
 - Inputs via args or env:
   - `SCM_PROVIDER`, `SCM_URL`, `SCM_TOKEN`
   - `SCM_OWNER`, `SCM_REPO`, `SCM_PR_NUM`
@@ -126,7 +126,7 @@ This package must remain usable without the external service.
 **Plan:**
 
 - Keep `QUICKSTART.md` and existing Jenkins example unchanged:
-  - CI can call `code-review review` directly with `SCM_*` env vars.
+  - CI can call `code-review` directly with `SCM_*` env vars.
 - Clearly document in a new section (e.g. “High-Concurrency / Orchestrated Mode”) that:
   - For low/medium concurrency, direct CI invocation is fine.
   - For high concurrency / many repos, use the **sister orchestration project**.

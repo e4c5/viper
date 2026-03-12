@@ -27,31 +27,52 @@ def _strip_leading_tags(text: str) -> str:
     return _LEADING_TAGS_RE.sub("", text).lstrip()
 
 
-def finding_to_comment_body(f: FindingV1) -> str:
+def _strip_path_prefixes(text: str) -> str:
+    """Remove dst:// and src:// from path-like text so displayed comments don't show them."""
+    if not text:
+        return text
+    out = text.replace("dst://", "").replace("src://", "")
+    return out
+
+
+def finding_to_comment_body(
+    f: FindingV1,
+    use_collapsible_prompt: bool = True,
+) -> str:
     """
     Format a finding as inline comment body with a [Critical]/[Suggestion]/[Info] prefix.
     Location (path, line, optional end_line) is carried by the runner when posting;
     this returns only the body text.
+    When use_collapsible_prompt is False (e.g. Bitbucket), the agent prompt is
+    formatted as plain text instead of <details>/<summary> to avoid raw tags in the UI.
     """
     severity_key = f.severity.lower()
     label = SEVERITY_LABELS.get(severity_key, f"[{f.severity.title()}]")
 
     body = _strip_leading_tags(f.get_body())
+    body = _strip_path_prefixes(body)
 
     if not body:
         main = label
     else:
         main = f"{label} {body}"
 
-    # Optionally append a collapsible block containing an agent fix prompt, when provided.
+    # Optionally append block containing an agent fix prompt, when provided.
     if f.agent_fix_prompt:
-        prompt_block = (
-            "\n\n"
-            "<details>\n"
-            "<summary>Prompt for AI Agents</summary>\n\n"
-            f"{f.agent_fix_prompt}\n"
-            "</details>"
-        )
+        prompt_text = _strip_path_prefixes(f.agent_fix_prompt)
+        if use_collapsible_prompt:
+            prompt_block = (
+                "\n\n"
+                "<details>\n"
+                "<summary>Prompt for AI Agents</summary>\n\n"
+                f"{prompt_text}\n"
+                "</details>"
+            )
+        else:
+            prompt_block = (
+                "\n\n---\n**Prompt for AI Agents**\n\n"
+                f"{prompt_text}"
+            )
         return main + prompt_block
 
     return main

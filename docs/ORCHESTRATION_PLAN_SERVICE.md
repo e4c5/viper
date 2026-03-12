@@ -2,7 +2,7 @@
 
 This document outlines a design for a **separate orchestration service** that coordinates many `code-review-agent` runs across repositories and tenants.
 
-The service is optional. CI can still invoke `code-review review` directly for low/medium concurrency.
+The service is optional. CI can still invoke `code-review` directly for low/medium concurrency.
 
 ---
 
@@ -16,7 +16,7 @@ The orchestration service is **not** part of the `code-review-agent` package. It
   - **Debounce**: “latest head_sha wins” per PR.
   - **Serialization**: at most one active review per PR/head at a time.
 - Starts worker processes/containers that run:
-  - `code-review review --owner ... --repo ... --pr ... --head-sha ...`
+  - `code-review --owner ... --repo ... --pr ... --head-sha ...`
 
 ---
 
@@ -77,7 +77,7 @@ One or more identical worker processes:
 4. **Launch review worker**:
    - Set env vars (`SCM_*`, `LLM_*`) from configuration/secret store.
    - Start a container or process running:
-     - `code-review review --owner ... --repo ... --pr ... --head-sha ...`
+     - `code-review --owner ... --repo ... --pr ... --head-sha ...`
 5. Wait for completion:
    - Record job status in `job_state:{job_id}` (success, skip, error).
    - Release lock (`DEL lock:{...}`) or let TTL expire.

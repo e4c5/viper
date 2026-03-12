@@ -6,13 +6,6 @@ from urllib.parse import urlparse
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_PRIVATE_NETWORK_PREFIXES = (
-    "127.",
-    "10.",
-    "192.168.",
-    "169.254.",
-)
-
 _SCM_CONFIG: "SCMConfig | None" = None
 _LLM_CONFIG: "LLMConfig | None" = None
 
@@ -20,9 +13,13 @@ _LLM_CONFIG: "LLMConfig | None" = None
 class SCMConfig(BaseSettings):
     """SCM (Source Control) configuration."""
 
+    # NOTE: The application intentionally does NOT load .env files automatically.
+    # All configuration must come from the real environment (process env vars,
+    # container/CI settings, etc.). This matches the documented contract in
+    # README/AGENTS: users are expected to `export` or `source` values themselves.
     model_config = SettingsConfigDict(env_prefix="SCM_", extra="ignore")
 
-    provider: Literal["gitea", "github", "gitlab", "bitbucket"] = "gitea"
+    provider: Literal["gitea", "github", "gitlab", "bitbucket", "bitbucket_server"] = "gitea"
     url: str = Field(..., description="API base URL (may differ from UI for self-hosted)")
     token: SecretStr = Field(..., description="API token for authentication")
     owner: str = Field(default="", description="Repo owner/org")
@@ -53,9 +50,6 @@ class SCMConfig(BaseSettings):
         parsed = urlparse(v)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError("SCM_URL must be a valid http(s) URL with non-empty host")
-        host = parsed.hostname or ""
-        if host.startswith(_PRIVATE_NETWORK_PREFIXES) or host in ("localhost",):
-            raise ValueError("SCM_URL must not point to localhost or private IP ranges")
         return v
 
     @field_validator("allowed_hosts")
@@ -70,9 +64,12 @@ class SCMConfig(BaseSettings):
 class LLMConfig(BaseSettings):
     """LLM configuration."""
 
+    # See note above: we do not auto-load .env; only real env vars are used.
     model_config = SettingsConfigDict(env_prefix="LLM_", extra="ignore")
 
-    provider: Literal["gemini", "openai", "anthropic", "ollama", "vertex"] = "gemini"
+    provider: Literal[
+        "gemini", "openai", "anthropic", "ollama", "vertex", "openrouter"
+    ] = "gemini"
     model: str = "gemini-2.5-flash"
     context_window: int = Field(
         default=128_000,

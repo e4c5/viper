@@ -1,6 +1,7 @@
 """GitHub API provider (for local testing without Gitea)."""
 
 import base64
+import logging
 from typing import Any
 
 import httpx
@@ -12,6 +13,7 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    _log_pr_info_warning,
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
@@ -19,6 +21,7 @@ from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 DEFAULT_BASE_URL = "https://api.github.com"
+logger = logging.getLogger(__name__)
 
 
 class GitHubProvider(ProviderInterface):
@@ -61,6 +64,13 @@ class GitHubProvider(ProviderInterface):
         url = f"{self._base_url}{path}"
         with httpx.Client(timeout=self._timeout) as client:
             r = client.post(url, headers=self._headers(), json=json)
+            r.raise_for_status()
+            return r.json() if r.content else None
+
+    def _patch(self, path: str, json: Any) -> Any:
+        url = f"{self._base_url}{path}"
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.patch(url, headers=self._headers(), json=json)
             r.raise_for_status()
             return r.json() if r.content else None
 
@@ -153,8 +163,18 @@ class GitHubProvider(ProviderInterface):
         try:
             data = self._get(f"/repos/{owner}/{repo}/pulls/{pr_number}")
             return pr_info_from_api_dict(data, "body") if isinstance(data, dict) else None
-        except Exception:
+        except Exception as e:
+            _log_pr_info_warning(logger, owner, repo, pr_number, e)
             return None
+
+    def update_pr_description(
+        self, owner: str, repo: str, pr_number: int, description: str, title: str | None = None
+    ) -> None:
+        """Update the PR body (and optionally title) via PATCH /repos/.../pulls/{number}."""
+        payload: dict[str, str] = {"body": description}
+        if title is not None:
+            payload["title"] = title
+        self._patch(f"/repos/{owner}/{repo}/pulls/{pr_number}", payload)
 
     def capabilities(self) -> ProviderCapabilities:
         """GitHub supports suggestion blocks; resolved is per-conversation, not per-comment."""

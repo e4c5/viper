@@ -14,7 +14,7 @@ This file helps AI coding assistants (e.g. Cursor, Codex) work effectively on th
 
 | Area | Location | Notes |
 |------|----------|--------|
-| **Entry point** | `src/code_review/__main__.py` | CLI: `code-review review` → `run_review()` |
+| **Entry point** | `src/code_review/__main__.py` | CLI: `code-review` → `run_review()` |
 | **Orchestration** | `src/code_review/runner.py` | Config, provider, skip/idempotency, agent run, filter, post |
 | **ADK agent** | `src/code_review/agent/agent.py` | `create_review_agent(provider, review_standards, findings_only)` |
 | **Tools** | `src/code_review/agent/tools/gitea_tools.py` | Tools wrap `ProviderInterface`; used by ADK agent |
@@ -63,5 +63,5 @@ Tests mirror `src/`: `tests/test_runner.py`, `tests/providers/`, `tests/runner/`
 ```bash
 pip install -e ".[dev]"
 pytest --ignore=tests/e2e
-code-review review --owner <owner> --repo <repo> --pr <n> --head-sha <sha> --dry-run
+code-review --owner <owner> --repo <repo> --pr <n> --head-sha <sha> --dry-run
 ```

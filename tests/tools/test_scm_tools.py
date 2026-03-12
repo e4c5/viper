@@ -72,11 +72,23 @@ def test_post_review_comment_calls_provider_with_head_sha():
     )
 
 
-def test_findings_only_tools_include_get_pr_diff_and_for_file():
+def test_findings_only_tools_include_get_pr_diff_for_file_but_not_full_diff():
+    """findings-only tools must include get_pr_diff_for_file but NOT get_pr_diff.
+
+    get_pr_diff (full-PR diff) is excluded to prevent the agent from re-fetching
+    the entire diff on every invocation:
+    - In single-shot mode the diff is already embedded in the user message;
+      calling get_pr_diff would duplicate it and double the token cost.
+    - In file-by-file mode the agent must use get_pr_diff_for_file; allowing
+      get_pr_diff risks fetching the full multi-hundred-kilobyte diff on every
+      per-file session, which was the root cause of multi-million-token waste.
+    """
     provider = _mock_provider()
     tools = create_findings_only_tools(provider)
     names = [t.__name__ for t in tools]
-    assert "get_pr_diff" in names
+    assert "get_pr_diff" not in names, (
+        "get_pr_diff must NOT be in findings-only tools to avoid redundant full-diff fetches"
+    )
     assert "get_pr_diff_for_file" in names
     assert "post_review_comment" not in names
     assert "get_existing_review_comments" not in names

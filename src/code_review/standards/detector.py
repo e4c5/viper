@@ -122,6 +122,24 @@ def detect_from_paths(paths: list[str]) -> DetectedContext:
         )
 
     path_set = {_normalize_path(p) for p in paths}
+    lang_counts, fw_candidates = _language_and_framework_counts(path_set)
+
+    if not lang_counts:
+        return DetectedContext(
+            language="unknown", framework=None, confidence="low", confidence_score=0.0
+        )
+
+    primary_lang, score = _primary_language_and_score(lang_counts)
+    confidence = _confidence_from_score(score)
+    framework = fw_candidates[0] if fw_candidates else None
+    return DetectedContext(
+        language=primary_lang, framework=framework, confidence=confidence, confidence_score=score
+    )
+
+
+def _language_and_framework_counts(
+    path_set: set[str],
+) -> tuple[Counter[str], list[str]]:
     lang_counts: Counter[str] = Counter()
     fw_candidates: list[str] = []
 
@@ -136,14 +154,14 @@ def detect_from_paths(paths: list[str]) -> DetectedContext:
                 break
         # Check extensions
         ext = path_obj.suffix.lower()
-        if ext in _EXT_LANGUAGE:
-            lang_counts[_EXT_LANGUAGE[ext]] += 1
+        lang = _EXT_LANGUAGE.get(ext)
+        if lang:
+            lang_counts[lang] += 1
 
-    if not lang_counts:
-        return DetectedContext(
-            language="unknown", framework=None, confidence="low", confidence_score=0.0
-        )
+    return lang_counts, fw_candidates
 
+
+def _primary_language_and_score(lang_counts: Counter[str]) -> tuple[str, float]:
     primary_lang = lang_counts.most_common(1)[0][0]
     primary_count = lang_counts[primary_lang]
     secondary = lang_counts.most_common(2)
@@ -156,11 +174,7 @@ def detect_from_paths(paths: list[str]) -> DetectedContext:
         score = 0.6
     else:
         score = 0.0
-    confidence = _confidence_from_score(score)
-    framework = fw_candidates[0] if fw_candidates else None
-    return DetectedContext(
-        language=primary_lang, framework=framework, confidence=confidence, confidence_score=score
-    )
+    return primary_lang, score
 
 
 def detect_from_paths_and_content(
@@ -172,21 +186,7 @@ def detect_from_paths_and_content(
     """
     base = detect_from_paths(paths)
     path_set = {_normalize_path(p): p for p in paths}
-    fw_candidates: list[str] = []
-
-    for norm_path, orig_path in path_set.items():
-        content = content_by_path.get(norm_path) or content_by_path.get(orig_path)
-        if not content:
-            continue
-        name = Path(norm_path).name
-        if name == "requirements.txt" or name == "pyproject.toml":
-            for fw in _extract_python_frameworks(content):
-                if fw not in fw_candidates:
-                    fw_candidates.append(fw)
-        elif name in ("pom.xml", "build.gradle", "build.gradle.kts"):
-            for fw in _extract_java_frameworks(content):
-                if fw not in fw_candidates:
-                    fw_candidates.append(fw)
+    fw_candidates = _framework_candidates_from_content(path_set, content_by_path)
 
     framework = fw_candidates[0] if fw_candidates else base.framework
     score = base.confidence_score
@@ -196,6 +196,30 @@ def detect_from_paths_and_content(
     return DetectedContext(
         language=base.language, framework=framework, confidence=confidence, confidence_score=score
     )
+
+
+def _framework_candidates_from_content(
+    path_set: dict[str, str], content_by_path: dict[str, str]
+) -> list[str]:
+    fw_candidates: list[str] = []
+
+    for norm_path, orig_path in path_set.items():
+        content = content_by_path.get(norm_path) or content_by_path.get(orig_path)
+        if not content:
+            continue
+        name = Path(norm_path).name
+        if name in ("requirements.txt", "pyproject.toml"):
+            frameworks = _extract_python_frameworks(content)
+        elif name in ("pom.xml", "build.gradle", "build.gradle.kts"):
+            frameworks = _extract_java_frameworks(content)
+        else:
+            frameworks = []
+
+        for fw in frameworks:
+            if fw not in fw_candidates:
+                fw_candidates.append(fw)
+
+    return fw_candidates
 
 
 def _folder_roots_from_paths(paths: list[str]) -> set[str]:

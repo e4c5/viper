@@ -76,3 +76,21 @@ def test_finding_to_comment_body_includes_agent_fix_prompt_in_collapsible_block(
     assert "<summary>Prompt for AI Agents</summary>" in body
     assert "Verify Y and apply fix." in body
     assert body.strip().endswith("</details>")
+
+
+def test_finding_to_comment_body_plain_prompt_when_not_collapsible():
+    """When use_collapsible_prompt=False (e.g. Bitbucket), prompt is plain text, no HTML tags."""
+    f = FindingV1(
+        path="a.py",
+        line=1,
+        severity="critical",
+        code="x",
+        message="Do Y.",
+        agent_fix_prompt="Verify Y and apply fix.",
+    )
+    body = finding_to_comment_body(f, use_collapsible_prompt=False)
+    assert body.startswith("[Critical] Do Y.")
+    assert "<details>" not in body
+    assert "<summary>" not in body
+    assert "**Prompt for AI Agents**" in body
+    assert "Verify Y and apply fix." in body

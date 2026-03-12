@@ -14,15 +14,14 @@ COPY pyproject.toml ./
 COPY src ./src/
 
 # Upgrade pip to a version without the known CVEs, then install the package
-# and dependencies; pip will reuse wheels between layers when possible.
+# and dependencies; pip will reuse wheels between layers when possible. Also
+# create an unprivileged user in the same layer to reduce image layers.
 RUN python -m pip install --no-cache-dir --upgrade "pip>=26.0" \
-    && pip install --no-cache-dir -e .
-
-# Run as unprivileged user
-RUN adduser --disabled-password --gecos "" --uid 1000 appuser \
+    && pip install --no-cache-dir -e . \
+    && adduser --disabled-password --gecos "" --uid 1000 appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
-# No long-running process; Jenkins (or other CI) invokes: code-review review
+# No long-running process; Jenkins (or other CI) invokes: code-review
 ENTRYPOINT ["code-review"]
 CMD ["review"]

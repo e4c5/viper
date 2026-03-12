@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from tests.conftest import runner_run_async_returning
 from code_review.diff.fingerprint import format_comment_body_with_marker
 from code_review.providers.base import (
     FileInfo,
@@ -75,13 +76,15 @@ class _ProviderWithCapabilities(ProviderInterface):
         self._resolved_ids.append(comment_id)
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
-def test_auto_resolve_stale_comments_when_capabilities_true(
-    mock_get_scm_config, mock_get_llm_config, mock_get_context_window
+def _run_with_single_stale_comment(
+    mock_get_scm_config,
+    mock_get_llm_config,
+    mock_get_context_window,
+    *,
+    resolvable: bool,
+    dry_run: bool,
 ):
-    """When capabilities().resolvable_comments is True, stale comments are auto-resolved."""
+    """Common setup for auto-resolve tests: one stale comment and empty findings."""
     from code_review.runner import run_review
 
     mock_get_scm_config.return_value = MagicMock(
@@ -95,8 +98,7 @@ def test_auto_resolve_stale_comments_when_capabilities_true(
     )
     mock_get_context_window.return_value = 1_000_000
 
-    provider = _ProviderWithCapabilities(resolvable=True)
-    # Existing comment with fingerprint that will NOT appear in new findings
+    provider = _ProviderWithCapabilities(resolvable=resolvable)
     body_with_marker = format_comment_body_with_marker(
         "[Suggestion] Old issue.", fingerprint="stale-fp", version="1", run_id="run-1"
     )
@@ -122,10 +124,28 @@ def test_auto_resolve_stale_comments_when_capabilities_true(
         mock_event.content = MagicMock()
         mock_event.content.parts = [MagicMock(text=findings_json)]
         mock_runner_instance = MagicMock()
-        mock_runner_instance.run.return_value = iter([mock_event])
+        mock_runner_instance.run_async = runner_run_async_returning([mock_event])
         mock_runner_cls.return_value = mock_runner_instance
 
-        result = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
+        result = run_review("o", "r", 1, head_sha="abc123", dry_run=dry_run)
+
+    return provider, result
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_llm_config")
+@patch("code_review.runner.get_scm_config")
+def test_auto_resolve_stale_comments_when_capabilities_true(
+    mock_get_scm_config, mock_get_llm_config, mock_get_context_window
+):
+    """When capabilities().resolvable_comments is True, stale comments are auto-resolved."""
+    provider, result = _run_with_single_stale_comment(
+        mock_get_scm_config,
+        mock_get_llm_config,
+        mock_get_context_window,
+        resolvable=True,
+        dry_run=False,
+    )
 
     # No new findings, but the stale existing comment should be auto-resolved.
     assert result == []
@@ -142,48 +162,13 @@ def test_auto_resolve_not_called_when_capabilities_false(
     When resolvable_comments is False, resolve_comment is not called
     even if comments are stale.
     """
-    from code_review.runner import run_review
-
-    mock_get_scm_config.return_value = MagicMock(
-        provider="gitea",
-        url="https://x.com",
-        token="x",
+    provider, result = _run_with_single_stale_comment(
+        mock_get_scm_config,
+        mock_get_llm_config,
+        mock_get_context_window,
+        resolvable=False,
+        dry_run=False,
     )
-    mock_get_llm_config.return_value = MagicMock(
-        provider="gemini",
-        model="gemini-2.5-flash",
-    )
-    mock_get_context_window.return_value = 1_000_000
-
-    provider = _ProviderWithCapabilities(resolvable=False)
-    body_with_marker = format_comment_body_with_marker(
-        "[Suggestion] Old issue.", fingerprint="stale-fp", version="1", run_id="run-1"
-    )
-    existing = [
-        ReviewComment(
-            id="c-1",
-            path="foo.py",
-            line=1,
-            body=body_with_marker,
-            resolved=False,
-        )
-    ]
-    provider.get_existing_review_comments = MagicMock(return_value=existing)
-
-    with (
-        patch("code_review.runner.get_provider", return_value=provider),
-        patch("google.adk.runners.Runner") as mock_runner_cls,
-    ):
-        findings_json = "[]"
-        mock_event = MagicMock()
-        mock_event.is_final_response.return_value = True
-        mock_event.content = MagicMock()
-        mock_event.content.parts = [MagicMock(text=findings_json)]
-        mock_runner_instance = MagicMock()
-        mock_runner_instance.run.return_value = iter([mock_event])
-        mock_runner_cls.return_value = mock_runner_instance
-
-        result = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
 
     # No resolve_comment calls when capabilities().resolvable_comments is False.
     assert result == []
@@ -197,41 +182,13 @@ def test_auto_resolve_not_called_in_dry_run(
     mock_get_scm_config, mock_get_llm_config, mock_get_context_window
 ):
     """Dry runs must not call resolve_comment even when resolvable_comments is True."""
-    from code_review.runner import run_review
-
-    mock_get_scm_config.return_value = MagicMock(provider="gitea", url="https://x.com", token="x")
-    mock_get_llm_config.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
-    mock_get_context_window.return_value = 1_000_000
-
-    provider = _ProviderWithCapabilities(resolvable=True)
-    body_with_marker = format_comment_body_with_marker(
-        "[Suggestion] Old issue.", fingerprint="stale-fp", version="1", run_id="run-1"
+    provider, result = _run_with_single_stale_comment(
+        mock_get_scm_config,
+        mock_get_llm_config,
+        mock_get_context_window,
+        resolvable=True,
+        dry_run=True,
     )
-    existing = [
-        ReviewComment(
-            id="c-1",
-            path="foo.py",
-            line=1,
-            body=body_with_marker,
-            resolved=False,
-        )
-    ]
-    provider.get_existing_review_comments = MagicMock(return_value=existing)
-
-    with (
-        patch("code_review.runner.get_provider", return_value=provider),
-        patch("google.adk.runners.Runner") as mock_runner_cls,
-    ):
-        findings_json = "[]"
-        mock_event = MagicMock()
-        mock_event.is_final_response.return_value = True
-        mock_event.content = MagicMock()
-        mock_event.content.parts = [MagicMock(text=findings_json)]
-        mock_runner_instance = MagicMock()
-        mock_runner_instance.run.return_value = iter([mock_event])
-        mock_runner_cls.return_value = mock_runner_instance
-
-        result = run_review("o", "r", 1, head_sha="abc123", dry_run=True)
 
     # No resolve_comment calls during dry_run.
     assert result == []

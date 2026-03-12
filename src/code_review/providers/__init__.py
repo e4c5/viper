@@ -9,6 +9,7 @@ from code_review.providers.base import (
     ReviewComment,
 )
 from code_review.providers.bitbucket import BitbucketProvider
+from code_review.providers.bitbucket_server import BitbucketServerProvider
 from code_review.providers.gitea import GiteaProvider
 from code_review.providers.github import GitHubProvider
 from code_review.providers.gitlab import GitLabProvider
@@ -24,11 +25,14 @@ def get_provider(name: str, base_url: str, token: str) -> ProviderInterface:
         return GitLabProvider(base_url=base_url, token=token)
     if name == "bitbucket":
         return BitbucketProvider(base_url=base_url, token=token)
+    if name == "bitbucket_server":
+        return BitbucketServerProvider(base_url=base_url, token=token)
     raise ValueError(f"Unknown provider: {name}")
 
 
 __all__ = [
     "BitbucketProvider",
+    "BitbucketServerProvider",
     "FileInfo",
     "GiteaProvider",
     "GitHubProvider",

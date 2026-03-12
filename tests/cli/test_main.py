@@ -1,4 +1,4 @@
-"""CLI tests: code-review review parses args and invokes runner."""
+"""CLI tests: code-review parses args and invokes runner."""
 
 import os
 from unittest.mock import patch

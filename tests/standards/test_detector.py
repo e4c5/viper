@@ -1,5 +1,7 @@
 """Tests for language/framework detector."""
 
+import pytest
+
 from code_review.standards import (
     detect_from_paths,
     detect_from_paths_and_content,
@@ -27,7 +29,7 @@ def test_detect_from_paths_empty():
     assert out.language == "unknown"
     assert out.framework is None
     assert out.confidence == "low"
-    assert out.confidence_score == 0.0
+    assert out.confidence_score == pytest.approx(0.0)
 
 
 def test_detect_from_paths_extension_python():
@@ -94,7 +96,7 @@ def test_detect_from_paths_unknown_extension():
     assert out.language == "unknown"
     assert out.framework is None
     assert out.confidence == "low"
-    assert out.confidence_score == 0.0
+    assert out.confidence_score == pytest.approx(0.0)
 
 
 def test_detect_from_paths_confidence_score_in_range():

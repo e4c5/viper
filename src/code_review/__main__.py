@@ -4,7 +4,13 @@ import os
 
 import typer
 
+from code_review.logging_config import configure_logging
 from code_review.runner import run_review
+
+
+def _ensure_logging() -> None:
+    """Configure logging from CODE_REVIEW_LOG_LEVEL before running."""
+    configure_logging()
 
 app = typer.Typer()
 
@@ -14,19 +20,19 @@ OWNER_REPO_PATTERN = r"^[a-zA-Z0-9_.-]+$"
 
 @app.command()
 def review(
-    owner: str = typer.Option(
+    owner: str | None = typer.Option(
         None,
         "--owner",
         "-o",
         help="Repo owner (or set SCM_OWNER)",
     ),
-    repo: str = typer.Option(
+    repo: str | None = typer.Option(
         None,
         "--repo",
         "-r",
         help="Repo name (or set SCM_REPO)",
     ),
-    pr: int = typer.Option(
+    pr: int | None = typer.Option(
         None,
         "--pr",
         "-p",
@@ -74,6 +80,15 @@ def review(
         )
         raise typer.Exit(1)
 
+    if not dry_run and not head_sha_val:
+        typer.echo(
+            "Error: head_sha is required when posting comments (dry_run=False). "
+            "Provide --head-sha or SCM_HEAD_SHA, or use --dry-run to run without posting.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    _ensure_logging()
     findings = run_review(
         owner=owner,
         repo=repo,
