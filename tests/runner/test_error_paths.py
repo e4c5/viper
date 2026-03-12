@@ -2,8 +2,11 @@
 
 from unittest.mock import MagicMock, patch
 
-from tests.conftest import runner_run_async_returning
+import pytest
+from litellm import AuthenticationError
+
 from code_review.providers.base import FileInfo, ProviderCapabilities, RateLimitError
+from tests.conftest import runner_run_async_returning
 
 
 def _exercise_error_path(
@@ -269,6 +272,43 @@ def test_file_by_file_skips_file_on_generic_error(
     assert call_count[0] == 2
     assert len(results) == 1
     assert results[0].path == "b.py"
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_llm_config")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_file_by_file_authentication_error_is_fatal(
+    mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
+):
+    """
+    File-by-file mode must treat litellm.AuthenticationError (HTTP 401) as fatal,
+    so CI fails fast instead of silently skipping all files.
+    """
+    call_count = [0]
+    findings = (
+        '[{"path":"b.py","line":3,"severity":"info","code":"ok","message":"Still fine."}]'
+    )
+
+    def make_auth_error():
+        # AuthenticationError(message, llm_provider, model, response=None)
+        return AuthenticationError(
+            "HTTP 401 Unauthorized", llm_provider="openrouter", model="openrouter/gpt-4o"
+        )
+
+    run_async_side_effect = _build_file_by_file_run_async_side_effect(
+        call_count, make_auth_error, findings
+    )
+
+    with pytest.raises(AuthenticationError):
+        _exercise_file_by_file_skip(
+            mock_get_scm_config,
+            mock_get_provider,
+            mock_get_llm_config,
+            mock_get_context_window,
+            run_async_side_effect,
+        )
+    assert call_count[0] == 1
 
 
 @patch("code_review.runner.get_context_window")

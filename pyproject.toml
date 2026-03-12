@@ -52,6 +52,9 @@ code-review = "code_review.__main__:app"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+code_review = ["standards/prompts/*.md"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
@@ -64,6 +67,18 @@ filterwarnings = [
     "ignore:.*PytestUnknownMarkWarning:pytest.PytestUnknownMarkWarning",
     "ignore:Inheritance class AiohttpClientSession from ClientSession is discouraged:DeprecationWarning:google.genai._api_client",
     "ignore:.*PytestUnhandledThreadExceptionWarning:pytest.PytestUnhandledThreadExceptionWarning",
+]
+
+[tool.coverage.run]
+source = ["src/code_review"]
+omit = ["*/tests/*", "*/e2e/*"]
+
+[tool.coverage.report]
+fail_under = 80
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
 ]
 
 [tool.ruff]

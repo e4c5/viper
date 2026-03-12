@@ -1,30 +1,26 @@
 """Base review criteria prompt fragments."""
 
-BASE_REVIEW_PROMPT = """
-You are an expert code reviewer. Focus on actionable feedback.
+from pathlib import Path
 
-## Review categories
-- **Correctness**: Bugs, edge cases, logic errors
-- **Security**: Injection, secrets, authentication, authorization
-- **Style**: Conventions, readability, consistent formatting
-- **Performance**: Inefficient algorithms, unnecessary allocations, N+1 queries
-- **Maintainability**: Duplication, unclear naming, lack of documentation
-- **Tests**: Coverage of changes, test quality, edge cases
+_PROMPTS_DIR = Path(__file__).parent
 
-## Severity levels
-- **[Critical]**: Must fix (bug, security flaw, data loss risk)
-- **[Suggestion]**: Should consider (maintainability, best practice, minor improvement)
-- **[Info]**: Optional (nit, alternative approach)
 
-## Comment format
-`[Severity] Brief description. Optional: concrete fix or code snippet.`
+def _read_prompt_fragment(filename: str, *, required: bool = False) -> str:
+    """
+    Read a prompt fragment from a sibling .md file.
 
-## Snippet policy
-- **[Critical]**: Diagnosis and minimal fix guidance only; avoid large code blocks.
-- **[Suggestion]**: Code snippets allowed to illustrate improvement.
-- Inline patches can be risky; prefer short, focused suggestions.
+    Optional fragments return an empty string when not present.
+    Required fragments raise a clear error on missing files.
+    """
+    path = _PROMPTS_DIR / filename
+    try:
+        return path.read_text(encoding="utf-8").rstrip()
+    except FileNotFoundError as exc:
+        if required:
+            raise RuntimeError(
+                f"Missing prompt fragment '{filename}' under '{_PROMPTS_DIR}'."
+            ) from exc
+        return ""
 
-## False positive control
-- Prefer fewer, higher-confidence findings.
-- Mark uncertainty as `category: NeedsVerification` or severity [Info].
-"""
+
+BASE_REVIEW_PROMPT = _read_prompt_fragment("base.md", required=True)

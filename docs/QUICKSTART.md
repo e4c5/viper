@@ -9,7 +9,7 @@ Follow this guide to get up and running with **Gitea and Jenkins** installed via
 ## Prerequisites
 
 - **Docker** and **Docker Compose**, **or** **Podman** and **Podman Compose**
-- **LLM API key** (for example `GOOGLE_API_KEY`)
+- **LLM API key** (set as `LLM_API_KEY`; provider chosen via `LLM_PROVIDER`)
 
 To run **Jenkins without Docker** (no containers on the agent), see [JENKINS-NO-DOCKER.md](JENKINS-NO-DOCKER.md).
 
@@ -55,14 +55,14 @@ docker compose up -d --build
    - **Pipeline-specific (optional):** Create a **Folder** (e.g. `code-review`), open it → **Credentials** → add the same credentials there, and create the Pipeline job inside that folder so only it can use them.
    - Create:
      - ID: `SCM_TOKEN`, Secret: your Gitea API token.
-     - ID: `GOOGLE_API_KEY` (or `OPENAI_API_KEY`, etc.), Secret: your LLM API key.
+     - ID: `LLM_API_KEY`, Secret: your LLM API key (used with `LLM_PROVIDER` and `LLM_MODEL`).
 3. Create a **Pipeline** job:
    - Click **New Item** (left nav) or **Create a job** (home page), then choose **Pipeline**.
    - **Pipeline script from SCM** → point to this repo and set **Script Path** to `docker/jenkins/Jenkinsfile`, or use **Pipeline script** (inline) and paste the entire contents of `docker/jenkins/Jenkinsfile` (it is self-contained). See [Jenkins (existing)](JENKINS-EXISTING.md) for details.
    - Do **not** add `SCM_*` parameters in the Jenkins UI when using webhooks.
 
 **How values are provided**
-- `SCM_TOKEN` and `GOOGLE_API_KEY` come from Jenkins **Credentials**.
+- `SCM_TOKEN` and `LLM_API_KEY` come from Jenkins **Credentials**.
 - `SCM_OWNER`, `SCM_REPO`, `SCM_PR_NUM`, and `SCM_HEAD_SHA` come from the webhook trigger mappings below.
 - `SCM_PROVIDER` and `SCM_URL` are implied by this Docker stack: the Jenkinsfile defaults to `SCM_PROVIDER=gitea` and `SCM_URL=http://gitea:3000` (the internal hostname from `docker-compose.yml`), so you usually do not need to set them manually here.
 - `.env` is only used by Docker Compose to substitute values in `docker-compose.yml`. If you later run Jenkins outside this stack or against a different SCM (GitHub/GitLab/Bitbucket), follow [Jenkins (existing installation)](JENKINS-EXISTING.md) to set `SCM_PROVIDER` / `SCM_URL` explicitly.

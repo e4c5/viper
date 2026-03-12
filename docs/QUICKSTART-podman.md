@@ -12,7 +12,7 @@ For Gitea/Jenkins/webhook setup, follow sections **2–5** of `docs/QUICKSTART.m
 
 - **Podman** and **Podman Compose** (`podman-compose`)
 - A user that will run `podman` and `podman-compose` (rootless)
-- **LLM API key** (for example `GOOGLE_API_KEY`)
+- **LLM API key** (set as `LLM_API_KEY`; provider chosen via `LLM_PROVIDER`)
 
 All commands below are run as **your normal user**, not root, unless explicitly prefixed with `sudo`.
 

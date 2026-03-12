@@ -10,6 +10,7 @@ import time
 import uuid
 
 from google.genai import types
+from litellm import AuthenticationError
 
 import code_review
 from code_review import observability
@@ -845,6 +846,16 @@ class ReviewOrchestrator:
                 response_text = _run_agent_and_collect_response(
                     runner, session_service, file_session_id, content
                 )
+            except AuthenticationError as e:
+                # LLM authentication errors (e.g. HTTP 401 from OpenRouter/OpenAI/etc.)
+                # indicate a misconfigured or missing API key. Treat these as fatal so
+                # CI surfaces them clearly instead of silently skipping all files.
+                logger.error(
+                    "LLM authentication failed while reviewing file=%s; aborting run: %s",
+                    file_path,
+                    e,
+                )
+                raise
             except RateLimitError as e:
                 logger.warning(
                     "Rate limit hit while reviewing file=%s (skipping): %s",

@@ -70,6 +70,10 @@ class LLMConfig(BaseSettings):
     provider: Literal[
         "gemini", "openai", "anthropic", "ollama", "vertex", "openrouter"
     ] = "gemini"
+    api_key: SecretStr | None = Field(
+        default=None,
+        description="API key for the configured LLM provider (single key; provider chosen via LLM_PROVIDER).",
+    )
     model: str = "gemini-2.5-flash"
     context_window: int = Field(
         default=128_000,
@@ -97,6 +101,18 @@ class LLMConfig(BaseSettings):
             "§2.4/§5.5 before relying on it."
         ),
     )
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _normalize_api_key(cls, v: str | SecretStr | None) -> SecretStr | None:
+        """Treat blank API keys as unset and trim accidental surrounding spaces."""
+        if v is None:
+            return None
+        raw = v.get_secret_value() if isinstance(v, SecretStr) else str(v)
+        normalized = raw.strip()
+        if not normalized:
+            return None
+        return SecretStr(normalized)
 
 
 def get_scm_config() -> SCMConfig:

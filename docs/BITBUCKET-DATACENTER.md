@@ -45,7 +45,7 @@ Add **Secret text** credentials with the IDs below (same as for Gitea/GitHub/Git
 | ID | Secret |
 |----|--------|
 | `SCM_TOKEN` | Bitbucket API token (repo read + comment on PRs) |
-| `GOOGLE_API_KEY` | LLM API key (or your provider’s key) |
+| `LLM_API_KEY` | LLM API key (used with `LLM_PROVIDER` and `LLM_MODEL`) |
 
 ---
 

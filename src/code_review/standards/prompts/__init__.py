@@ -1,43 +1,33 @@
 """Per-language review prompt fragments (runner-side)."""
 
-from code_review.standards.prompts.base import BASE_REVIEW_PROMPT
+from __future__ import annotations
 
-# Per-language fragments - minimal for Phase 1; extend incrementally
-_JS_TS_FRAGMENT = """
-### JavaScript/TypeScript
-- ESLint-style: null checks, async handling, no unused vars
-- React/Vue/Node patterns if detected in imports
-"""
-_LANGUAGE_FRAGMENTS: dict[str, str] = {
-    "python": """
-### Python
-- Follow PEP 8; consider type hints where appropriate
-- Avoid mutable default args; handle exceptions explicitly
-- Use async/await consistently; prefer context managers for resources
-""",
-    "javascript": _JS_TS_FRAGMENT,
-    "typescript": _JS_TS_FRAGMENT,
-    "go": """
-### Go
-- gofmt style; explicit error handling; defer/close for resources
-- Concurrency patterns; exported vs unexported naming
-""",
-    "java": """
-### Java
-- Conventions; null safety; exception handling
-- Spring/Jakarta patterns if detected in dependencies
-""",
-    "c": """
-### C
-- Memory safety: leaks, use-after-free, bounds; const correctness
-- Header guards; static/linkage
-""",
-    "cpp": """
-### C++
-- Memory safety; RAII; const correctness
-- Header guards; static/linkage; move semantics where appropriate
-""",
+from pathlib import Path
+
+from code_review.standards.prompts.base import BASE_REVIEW_PROMPT, _read_prompt_fragment
+
+
+_PROMPTS_DIR = Path(__file__).parent
+
+_LANGUAGE_FILES: dict[str, str] = {
+    "python": "python.md",
+    "javascript": "javascript.md",
+    "typescript": "typescript.md",
+    "go": "go.md",
+    "java": "java.md",
+    "c": "c.md",
+    "cpp": "cpp.md",
 }
+
+
+def _load_language_fragment(language_key: str) -> str:
+    """
+    Load the language-specific review fragment from a .md file if present.
+    """
+    filename = _LANGUAGE_FILES.get(language_key)
+    if not filename:
+        return ""
+    return _read_prompt_fragment(filename)
 
 
 def get_review_standards(language: str, framework: str | None) -> str:
@@ -45,10 +35,11 @@ def get_review_standards(language: str, framework: str | None) -> str:
     Return combined prompt fragment for the given language and framework.
     Runner-side; not an agent tool.
     """
-    parts = [BASE_REVIEW_PROMPT]
-    lang_key = language.lower()
-    if lang_key in _LANGUAGE_FRAGMENTS:
-        parts.append(_LANGUAGE_FRAGMENTS[lang_key])
+    parts: list[str] = [BASE_REVIEW_PROMPT]
+    lang_key = (language or "").lower()
+    fragment = _load_language_fragment(lang_key)
+    if fragment:
+        parts.append(fragment)
     if framework:
         parts.append(f"\n### Framework: {framework}\n")
     return "\n".join(parts)

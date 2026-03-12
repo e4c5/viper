@@ -1,7 +1,9 @@
 """Tests for prompt content: severity labels and non-empty templates (Phase 4)."""
 
+import pytest
+
 from code_review.standards.prompts import get_review_standards
-from code_review.standards.prompts.base import BASE_REVIEW_PROMPT
+from code_review.standards.prompts.base import BASE_REVIEW_PROMPT, _read_prompt_fragment
 
 
 def test_base_review_prompt_contains_severity_labels():
@@ -48,3 +50,9 @@ def test_get_review_standards_framework_appended():
     result = get_review_standards("python", "Django")
     assert "Framework" in result
     assert "Django" in result
+
+
+def test_required_prompt_fragment_raises_when_missing():
+    """Required prompt fragments should fail fast instead of silently returning empty text."""
+    with pytest.raises(RuntimeError, match="Missing prompt fragment"):
+        _read_prompt_fragment("missing-required-fragment.md", required=True)

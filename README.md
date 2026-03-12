@@ -34,7 +34,7 @@ In **CI/Jenkins**, the pipeline supplies these via credentials and job or global
 - **Container (Docker/Podman)**  
   - Prebuilt: `docker pull e4c5/code-review-agent` then e.g. `docker tag e4c5/code-review-agent code-review-agent`.  
   - Build: `docker build -t code-review-agent -f docker/Dockerfile.agent .`  
-  Run with `SCM_*` and `LLM_*` (and `GOOGLE_API_KEY`) set in the environment.
+  Run with `SCM_*` and `LLM_*` (including `LLM_API_KEY`) set in the environment.
 - **CLI (no container)**  
   Install with `pip install -e .` (or from wheel/PyPI), then:  
   `code-review --owner <owner> --repo <repo> --pr <n> --head-sha <sha>`  
