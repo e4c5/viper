@@ -64,7 +64,25 @@ def test_cli_uses_env_vars():
             assert call_kw["head_sha"] == "sha"
 
 
+def test_cli_invalid_owner_repo_pattern_exits_1():
+    """Owner and repo may only contain letters, digits, '_', '-', and '.'."""
+    with pytest.raises(ClickExit) as exc_info:
+        review(owner="org/slash", repo="r", pr=1, head_sha="abc", dry_run=True)
+    assert exc_info.value.exit_code == 1
+    with pytest.raises(ClickExit) as exc_info:
+        review(owner="o", repo="repo@at", pr=1, head_sha="abc", dry_run=True)
+    assert exc_info.value.exit_code == 1
+
+
+def test_cli_head_sha_required_when_not_dry_run_exits_1():
+    """When dry_run is False, head_sha is required."""
+    with pytest.raises(ClickExit) as exc_info:
+        review(owner="o", repo="r", pr=1, head_sha="", dry_run=False)
+    assert exc_info.value.exit_code == 1
+
+
 def test_cli_fail_on_critical_exits_2():
+    """When fail_on_critical is True and there is a critical finding, exit 2."""
     from code_review.schemas.findings import FindingV1
 
     with patch("code_review.__main__.run_review") as mock_run:
@@ -72,5 +90,38 @@ def test_cli_fail_on_critical_exits_2():
             FindingV1(path="x.py", line=1, severity="critical", code="x", message="Bug"),
         ]
         with pytest.raises(ClickExit) as exc_info:
-            review(owner="o", repo="r", pr=1, head_sha="", fail_on_critical=True)
+            review(
+                owner="o",
+                repo="r",
+                pr=1,
+                head_sha="abc123",
+                dry_run=True,
+                fail_on_critical=True,
+            )
         assert exc_info.value.exit_code == 2
+
+
+def test_cli_app_invokable_as_main():
+    """app() can be invoked (e.g. when run as __main__) and responds to --help."""
+    from code_review.__main__ import app
+
+    # Typer app with --help exits 0; we just ensure it doesn't raise
+    try:
+        app(["--help"])
+    except (ClickExit, SystemExit) as e:
+        assert getattr(e, "exit_code", 0) == 0
+
+
+def test_cli_main_module_entry_point():
+    """Running the package as __main__ (python -m code_review --help) invokes app()."""
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "code_review.__main__", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0
+    assert "Run the code review agent" in result.stdout or "review" in result.stdout

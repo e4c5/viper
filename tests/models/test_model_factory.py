@@ -42,6 +42,50 @@ def test_get_configured_model_openai_uses_litellm_or_fallback(mock_get_config):
 
 
 @patch("code_review.models.get_llm_config")
+def test_get_configured_model_anthropic_uses_litellm_or_fallback(mock_get_config):
+    mock_get_config.return_value = MagicMock(
+        provider="anthropic", model="claude-3-5-sonnet-20241022", api_key=None
+    )
+    result = get_configured_model()
+    if hasattr(result, "model"):
+        assert result.model == "anthropic/claude-3-5-sonnet-20241022"
+    else:
+        assert "claude" in str(result)
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_configured_model_ollama_uses_litellm_or_fallback(mock_get_config):
+    mock_get_config.return_value = MagicMock(
+        provider="ollama", model="llama3.2", api_key=None
+    )
+    result = get_configured_model()
+    if hasattr(result, "model"):
+        assert result.model == "ollama_chat/llama3.2"
+    else:
+        assert result == "llama3.2"
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_configured_model_litellm_import_error_returns_model_string(mock_get_config):
+    """When LiteLlm cannot be imported, return config.model as fallback."""
+    import builtins
+
+    mock_get_config.return_value = MagicMock(
+        provider="openrouter", model="openai/gpt-4o", api_key=None
+    )
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "google.adk.models.lite_llm":
+            raise ImportError("no lite_llm")
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        result = get_configured_model()
+    assert result == "openai/gpt-4o"
+
+
+@patch("code_review.models.get_llm_config")
 def test_get_configured_model_openrouter_uses_litellm_or_fallback(mock_get_config):
     mock_get_config.return_value = MagicMock(
         provider="openrouter", model="gpt-4.1-mini", api_key=None
@@ -68,6 +112,20 @@ def test_get_max_output_tokens(mock_get_config):
         max_output_tokens=2048, api_key=None
     )
     assert get_max_output_tokens() == 2048
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_configured_model_unknown_provider_uses_model_string_as_litellm(mock_get_config):
+    """Unknown provider falls through to else: litellm_model = config.model."""
+    mock_get_config.return_value = MagicMock(
+        provider="custom", model="custom/model-name", api_key=None
+    )
+    result = get_configured_model()
+    # Either LiteLlm(custom/model-name) or fallback string
+    if hasattr(result, "model"):
+        assert result.model == "custom/model-name"
+    else:
+        assert result == "custom/model-name"
 
 
 @patch("code_review.models.get_llm_config")

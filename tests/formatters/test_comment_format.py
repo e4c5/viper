@@ -117,6 +117,19 @@ def test_location_path_line_consistency():
     assert comment_tuple[2].startswith("[Suggestion]")
 
 
+def test_finding_to_comment_body_empty_body_uses_label_only():
+    """When get_body() is empty after strip, body is just the severity label."""
+    f = FindingV1(
+        path="x.py",
+        line=1,
+        severity="suggestion",
+        code="x",
+        message="",
+    )
+    body = finding_to_comment_body(f)
+    assert body == "[Suggestion]"
+
+
 def test_finding_to_comment_body_strips_dst_prefix_from_message_and_prompt():
     """dst:// and src:// are stripped from message and agent_fix_prompt in the output."""
     f = FindingV1(

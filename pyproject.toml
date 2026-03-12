@@ -66,6 +66,18 @@ filterwarnings = [
     "ignore:.*PytestUnhandledThreadExceptionWarning:pytest.PytestUnhandledThreadExceptionWarning",
 ]
 
+[tool.coverage.run]
+source = ["src/code_review"]
+omit = ["*/tests/*", "*/e2e/*"]
+
+[tool.coverage.report]
+fail_under = 80
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
