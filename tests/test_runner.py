@@ -21,9 +21,11 @@ class MockProvider:
 
     def post_review_comments(self, *args, **kwargs):
         # No-op: tests assert runner behavior without touching provider implementation.
+        pass
 
     def post_pr_summary_comment(self, owner, repo, pr_number, body):
         # No-op: summary comments are not exercised in these unit tests.
+        pass
 
     def get_existing_review_comments(self, owner, repo, pr_number):
         return []
