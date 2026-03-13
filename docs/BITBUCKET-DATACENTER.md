@@ -81,7 +81,17 @@ In the job → **Configure** → **Build Triggers** → **Generic Webhook Trigge
 - Text: `$PR_ACTION`
 - Regex: `^pr:(opened|modified|from_ref_updated)$`
 
-Save and copy the **Webhook URL** shown in this section.
+**Token**: After adding the Post content parameters, add a **Token** in the Token section.  
+Create a token manually (any string), then use it in the webhook URL:
+
+- `http://JENKINS_URL/generic-webhook-trigger/invoke?token=TOKEN_HERE`
+
+You can also supply the token via headers:
+
+- `token: TOKEN_HERE`
+- `Authorization: Bearer TOKEN_HERE`
+
+Save and copy this **Webhook URL** (including the token if used as a query parameter).
 
 ---
 
