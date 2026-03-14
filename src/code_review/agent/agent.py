@@ -55,6 +55,14 @@ Each finding must have: path (str), line (int), severity ("critical"|"suggestion
 code (str, e.g. unused-var), and message (str).
 Optional fields: end_line, category, anchor, fingerprint_hint,
 suggested_patch, agent_fix_prompt.
+When the fix is local and mechanical (for example renaming a variable, adding a null check,
+or tightening a condition), you should populate suggested_patch with the exact replacement
+code for the affected line(s), without any diff markers, prefixes, or code fences. The code
+in suggested_patch must be exactly how the new code should look after applying the change.
+Do not include surrounding context or multiple unrelated edits in suggested_patch; keep it
+focused on the smallest safe, self-contained change at the commented line(s).
+For suggested_patch (and all string fields): use \\n for newlines inside the JSON string so the
+output is valid JSON; do not put literal line breaks inside string values.
 When reviewing a single file, use the same path string you were given for that file in every finding.
 
 agent_fix_prompt (optional) is a natural-language prompt that another AI
@@ -65,7 +73,17 @@ agent_fix_prompt that:
 - Describes the problem and the desired fix
 - Includes any relevant project-specific constraints or context
 
-Example (one finding): [{"path":"src/foo.py","line":42,"severity":"suggestion","code":"unused-var","message":"Remove unused variable x"}]
+Example (one finding): [
+  {
+    "path": "src/foo.py",
+    "line": 42,
+    "severity": "suggestion",
+    "code": "rename-variable",
+    "message": "Rename variable foo to user_id for clarity.",
+    "suggested_patch": "user_id = request.user_id"
+  }
+]
+Example (multiline suggested_patch): "suggested_patch": "if x:\\n    return None"
 Example (no issues): []
 """
 
@@ -107,6 +125,14 @@ Each finding must have: path (str), line (int), severity ("critical"|"suggestion
 code (str, e.g. unused-var), and message (str).
 Optional fields: end_line, category, anchor, fingerprint_hint,
 suggested_patch, agent_fix_prompt.
+When the fix is local and mechanical (for example renaming a variable, adding a null check,
+or tightening a condition), you should populate suggested_patch with the exact replacement
+code for the affected line(s), without any diff markers, prefixes, or code fences. The code
+in suggested_patch must be exactly how the new code should look after applying the change.
+Do not include surrounding context or multiple unrelated edits in suggested_patch; keep it
+focused on the smallest safe, self-contained change at the commented line(s).
+For suggested_patch (and all string fields): use \\n for newlines inside the JSON string so the
+output is valid JSON; do not put literal line breaks inside string values.
 
 agent_fix_prompt (optional) is a natural-language prompt that another AI
 coding agent can use to verify and implement the fix for this specific issue.
@@ -116,7 +142,17 @@ agent_fix_prompt that:
 - Describes the problem and the desired fix
 - Includes any relevant project-specific constraints or context
 
-Example (one finding): [{"path":"src/foo.py","line":42,"severity":"suggestion","code":"unused-var","message":"Remove unused variable x"}]
+Example (one finding): [
+  {
+    "path": "src/foo.py",
+    "line": 42,
+    "severity": "suggestion",
+    "code": "rename-variable",
+    "message": "Rename variable foo to user_id for clarity.",
+    "suggested_patch": "user_id = request.user_id"
+  }
+]
+Example (multiline suggested_patch): "suggested_patch": "if x:\\n    return None"
 Example (no issues): []
 """
 
