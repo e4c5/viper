@@ -61,6 +61,8 @@ code for the affected line(s), without any diff markers, prefixes, or code fence
 in suggested_patch must be exactly how the new code should look after applying the change.
 Do not include surrounding context or multiple unrelated edits in suggested_patch; keep it
 focused on the smallest safe, self-contained change at the commented line(s).
+For suggested_patch (and all string fields): use \\n for newlines inside the JSON string so the
+output is valid JSON; do not put literal line breaks inside string values.
 When reviewing a single file, use the same path string you were given for that file in every finding.
 
 agent_fix_prompt (optional) is a natural-language prompt that another AI
@@ -81,6 +83,7 @@ Example (one finding): [
     "suggested_patch": "user_id = request.user_id"
   }
 ]
+Example (multiline suggested_patch): "suggested_patch": "if x:\\n    return None"
 Example (no issues): []
 """
 
@@ -128,6 +131,8 @@ code for the affected line(s), without any diff markers, prefixes, or code fence
 in suggested_patch must be exactly how the new code should look after applying the change.
 Do not include surrounding context or multiple unrelated edits in suggested_patch; keep it
 focused on the smallest safe, self-contained change at the commented line(s).
+For suggested_patch (and all string fields): use \\n for newlines inside the JSON string so the
+output is valid JSON; do not put literal line breaks inside string values.
 
 agent_fix_prompt (optional) is a natural-language prompt that another AI
 coding agent can use to verify and implement the fix for this specific issue.
@@ -147,6 +152,7 @@ Example (one finding): [
     "suggested_patch": "user_id = request.user_id"
   }
 ]
+Example (multiline suggested_patch): "suggested_patch": "if x:\\n    return None"
 Example (no issues): []
 """
 
