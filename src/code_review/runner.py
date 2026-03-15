@@ -827,11 +827,18 @@ class ReviewOrchestrator:
         all_findings: list[FindingV1] = []
         for file_path in paths:
             file_session_id = f"{owner}/{repo}/pr-{pr_number}/file/{uuid.uuid4().hex[:12]}"
+            head_sha_clause = f" head_sha={head_sha}." if head_sha else ""
+            ref_guidance = (
+                f' When calling get_file_lines for surrounding context, use ref="{head_sha}" as the ref parameter.'
+                if head_sha
+                else ""
+            )
             msg = (
                 f"Review exactly one file from this PR. owner={owner}, repo={repo}, pr_number={pr_number}."
-                + (f" head_sha={head_sha}." if head_sha else " ")
-                + f' Call get_pr_diff_for_file(owner, repo, pr_number, "{file_path}") to get the diff for this file. '
-                f'Then output a JSON array of findings for this file only. Use path "{file_path}" in every finding. '
+                + head_sha_clause
+                + f' Call get_pr_diff_for_file(owner, repo, pr_number, "{file_path}") to get the diff for this file.'
+                + ref_guidance
+                + f' Then output a JSON array of findings for this file only. Use path "{file_path}" in every finding. '
                 "If there are no issues in this file, output exactly []."
             )
             if logger.isEnabledFor(logging.DEBUG):
