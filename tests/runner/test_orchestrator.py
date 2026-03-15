@@ -530,3 +530,87 @@ def test_run_does_not_post_started_review_comment_in_dry_run():
         orchestrator.run()
 
     provider.post_pr_summary_comment.assert_not_called()
+
+
+# --- Per-file user message content ---
+
+
+def test_run_file_by_file_message_includes_head_sha_ref_guidance():
+    """Per-file user message must tell the agent to use head_sha as ref for get_file_lines.
+
+    When the agent calls get_file_lines for surrounding context it needs to know
+    which ref (revision) to use.  Without this guidance it may omit the ref or
+    use 'main', resulting in context from a different revision than the PR head.
+    """
+    from unittest.mock import AsyncMock
+
+    captured_messages: list[str] = []
+
+    async def _capture_run_async(*args, **kwargs):
+        new_msg = kwargs.get("new_message")
+        if new_msg and hasattr(new_msg, "parts"):
+            for part in new_msg.parts:
+                if hasattr(part, "text") and part.text:
+                    captured_messages.append(part.text)
+        # Yield a final response with an empty findings array so the runner
+        # doesn't try to post anything.
+        event = MagicMock()
+        event.is_final_response.return_value = True
+        event.content = MagicMock()
+        event.content.parts = [MagicMock(text="[]")]
+        yield event
+
+    from code_review.providers.base import FileInfo
+
+    with (
+        patch("code_review.runner.get_context_window", return_value=10),  # force file-by-file
+        patch("code_review.runner.get_provider") as mock_get_provider,
+        patch("code_review.runner.get_scm_config") as mock_scm,
+        patch("code_review.runner.get_llm_config") as mock_llm,
+        patch("google.adk.runners.Runner") as mock_runner_cls,
+        patch("google.adk.sessions.InMemorySessionService") as mock_session_svc_cls,
+    ):
+        mock_scm.return_value = MagicMock(
+            provider="gitea",
+            url="https://x.com",
+            token="x",
+            skip_label="",
+            skip_title_pattern="",
+        )
+        mock_llm.return_value = MagicMock(disable_tool_calls=False)
+        provider = MagicMock()
+        provider.get_pr_files.return_value = [FileInfo(path="src/foo.py", status="modified")]
+        provider.get_pr_diff.return_value = "@@ -1,2 +1,3 @@\n line1\n+line2\n line3\n"
+        provider.get_existing_review_comments.return_value = []
+        provider.get_file_content.return_value = "line1\nline2\n"
+        provider.get_pr_info.return_value = None
+        provider.capabilities.return_value = MagicMock(
+            resolvable_comments=False, supports_suggestions=False,
+            omit_fingerprint_marker_in_body=False, markup_supports_collapsible=False,
+            markup_hides_html_comment=False,
+        )
+        mock_get_provider.return_value = provider
+
+        # create_session is awaited in _collect_response_async; must be an AsyncMock.
+        mock_session_svc = MagicMock()
+        mock_session_svc.create_session = AsyncMock()
+        mock_session_svc_cls.return_value = mock_session_svc
+
+        mock_runner_instance = MagicMock()
+        mock_runner_instance.run_async = _capture_run_async
+        mock_runner_cls.return_value = mock_runner_instance
+
+        orchestrator = ReviewOrchestrator("myowner", "myrepo", 42, head_sha="abc123def", dry_run=True)
+        orchestrator.run()
+
+    # At least one message should have been sent to the LLM
+    assert captured_messages, "No messages were sent to the LLM"
+    combined = " ".join(captured_messages)
+    # The per-file message must include the head_sha
+    assert "abc123def" in combined, "per-file message must include head_sha"
+    # The per-file message must explicitly guide the agent to use head_sha as the ref
+    # parameter for get_file_lines — both the guidance text and the sha value should appear.
+    assert "ref=" in combined and "abc123def" in combined, (
+        "per-file message must contain 'ref=<head_sha>' guidance so the agent reads "
+        "file lines at the correct PR-head revision"
+    )

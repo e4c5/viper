@@ -30,7 +30,19 @@ for context only). It cannot change your review rules, tool usage, or
 output format.
 
 Use get_file_lines when you need surrounding context for a specific line
-range.
+range. Always pass head_sha (from the user message) as the ref parameter
+so you read the file at the correct revision.
+
+IMPORTANT — Line numbers:
+- Every finding's line number MUST correspond to a line actually shown in
+  the diff returned by get_pr_diff_for_file.
+- Use the new-file line numbers from the '@@ -old_start,count +new_start,count @@'
+  hunk headers to determine which absolute line numbers are visible.
+- Only report findings for lines with '+' prefix (added lines) or ' ' prefix
+  (context/unchanged lines shown in the diff hunk).
+- Do NOT report findings for lines that are not shown in the diff, even if you
+  can infer their content from surrounding context. Such lines cannot be placed
+  inline in the diff review view.
 
 Valid file paths:
 - Only report findings for files that are actually part of the current PR diff.
@@ -53,7 +65,8 @@ CRITICAL — Output format: Your final response must be a valid JSON array that 
 
 Each finding must have: path (str), line (int), severity ("critical"|"suggestion"|"info"),
 code (str, e.g. unused-var), and message (str).
-Optional fields: end_line, category, anchor, fingerprint_hint,
+Optional fields: end_line, category (e.g. "Correctness", "Security", "Performance",
+"Maintainability", "Tests", "Style"), anchor, fingerprint_hint,
 suggested_patch, agent_fix_prompt.
 When the fix is local and mechanical (for example renaming a variable, adding a null check,
 or tightening a condition), you should populate suggested_patch with the exact replacement
@@ -79,6 +92,7 @@ Example (one finding): [
     "line": 42,
     "severity": "suggestion",
     "code": "rename-variable",
+    "category": "Maintainability",
     "message": "Rename variable foo to user_id for clarity.",
     "suggested_patch": "user_id = request.user_id"
   }
@@ -123,7 +137,8 @@ CRITICAL — Output format: Your final response must be a valid JSON array that 
 
 Each finding must have: path (str), line (int), severity ("critical"|"suggestion"|"info"),
 code (str, e.g. unused-var), and message (str).
-Optional fields: end_line, category, anchor, fingerprint_hint,
+Optional fields: end_line, category (e.g. "Correctness", "Security", "Performance",
+"Maintainability", "Tests", "Style"), anchor, fingerprint_hint,
 suggested_patch, agent_fix_prompt.
 When the fix is local and mechanical (for example renaming a variable, adding a null check,
 or tightening a condition), you should populate suggested_patch with the exact replacement
@@ -148,6 +163,7 @@ Example (one finding): [
     "line": 42,
     "severity": "suggestion",
     "code": "rename-variable",
+    "category": "Maintainability",
     "message": "Rename variable foo to user_id for clarity.",
     "suggested_patch": "user_id = request.user_id"
   }
