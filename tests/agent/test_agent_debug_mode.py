@@ -161,3 +161,76 @@ def test_file_by_file_uses_findings_only_instruction(
     _, kwargs = mock_agent_cls.call_args
     assert kwargs["instruction"] == FINDINGS_ONLY_INSTRUCTION
     assert "get_pr_diff_for_file" in kwargs["instruction"]
+
+
+# --- Tests for improved instruction content ---
+
+
+def test_findings_only_instruction_contains_line_number_guidance():
+    """FINDINGS_ONLY_INSTRUCTION must contain hunk-header line number guidance.
+
+    In file-by-file mode the agent reads a diff returned from get_pr_diff_for_file.
+    Without explicit guidance on reading @@ hunk headers, the agent may report wrong
+    line numbers or lines that are not visible in the diff.
+    """
+    assert "@@" in FINDINGS_ONLY_INSTRUCTION, (
+        "FINDINGS_ONLY_INSTRUCTION must explain how to read hunk headers for line numbers"
+    )
+    assert "hunk" in FINDINGS_ONLY_INSTRUCTION.lower() or "+new_start" in FINDINGS_ONLY_INSTRUCTION, (
+        "FINDINGS_ONLY_INSTRUCTION must reference hunk headers for computing valid line numbers"
+    )
+
+
+def test_findings_only_instruction_restricts_to_visible_diff_lines():
+    """FINDINGS_ONLY_INSTRUCTION must tell the agent to only report lines visible in the diff."""
+    instr = FINDINGS_ONLY_INSTRUCTION
+    assert "not shown in the diff" in instr or "not visible" in instr, (
+        "FINDINGS_ONLY_INSTRUCTION must prohibit reporting lines that are not in the diff"
+    )
+    # Must distinguish added (+) vs context ( ) lines
+    assert "'+' prefix" in instr or "'+'" in instr, (
+        "FINDINGS_ONLY_INSTRUCTION must mention '+' prefix for added lines"
+    )
+
+
+def test_findings_only_instruction_head_sha_ref_guidance():
+    """FINDINGS_ONLY_INSTRUCTION must tell the agent to use head_sha as ref for get_file_lines."""
+    assert "head_sha" in FINDINGS_ONLY_INSTRUCTION, (
+        "FINDINGS_ONLY_INSTRUCTION must guide the agent to use head_sha as the ref parameter "
+        "for get_file_lines and get_file_content so it reads the correct revision"
+    )
+
+
+def test_findings_only_instruction_category_field():
+    """FINDINGS_ONLY_INSTRUCTION must mention the category field in the output format."""
+    assert "category" in FINDINGS_ONLY_INSTRUCTION, (
+        "FINDINGS_ONLY_INSTRUCTION must mention the optional 'category' field "
+        "so the agent populates it with values like Correctness, Security, etc."
+    )
+    # Must provide example values so the agent knows what to put there
+    assert "Correctness" in FINDINGS_ONLY_INSTRUCTION or "Security" in FINDINGS_ONLY_INSTRUCTION, (
+        "FINDINGS_ONLY_INSTRUCTION must list example category values"
+    )
+
+
+def test_single_shot_instruction_category_field():
+    """SINGLE_SHOT_INSTRUCTION must mention the category field with example values."""
+    assert "category" in SINGLE_SHOT_INSTRUCTION, (
+        "SINGLE_SHOT_INSTRUCTION must mention the optional 'category' field"
+    )
+    assert "Correctness" in SINGLE_SHOT_INSTRUCTION or "Security" in SINGLE_SHOT_INSTRUCTION, (
+        "SINGLE_SHOT_INSTRUCTION must list example category values"
+    )
+
+
+def test_instructions_consistent_category_guidance():
+    """Both instructions should describe the category field consistently."""
+    # Both must mention the same set of category values
+    for category in ("Correctness", "Security", "Performance", "Maintainability"):
+        assert category in FINDINGS_ONLY_INSTRUCTION, (
+            f"FINDINGS_ONLY_INSTRUCTION missing category example: {category}"
+        )
+        assert category in SINGLE_SHOT_INSTRUCTION, (
+            f"SINGLE_SHOT_INSTRUCTION missing category example: {category}"
+        )
+
