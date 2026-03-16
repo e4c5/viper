@@ -13,10 +13,14 @@ COPY pyproject.toml ./
 # Copy source code (changes frequently)
 COPY src ./src/
 
-# Upgrade pip to a version without the known CVEs, then install the package
-# and dependencies; pip will reuse wheels between layers when possible. Also
-# create an unprivileged user in the same layer to reduce image layers.
-RUN python -m pip install --no-cache-dir --upgrade "pip>=26.0" \
+# Upgrade OS packages to pick up security patches (dpkg, glibc, libsqlite3, etc.),
+# then upgrade pip and install the package. Combining into one layer minimises
+# image size and ensures apt lists are not cached.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir --upgrade "pip>=26.0" \
     && pip install --no-cache-dir -e . \
     && adduser --disabled-password --gecos "" --uid 1000 appuser \
     && chown -R appuser:appuser /app
