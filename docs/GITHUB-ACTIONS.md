@@ -1,81 +1,119 @@
 ## GitHub Actions Integration
 
-This guide explains how to run the **code review agent** on every pull request using **GitHub Actions** with the built‑in `GITHUB_TOKEN` (or a PAT / GitHub App token) and post inline comments back to the PR.
+This guide shows how to run the **code review agent** as a one-shot Docker container in **GitHub Actions** and have it post inline review comments back to a pull request.
 
-The goal is:
+This is the recommended GitHub Actions path because:
 
-- **Trigger**: On `pull_request` events (opened / synchronized / reopened / ready_for_review).
-- **Run**: The `code-review` CLI once per PR head commit.
-- **Post**: Inline comments and an optional summary using the GitHub provider.
+- it does not require creating a virtualenv on the runner
+- it does not require installing Python dependencies in the workflow
+- it uses the packaged runtime defined by the agent image
+- it keeps the workflow small and predictable
 
----
-
-## 1. Requirements
-
-- **Repository** hosted on GitHub.
-- **GitHub Actions enabled** for the repository or organization.
-- **LLM provider credentials**:
-  - One of: Gemini, OpenAI, Anthropic, Vertex, Ollama, OpenRouter.
-  - An API key stored as a GitHub Actions secret (for example `LLM_API_KEY`).
-- **Python environment** (recommended) or Docker if you prefer the container image.
-
-You do *not* need to run any long‑lived service: the agent runs as a one‑shot job inside the workflow.
+The agent talks to GitHub through the API. It does **not** need to check out the repository to review a PR diff.
 
 ---
 
-## 2. Environment variables (recap)
+## 1. What this setup does
 
-The agent reads configuration from environment variables; it does **not** auto‑load `.env` files.
+At a high level, the workflow:
 
-- **SCM (GitHub)**
-  - `SCM_PROVIDER=github`
-  - `SCM_URL=https://api.github.com`
-  - `SCM_TOKEN` – token used for GitHub API calls.
-  - `SCM_OWNER` – repository owner (user or organization).
-  - `SCM_REPO` – repository name.
-  - `SCM_PR_NUM` – pull request number.
-  - `SCM_HEAD_SHA` – head commit SHA of the PR (required when posting comments).
-  - Optional: `SCM_SKIP_LABEL`, `SCM_SKIP_TITLE_PATTERN` to skip certain PRs.
+1. triggers on pull request events
+2. passes GitHub PR metadata into the container as `SCM_*` environment variables
+3. passes your LLM configuration as `LLM_*` environment variables
+4. runs the agent image with the `review` command
+5. fetches the PR diff and changed files from GitHub
+6. asks the configured LLM to review the diff
+7. posts inline comments on the PR for findings that survive filtering and deduplication
 
-- **LLM**
-  - `LLM_PROVIDER` – e.g. `gemini` (default), `openai`, `anthropic`, `vertex`, `ollama`, `openrouter`.
-  - `LLM_MODEL` – e.g. `gemini-2.5-flash`.
-  - `LLM_API_KEY` – API key for the selected LLM provider.
+The runner also applies a few guardrails automatically:
 
-The CLI can also receive `--owner`, `--repo`, `--pr`, `--head-sha` flags, but in GitHub Actions it is usually simpler to set the `SCM_*` env vars.
+- skips PRs with a configured skip label or title marker
+- avoids reposting duplicate comments for the same PR head SHA
+- filters findings to lines that are actually visible in the diff
 
 ---
 
-## 3. Choosing an authentication method for GitHub
+## 2. Requirements
 
-You have three main options for `SCM_TOKEN`:
+You need:
 
-- **Default `GITHUB_TOKEN` (recommended for most repos)**:
-  - GitHub automatically injects a short‑lived token in each workflow run.
-  - Works well if your workflow’s `permissions` grant `pull-requests: write` (for inline comments).
-  - Use: `SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}`.
+- a repository hosted on GitHub
+- GitHub Actions enabled for that repository or organization
+- a published agent image
+- an SCM token with permission to read the PR and write PR comments
+- an LLM provider and API credential
 
-- **Personal Access Token (PAT)**:
-  - Create a fine‑grained PAT with “Pull requests: read/write” on the target repo or org.
-  - Store it as a **repository secret** (e.g. `SCM_TOKEN`).
-  - Use when you need cross‑repo access or more control than `GITHUB_TOKEN`.
+For most repositories:
 
-- **GitHub App installation token**:
-  - Create a GitHub App with `Pull requests: read/write` and `Contents: read`.
-  - Your CI (or a pre‑step) exchanges the App credentials for an installation token and sets `SCM_TOKEN`.
-  - Best for org‑wide, multi‑repo deployments with least‑privilege access.
-
-For an initial setup, using the built‑in `GITHUB_TOKEN` is sufficient and simplest.
+- use GitHub's built-in `GITHUB_TOKEN` for `SCM_TOKEN`
+- use a repository secret such as `LLM_API_KEY` for the model provider
 
 ---
 
-## 4. Minimal GitHub Actions workflow (Python CLI)
+## 3. Choose the container image
 
-Create a workflow file in your repository at:
+The workflow can use any registry image built from [`docker/Dockerfile.agent`](../docker/Dockerfile.agent).
+
+Common options:
+
+- a public Docker Hub image such as `e4c5/code-review-agent:latest`
+- your own mirrored image, for example `your-org/code-review-agent:latest`
+- a pinned release tag such as `your-org/code-review-agent:v1.2.3`
+
+If you publish your own image from this repo, the existing publish workflow is [`publish-agent-image.yml`](../.github/workflows/publish-agent-image.yml).
+
+Recommendation:
+
+- use a pinned version tag in production
+- use `latest` only for experimentation
+
+---
+
+## 4. Required secrets and permissions
+
+### 4.1 GitHub token
+
+Set `SCM_TOKEN` to one of:
+
+- `${{ secrets.GITHUB_TOKEN }}` for the simplest same-repo setup
+- a PAT stored as a secret such as `${{ secrets.SCM_TOKEN }}`
+- a GitHub App installation token generated earlier in the workflow
+
+For inline review comments, the workflow should grant:
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+```
+
+### 4.2 LLM configuration
+
+The agent needs:
+
+- `LLM_PROVIDER`
+- `LLM_MODEL`
+- `LLM_API_KEY`
+
+Examples:
+
+- Gemini: `LLM_PROVIDER=gemini`, `LLM_MODEL=gemini-2.5-flash`
+- OpenAI: `LLM_PROVIDER=openai`, `LLM_MODEL=gpt-5-mini`
+- Anthropic: `LLM_PROVIDER=anthropic`, `LLM_MODEL=claude-3-7-sonnet-latest`
+
+Store the API key as a repository or organization secret, for example:
+
+- `LLM_API_KEY`
+
+---
+
+## 5. Minimal workflow using Docker
+
+Create:
 
 - `.github/workflows/code-review.yml`
 
-### 4.1 Example workflow
+Example:
 
 ```yaml
 name: Code Review (AI)
@@ -93,162 +131,398 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # SCM (GitHub) configuration
+      IMAGE: e4c5/code-review-agent:latest
+
       SCM_PROVIDER: github
       SCM_URL: https://api.github.com
       SCM_OWNER: ${{ github.repository_owner }}
       SCM_REPO: ${{ github.event.repository.name }}
       SCM_PR_NUM: ${{ github.event.pull_request.number }}
       SCM_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-
-      # Token used by the GitHub provider
       SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # LLM configuration (example: Gemini)
       LLM_PROVIDER: gemini
       LLM_MODEL: gemini-2.5-flash
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
 
-      # Optional: make the agent more verbose in logs
       CODE_REVIEW_LOG_LEVEL: INFO
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          # Ensure we have the PR head commit
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install code-review-agent
-        run: |
-          python -m pip install --upgrade pip
-          pip install "code-review-agent"  # or pip install . if running from this repo
+      - name: Pull agent image
+        run: docker pull "$IMAGE"
 
       - name: Run AI code review
         run: |
-          code-review --owner "$SCM_OWNER" --repo "$SCM_REPO" --pr "$SCM_PR_NUM" --head-sha "$SCM_HEAD_SHA"
+          docker run --rm \
+            -e SCM_PROVIDER \
+            -e SCM_URL \
+            -e SCM_OWNER \
+            -e SCM_REPO \
+            -e SCM_PR_NUM \
+            -e SCM_HEAD_SHA \
+            -e SCM_TOKEN \
+            -e LLM_PROVIDER \
+            -e LLM_MODEL \
+            -e LLM_API_KEY \
+            -e CODE_REVIEW_LOG_LEVEL \
+            "$IMAGE" \
+            review \
+            --owner "$SCM_OWNER" \
+            --repo "$SCM_REPO" \
+            --pr "$SCM_PR_NUM" \
+            --head-sha "$SCM_HEAD_SHA"
 ```
 
-This workflow:
+Notes:
 
-- Runs on every relevant PR event.
-- Uses the GitHub provider with the built‑in `GITHUB_TOKEN`.
-- Calls the CLI once per run and posts inline comments + a summary on the PR.
-
----
-
-## 5. Optional: use dry‑run or fail‑on‑critical
-
-The CLI supports extra flags that you can add to the workflow:
-
-- **Dry run (no comments posted)**:
-
-  ```yaml
-  - name: Run AI code review (dry run)
-    run: |
-      code-review --owner "$SCM_OWNER" --repo "$SCM_REPO" --pr "$SCM_PR_NUM" --head-sha "$SCM_HEAD_SHA" --dry-run --print-findings
-  ```
-
-  - The agent parses findings and prints them to the log but does not post comments.
-  - Useful while validating configuration.
-
-- **Fail the job on critical findings**:
-
-  ```yaml
-  - name: Run AI code review (block on critical)
-    run: |
-      code-review --owner "$SCM_OWNER" --repo "$SCM_REPO" --pr "$SCM_PR_NUM" --head-sha "$SCM_HEAD_SHA" --fail-on-critical
-  ```
-
-  - The CLI exits with status `2` when any finding has severity `"critical"`.
-  - You can mark this job as a required check to block merges on critical issues.
-
-You can also combine flags (for example `--dry-run --print-findings` or `--fail-on-critical --print-findings`).
+- no `actions/checkout` step is required
+- no Python setup is required
+- the container already has `code-review` as its entrypoint
+- the explicit `review` subcommand is still required
 
 ---
 
-## 6. Using a PAT or GitHub App token instead of `GITHUB_TOKEN`
+## 6. Recommended production workflow
 
-If you prefer not to rely on `GITHUB_TOKEN`:
+For production use, prefer:
 
-- **PAT**:
-  - Create a fine‑grained PAT with:
-    - `contents: read`
-    - `pull_requests: read/write` (or equivalent).
-  - Store it as a secret, e.g. `SCM_TOKEN`.
-  - Update the workflow:
+- a pinned image tag
+- explicit branch filters
+- concurrency cancellation
+- stable logging defaults
 
-    ```yaml
+Example:
+
+```yaml
+name: Code Review (AI)
+
+on:
+  pull_request:
+    branches:
+      - main
+      - release/*
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: code-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+
     env:
-      SCM_TOKEN: ${{ secrets.SCM_TOKEN }}
-    ```
+      IMAGE: your-org/code-review-agent:v1.2.3
 
-- **GitHub App token**:
-  - Have a previous step in the workflow that exchanges the App’s credentials for an **installation access token** and writes it to `$GITHUB_ENV`:
+      SCM_PROVIDER: github
+      SCM_URL: https://api.github.com
+      SCM_OWNER: ${{ github.repository_owner }}
+      SCM_REPO: ${{ github.event.repository.name }}
+      SCM_PR_NUM: ${{ github.event.pull_request.number }}
+      SCM_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    ```yaml
-    - name: Generate GitHub App token
-      run: |
-        echo "SCM_TOKEN=${INSTALLATION_TOKEN_FROM_APP}" >> "$GITHUB_ENV"
-    ```
+      LLM_PROVIDER: gemini
+      LLM_MODEL: gemini-2.5-flash
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
 
-  - The `code-review` step can then use `SCM_TOKEN` from the environment as usual.
-
-The rest of the configuration remains identical (`SCM_PROVIDER=github`, `SCM_URL=https://api.github.com`, etc.).
-
----
-
-## 7. Customizing triggers and behavior
-
-- **Only run on certain branches**:
-
-  ```yaml
-  on:
-    pull_request:
-      branches:
-        - main
-        - release/*
-  ```
-
-- **Skip certain PRs automatically**:
-  - Use `SCM_SKIP_LABEL` (default `skip-review`) and/or `SCM_SKIP_TITLE_PATTERN` (default `[skip-review]`).
-  - Example:
-
-    ```yaml
-    env:
       SCM_SKIP_LABEL: skip-ai-review
       SCM_SKIP_TITLE_PATTERN: "[skip-ai-review]"
-    ```
+      CODE_REVIEW_LOG_LEVEL: INFO
 
-  - If a PR has the label or its title contains the substring, the runner logs a message and returns without posting comments.
+    steps:
+      - name: Pull agent image
+        run: docker pull "$IMAGE"
 
-- **Adjust logging**:
-  - `CODE_REVIEW_LOG_LEVEL=INFO` for progress logs, `DEBUG` for verbose output.
+      - name: Run AI code review
+        run: |
+          docker run --rm \
+            -e SCM_PROVIDER \
+            -e SCM_URL \
+            -e SCM_OWNER \
+            -e SCM_REPO \
+            -e SCM_PR_NUM \
+            -e SCM_HEAD_SHA \
+            -e SCM_TOKEN \
+            -e SCM_SKIP_LABEL \
+            -e SCM_SKIP_TITLE_PATTERN \
+            -e LLM_PROVIDER \
+            -e LLM_MODEL \
+            -e LLM_API_KEY \
+            -e CODE_REVIEW_LOG_LEVEL \
+            "$IMAGE" \
+            review \
+            --owner "$SCM_OWNER" \
+            --repo "$SCM_REPO" \
+            --pr "$SCM_PR_NUM" \
+            --head-sha "$SCM_HEAD_SHA"
+```
 
 ---
 
-## 8. Verifying the integration
+## 7. Optional workflow variants
 
-After pushing the workflow file:
+### 7.1 Dry run
 
-1. Open a new pull request (or update an existing one).
-2. In the PR’s **Checks** tab, confirm that the **“Code Review (AI)”** workflow runs.
-3. Open the job logs:
-   - Look for messages such as “Fetched diff”, “Agent returned N finding(s)”.
-4. Return to the **Conversation** and **Files changed** tabs:
-   - Inline comments from the agent should appear on the modified lines.
-   - A summary comment should appear if there were findings to report.
+Use this first if you want to validate configuration without posting comments:
 
-If the job fails or posts no comments, check:
+```yaml
+- name: Run AI code review (dry run)
+  run: |
+    docker run --rm \
+      -e SCM_PROVIDER \
+      -e SCM_URL \
+      -e SCM_OWNER \
+      -e SCM_REPO \
+      -e SCM_PR_NUM \
+      -e SCM_HEAD_SHA \
+      -e SCM_TOKEN \
+      -e LLM_PROVIDER \
+      -e LLM_MODEL \
+      -e LLM_API_KEY \
+      -e CODE_REVIEW_LOG_LEVEL \
+      "$IMAGE" \
+      review \
+      --owner "$SCM_OWNER" \
+      --repo "$SCM_REPO" \
+      --pr "$SCM_PR_NUM" \
+      --head-sha "$SCM_HEAD_SHA" \
+      --dry-run \
+      --print-findings
+```
 
-- That `LLM_PROVIDER`, `LLM_MODEL`, and `LLM_API_KEY` are set correctly.
-- That `SCM_TOKEN` has permission to read the repo and write PR comments.
-- That `SCM_HEAD_SHA` is set to the PR head SHA (required to post comments).
+### 7.2 Fail the job on critical findings
 
-Once things look good, you can tighten conditions (e.g. run only on `main`), enable `--fail-on-critical`, or tweak review prompts via the `standards/prompts` configuration.
+Use this only if you want the review to become merge-blocking:
 
+```yaml
+- name: Run AI code review (fail on critical)
+  run: |
+    docker run --rm \
+      -e SCM_PROVIDER \
+      -e SCM_URL \
+      -e SCM_OWNER \
+      -e SCM_REPO \
+      -e SCM_PR_NUM \
+      -e SCM_HEAD_SHA \
+      -e SCM_TOKEN \
+      -e LLM_PROVIDER \
+      -e LLM_MODEL \
+      -e LLM_API_KEY \
+      -e CODE_REVIEW_LOG_LEVEL \
+      "$IMAGE" \
+      review \
+      --owner "$SCM_OWNER" \
+      --repo "$SCM_REPO" \
+      --pr "$SCM_PR_NUM" \
+      --head-sha "$SCM_HEAD_SHA" \
+      --fail-on-critical
+```
+
+The CLI exits with status `2` if any finding has severity `critical`.
+
+### 7.3 Use a PAT instead of `GITHUB_TOKEN`
+
+Replace:
+
+```yaml
+SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+with:
+
+```yaml
+SCM_TOKEN: ${{ secrets.SCM_TOKEN }}
+```
+
+This is useful if:
+
+- your org restricts the default token
+- you need cross-repository access
+- you want token management outside the workflow permission model
+
+### 7.4 Pull from a private registry
+
+If your image is not public, log in before `docker pull`:
+
+```yaml
+- name: Log in to Docker Hub
+  uses: docker/login-action@v3
+  with:
+    username: ${{ secrets.DOCKERHUB_USERNAME }}
+    password: ${{ secrets.DOCKERHUB_TOKEN }}
+```
+
+Then pull your private image tag as usual.
+
+---
+
+## 8. What the agent posts on GitHub
+
+On GitHub, the normal success path posts:
+
+- inline review comments on diff lines for findings
+
+It may also post a PR-level note at the start of the run if the PR description is empty or too short and the runner auto-generates context.
+
+It does **not** rely on a final catch-all summary comment for normal GitHub review posting.
+
+---
+
+## 9. Does this work for every pull request?
+
+Not always.
+
+### 9.1 Same-repo PRs
+
+This is the easiest and most reliable case.
+
+If the workflow has:
+
+- `pull-requests: write`
+- access to `LLM_API_KEY`
+- a valid image tag
+
+then same-repo PRs are the best fit for this setup.
+
+### 9.2 Fork PRs
+
+Fork PRs are the main exception.
+
+With a normal `pull_request` workflow:
+
+- repository secrets are typically not exposed to untrusted fork PR runs
+- the default `GITHUB_TOKEN` is typically restricted for fork-originated PRs
+
+That means the simple workflow above usually does **not** work for untrusted fork PRs because:
+
+- the LLM secret is unavailable
+- PR comment write access may be unavailable
+
+If fork PR support matters, use a different design with care, such as:
+
+- `pull_request_target` with very strict hardening
+- an external review service
+- manual approval or maintainer-gated execution
+
+Do not switch to `pull_request_target` casually. It has a different security model and must not execute untrusted PR code.
+
+### 9.3 Intentionally skipped PRs
+
+The runner can skip a PR when:
+
+- it has the configured skip label
+- its title contains the configured skip pattern
+
+Default values are:
+
+- `skip-review`
+- `[skip-review]`
+
+---
+
+## 10. How the review flow works internally
+
+When the container runs `code-review review`, the agent:
+
+1. validates `owner`, `repo`, `pr`, and `head_sha`
+2. loads SCM and LLM configuration from the environment
+3. connects to the GitHub provider
+4. checks whether the PR should be skipped
+5. loads existing review comments for deduplication
+6. computes idempotency for the current PR head SHA and config
+7. fetches changed files and the unified diff from GitHub
+8. chooses single-shot or file-by-file review based on diff size
+9. runs the review model
+10. filters findings to valid diff-visible lines
+11. removes duplicates and already-resolved items
+12. posts inline review comments back to the PR
+
+This behavior is what makes reruns safe: the workflow can be retried without blindly reposting the same comments.
+
+---
+
+## 11. Verifying the integration
+
+After you add the workflow:
+
+1. open or update a pull request
+2. open the PR's **Checks** tab
+3. confirm the workflow runs
+4. inspect the log output for messages such as:
+   - `Fetched diff`
+   - `Running agent`
+   - `Agent returned`
+5. open the PR **Files changed** tab and confirm inline comments appear
+
+If you see no comments, check:
+
+- `SCM_TOKEN` can write pull request comments
+- `LLM_API_KEY` exists and matches `LLM_PROVIDER`
+- `SCM_HEAD_SHA` is populated from `github.event.pull_request.head.sha`
+- the image tag exists and can be pulled
+- the PR was not skipped by label or title pattern
+
+---
+
+## 12. Troubleshooting
+
+### The workflow runs but no comments appear
+
+Common causes:
+
+- `SCM_TOKEN` lacks `pull-requests: write`
+- the run was a dry run
+- the PR matched the skip label or skip title pattern
+- the model returned no valid findings after filtering
+- the findings pointed to lines outside the visible diff hunks
+
+### The workflow cannot access `LLM_API_KEY`
+
+Most often this is a fork PR restriction. See the fork PR notes above.
+
+### The workflow cannot pull the image
+
+Check:
+
+- the image name and tag
+- registry credentials if the image is private
+- whether the tag was actually published
+
+### Comments duplicate on reruns
+
+This should be rare. The runner uses idempotency markers and existing-comment fingerprinting. If duplicates appear, check whether:
+
+- the head SHA changed between runs
+- the model or provider config changed
+- old comments were deleted manually
+
+---
+
+## 13. Recommended defaults
+
+For most teams:
+
+- trigger on `opened`, `synchronize`, `reopened`, and `ready_for_review`
+- use `GITHUB_TOKEN` first
+- use a pinned container tag
+- set `CODE_REVIEW_LOG_LEVEL=INFO`
+- start with advisory comments only
+- add `--fail-on-critical` only after the signal quality is proven
+
+---
+
+## 14. Reference workflow checklist
+
+Before rolling this out broadly, verify:
+
+- the image is published and pullable
+- `LLM_API_KEY` is configured
+- `permissions.pull-requests` is set to `write`
+- `SCM_HEAD_SHA` comes from `${{ github.event.pull_request.head.sha }}`
+- the workflow is tested on a same-repo PR first
+- your team has an explicit policy for fork PR behavior
