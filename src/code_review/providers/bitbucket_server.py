@@ -188,7 +188,13 @@ class BitbucketServerProvider(ProviderInterface):
         Bitbucket Server expects anchor commit range direction to match fileType:
         for fileType="TO", fromHash must be the destination/base commit and toHash
         must be the source/head commit. Using the opposite direction triggers 409
-        PullRequestOutOfDateException on Data Center."""
+        PullRequestOutOfDateException on Data Center.
+
+        When fromHash equals the target branch HEAD rather than the merge-base (which happens
+        when the target branch has advanced after the PR was created), Bitbucket Server returns
+        409 because the anchor does not match the PR's effective diff. In that case this method
+        retries with a simplified anchor that omits fromHash/toHash/diffType so the server can
+        resolve the correct merge-base automatically."""
         if not comments:
             return
         path = self._path(owner, repo, "pull-requests", str(pr_number), "comments")
@@ -210,7 +216,31 @@ class BitbucketServerProvider(ProviderInterface):
                 anchor["toHash"] = source_hash
                 anchor["diffType"] = "EFFECTIVE"
             payload = {"text": c.body, "anchor": anchor}
-            self._post(path, payload)
+            try:
+                self._post(path, payload)
+            except httpx.HTTPStatusError as exc:
+                if exc.response is not None and exc.response.status_code == 409 and (
+                    "fromHash" in anchor
+                ):
+                    # The anchor's fromHash (toRef.latestCommit) may not be the PR's merge-base
+                    # when the target branch has advanced.  Retry without the optional hash
+                    # fields so Bitbucket Server can compute the correct merge-base itself.
+                    logger.debug(
+                        "post_review_comment 409 with hashes, retrying without: "
+                        "owner=%s repo=%s pr_number=%s path=%s line=%s",
+                        owner,
+                        repo,
+                        pr_number,
+                        c.path,
+                        c.line,
+                    )
+                    anchor_simple: dict[str, Any] = {
+                        k: v for k, v in anchor.items()
+                        if k not in ("fromHash", "toHash", "diffType")
+                    }
+                    self._post(path, {"text": c.body, "anchor": anchor_simple})
+                else:
+                    raise
 
     def _comment_from_activity(self, act: dict) -> ReviewComment | None:
         """Parse one activity entry into a ReviewComment if it is a COMMENTED action."""

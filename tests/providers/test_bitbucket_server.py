@@ -1,6 +1,7 @@
 """Tests for BitbucketServerProvider (mocked HTTP)."""
 
 import pytest
+import httpx
 from unittest.mock import MagicMock, call, patch
 
 from code_review.providers import get_provider
@@ -169,6 +170,94 @@ def test_post_review_comments_uses_base_to_head_hash_direction_for_to_file(mock_
     assert payload["anchor"]["fileType"] == "TO"
     assert payload["anchor"]["fromHash"] == "target_base_hash"
     assert payload["anchor"]["toHash"] == "source_head_hash"
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_post_review_comments_retries_without_hashes_on_409(mock_client):
+    """When the first POST returns 409, retry with simplified anchor (no fromHash/toHash/diffType).
+
+    The 409 occurs when toRef.latestCommit != the PR's merge-base (i.e. the target branch
+    has advanced after the PR was created).  The retry lets Bitbucket Server resolve the
+    merge-base itself, which succeeds because only path/line/lineType/fileType are required.
+    """
+    # Simulate 409 on first POST, success on second (retry)
+    mock_response_409 = MagicMock()
+    mock_response_409.status_code = 409
+    exc_409 = httpx.HTTPStatusError("409", request=MagicMock(), response=mock_response_409)
+
+    mock_post_success = MagicMock()
+    mock_post_success.raise_for_status = MagicMock()
+    mock_post_success.content = b'{"id": 2}'
+    mock_post_success.json.return_value = {"id": 2}
+
+    mock_post_first = MagicMock()
+    mock_post_first.raise_for_status.side_effect = exc_409
+
+    mock_get = MagicMock()
+    mock_get.headers = {"content-type": "application/json"}
+    mock_get.json.return_value = {
+        "fromRef": {"latestCommit": "source_head_hash"},
+        "toRef": {"latestCommit": "target_base_hash"},
+    }
+
+    http = mock_client.return_value.__enter__.return_value
+    http.get.return_value = mock_get
+    http.post.side_effect = [mock_post_first, mock_post_success]
+
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    p.post_review_comments(
+        "PROJ", "repo", 1,
+        [InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")],
+        head_sha="source_head_hash",
+    )
+
+    assert http.post.call_count == 2, "Should have retried once after 409"
+
+    # First call had hashes
+    first_payload = http.post.call_args_list[0][1]["json"]
+    assert "fromHash" in first_payload["anchor"]
+    assert "toHash" in first_payload["anchor"]
+    assert "diffType" in first_payload["anchor"]
+
+    # Retry has NO hashes but preserves essential anchor fields
+    retry_payload = http.post.call_args_list[1][1]["json"]
+    assert "fromHash" not in retry_payload["anchor"], "Retry must omit fromHash"
+    assert "toHash" not in retry_payload["anchor"], "Retry must omit toHash"
+    assert "diffType" not in retry_payload["anchor"], "Retry must omit diffType"
+    assert retry_payload["anchor"]["path"] == "foo.java"
+    assert retry_payload["anchor"]["line"] == 10
+    assert retry_payload["anchor"]["lineType"] == "ADDED"
+    assert retry_payload["anchor"]["fileType"] == "TO"
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_post_review_comments_409_without_hashes_propagates(mock_client):
+    """When there are no hashes and the POST returns 409, the error propagates (no retry loop)."""
+    mock_response_409 = MagicMock()
+    mock_response_409.status_code = 409
+    exc_409 = httpx.HTTPStatusError("409", request=MagicMock(), response=mock_response_409)
+
+    mock_post = MagicMock()
+    mock_post.raise_for_status.side_effect = exc_409
+
+    mock_get = MagicMock()
+    mock_get.headers = {"content-type": "application/json"}
+    # Return empty refs so no hashes are included in the anchor
+    mock_get.json.return_value = {"fromRef": {}, "toRef": {}}
+
+    http = mock_client.return_value.__enter__.return_value
+    http.get.return_value = mock_get
+    http.post.return_value = mock_post
+
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    with pytest.raises(httpx.HTTPStatusError):
+        p.post_review_comments(
+            "PROJ", "repo", 1,
+            [InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")],
+        )
+
+    # Only one POST attempt (no retry since there were no hashes to remove)
+    assert http.post.call_count == 1
 
 
 # ---------------------------------------------------------------------------
