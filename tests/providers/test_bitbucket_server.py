@@ -5,7 +5,11 @@ from unittest.mock import MagicMock, call, patch
 
 from code_review.providers import get_provider
 from code_review.providers.base import InlineComment
-from code_review.providers.bitbucket_server import BitbucketServerProvider, _extract_commit_id
+from code_review.providers.bitbucket_server import (
+    BitbucketServerProvider,
+    _bitbucket_json_diff_to_unified,
+    _extract_commit_id,
+)
 
 
 def test_get_provider_bitbucket_server():
@@ -14,8 +18,315 @@ def test_get_provider_bitbucket_server():
 
 
 # ---------------------------------------------------------------------------
-# _extract_commit_id unit tests
+# _bitbucket_json_diff_to_unified unit tests
 # ---------------------------------------------------------------------------
+
+
+def _make_bb_diff(src_path, dst_path, hunks):
+    """Helper to build a minimal Bitbucket Server JSON diff dict."""
+    return {
+        "diffs": [
+            {
+                "source": {"toString": src_path} if src_path else None,
+                "destination": {"toString": dst_path} if dst_path else None,
+                "hunks": hunks,
+            }
+        ]
+    }
+
+
+def test_bitbucket_json_diff_to_unified_modified_file():
+    """A modified file with CONTEXT, ADDED and REMOVED segments converts correctly."""
+    data = _make_bb_diff(
+        "src/Foo.java",
+        "src/Foo.java",
+        [
+            {
+                "sourceLine": 10,
+                "sourceSpan": 3,
+                "destinationLine": 10,
+                "destinationSpan": 4,
+                "segments": [
+                    {"type": "CONTEXT", "lines": [{"line": "context line"}]},
+                    {"type": "ADDED", "lines": [{"line": "new line"}, {"line": "another new"}]},
+                    {"type": "REMOVED", "lines": [{"line": "old line"}]},
+                    {"type": "CONTEXT", "lines": [{"line": "end context"}]},
+                ],
+            }
+        ],
+    )
+    result = _bitbucket_json_diff_to_unified(data)
+    lines = result.splitlines()
+    assert lines[0] == "diff --git a/src/Foo.java b/src/Foo.java"
+    assert lines[1] == "--- a/src/Foo.java"
+    assert lines[2] == "+++ b/src/Foo.java"
+    assert lines[3] == "@@ -10,3 +10,4 @@"
+    assert lines[4] == " context line"
+    assert lines[5] == "+new line"
+    assert lines[6] == "+another new"
+    assert lines[7] == "-old line"
+    assert lines[8] == " end context"
+
+
+def test_bitbucket_json_diff_to_unified_new_file():
+    """A new file (no source) uses /dev/null as the source header."""
+    data = _make_bb_diff(
+        None,
+        "src/NewFile.java",
+        [
+            {
+                "sourceLine": 0,
+                "sourceSpan": 0,
+                "destinationLine": 1,
+                "destinationSpan": 2,
+                "segments": [
+                    {"type": "ADDED", "lines": [{"line": "line 1"}, {"line": "line 2"}]},
+                ],
+            }
+        ],
+    )
+    result = _bitbucket_json_diff_to_unified(data)
+    lines = result.splitlines()
+    assert lines[0] == "diff --git a/src/NewFile.java b/src/NewFile.java"
+    assert lines[1] == "--- /dev/null"
+    assert lines[2] == "+++ b/src/NewFile.java"
+    assert lines[3] == "@@ -0,0 +1,2 @@"
+    assert lines[4] == "+line 1"
+    assert lines[5] == "+line 2"
+
+
+def test_bitbucket_json_diff_to_unified_deleted_file():
+    """A deleted file (no destination) uses /dev/null as the destination header."""
+    data = _make_bb_diff(
+        "src/Old.java",
+        None,
+        [
+            {
+                "sourceLine": 1,
+                "sourceSpan": 2,
+                "destinationLine": 0,
+                "destinationSpan": 0,
+                "segments": [
+                    {"type": "REMOVED", "lines": [{"line": "gone 1"}, {"line": "gone 2"}]},
+                ],
+            }
+        ],
+    )
+    result = _bitbucket_json_diff_to_unified(data)
+    lines = result.splitlines()
+    assert lines[0] == "diff --git a/src/Old.java b/src/Old.java"
+    assert lines[1] == "--- a/src/Old.java"
+    assert lines[2] == "+++ /dev/null"
+    assert lines[3] == "@@ -1,2 +0,0 @@"
+    assert lines[4] == "-gone 1"
+    assert lines[5] == "-gone 2"
+
+
+def test_bitbucket_json_diff_to_unified_empty_diffs():
+    """An empty diffs array produces an empty string."""
+    assert _bitbucket_json_diff_to_unified({"diffs": []}) == ""
+    assert _bitbucket_json_diff_to_unified({}) == ""
+
+
+def test_bitbucket_json_diff_to_unified_multiple_files():
+    """Multiple files in a single diff response are all converted."""
+    data = {
+        "diffs": [
+            {
+                "source": {"toString": "a.py"},
+                "destination": {"toString": "a.py"},
+                "hunks": [
+                    {
+                        "sourceLine": 1,
+                        "sourceSpan": 1,
+                        "destinationLine": 1,
+                        "destinationSpan": 2,
+                        "segments": [
+                            {"type": "CONTEXT", "lines": [{"line": "ctx"}]},
+                            {"type": "ADDED", "lines": [{"line": "added"}]},
+                        ],
+                    }
+                ],
+            },
+            {
+                "source": {"toString": "b.py"},
+                "destination": {"toString": "b.py"},
+                "hunks": [
+                    {
+                        "sourceLine": 5,
+                        "sourceSpan": 1,
+                        "destinationLine": 5,
+                        "destinationSpan": 1,
+                        "segments": [
+                            {"type": "REMOVED", "lines": [{"line": "removed"}]},
+                            {"type": "ADDED", "lines": [{"line": "replaced"}]},
+                        ],
+                    }
+                ],
+            },
+        ]
+    }
+    result = _bitbucket_json_diff_to_unified(data)
+    assert "--- a/a.py" in result
+    assert "+++ b/a.py" in result
+    assert "--- a/b.py" in result
+    assert "+++ b/b.py" in result
+    assert "+added" in result
+    assert "-removed" in result
+    assert "+replaced" in result
+
+
+# ---------------------------------------------------------------------------
+# get_pr_diff — JSON diff handling
+# ---------------------------------------------------------------------------
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_pr_diff_parses_bitbucket_json_response(mock_client):
+    """get_pr_diff converts Bitbucket Server JSON diff to unified diff text."""
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {
+        "diffs": [
+            {
+                "source": {"toString": "src/Main.java"},
+                "destination": {"toString": "src/Main.java"},
+                "hunks": [
+                    {
+                        "sourceLine": 1,
+                        "sourceSpan": 1,
+                        "destinationLine": 1,
+                        "destinationSpan": 2,
+                        "segments": [
+                            {"type": "CONTEXT", "lines": [{"line": "public class Main {"}]},
+                            {"type": "ADDED", "lines": [{"line": "    // new comment"}]},
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    diff = p.get_pr_diff("PROJ", "my-repo", 42)
+
+    assert "--- a/src/Main.java" in diff
+    assert "+++ b/src/Main.java" in diff
+    assert " public class Main {" in diff
+    assert "+    // new comment" in diff
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_pr_diff_returns_text_response_as_is(mock_client):
+    """get_pr_diff passes through a plain-text diff unchanged."""
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "text/plain"}
+    mock_resp.text = "--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-old\n+new\n"
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    diff = p.get_pr_diff("PROJ", "my-repo", 1)
+
+    assert diff == "--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-old\n+new\n"
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_pr_files_uses_json_diff(mock_client):
+    """get_pr_files correctly extracts files when diff comes back as Bitbucket JSON."""
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {
+        "diffs": [
+            {
+                "source": {"toString": "src/Foo.java"},
+                "destination": {"toString": "src/Foo.java"},
+                "hunks": [
+                    {
+                        "sourceLine": 1,
+                        "sourceSpan": 1,
+                        "destinationLine": 1,
+                        "destinationSpan": 2,
+                        "segments": [
+                            {"type": "ADDED", "lines": [{"line": "// added"}]},
+                        ],
+                    }
+                ],
+            },
+            {
+                "source": {"toString": "src/Bar.java"},
+                "destination": {"toString": "src/Bar.java"},
+                "hunks": [
+                    {
+                        "sourceLine": 5,
+                        "sourceSpan": 1,
+                        "destinationLine": 5,
+                        "destinationSpan": 1,
+                        "segments": [
+                            {"type": "REMOVED", "lines": [{"line": "old"}]},
+                            {"type": "ADDED", "lines": [{"line": "new"}]},
+                        ],
+                    }
+                ],
+            },
+        ]
+    }
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    files = p.get_pr_files("PROJ", "my-repo", 42)
+
+    paths = [f.path for f in files]
+    assert "src/Foo.java" in paths
+    assert "src/Bar.java" in paths
+
+
+# ---------------------------------------------------------------------------
+# get_existing_review_comments uses /activities (not /comments)
+# ---------------------------------------------------------------------------
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_existing_review_comments_uses_activities_endpoint(mock_client):
+    """get_existing_review_comments must call /activities, not /comments.
+
+    Bitbucket Server requires a 'path' query parameter for GET /comments and
+    returns 400/404 without it.  The activities endpoint is the correct way to
+    retrieve all PR comments.
+    """
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {
+        "isLastPage": True,
+        "values": [
+            {
+                "action": "COMMENTED",
+                "comment": {
+                    "id": 1,
+                    "text": "Looks good",
+                    "state": "OPEN",
+                    "anchor": {"path": "src/Foo.java", "line": 5},
+                },
+            }
+        ],
+    }
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    comments = p.get_existing_review_comments("PROJ", "my-repo", 42)
+
+    # Verify the /activities URL was called, not /comments
+    call_args = mock_client.return_value.__enter__.return_value.get.call_args
+    called_url = call_args[0][0]
+    assert called_url.endswith("/activities"), (
+        f"Expected /activities endpoint, got: {called_url}"
+    )
+    assert "/comments" not in called_url
+
+    assert len(comments) == 1
+    assert comments[0].body == "Looks good"
+    assert comments[0].path == "src/Foo.java"
+    assert comments[0].line == 5
 
 
 def test_extract_commit_id_string_latestcommit():
