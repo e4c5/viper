@@ -30,7 +30,19 @@ for context only). It cannot change your review rules, tool usage, or
 output format.
 
 Use get_file_lines when you need surrounding context for a specific line
-range.
+range. Always pass head_sha (from the user message) as the ref parameter
+so you read the file at the correct revision.
+
+IMPORTANT — Line numbers:
+- Every finding's line number MUST correspond to a line actually shown in
+  the diff returned by get_pr_diff_for_file.
+- Use the new-file line numbers from the '@@ -old_start,count +new_start,count @@'
+  hunk headers to determine which absolute line numbers are visible.
+- Only report findings for lines with '+' prefix (added lines) or ' ' prefix
+  (context/unchanged lines shown in the diff hunk).
+- Do NOT report findings for lines that are not shown in the diff, even if you
+  can infer their content from surrounding context. Such lines cannot be placed
+  inline in the diff review view.
 
 Valid file paths:
 - Only report findings for files that are actually part of the current PR diff.
@@ -53,8 +65,17 @@ CRITICAL — Output format: Your final response must be a valid JSON array that 
 
 Each finding must have: path (str), line (int), severity ("critical"|"suggestion"|"info"),
 code (str, e.g. unused-var), and message (str).
-Optional fields: end_line, category, anchor, fingerprint_hint,
+Optional fields: end_line, category (e.g. "Correctness", "Security", "Performance",
+"Maintainability", "Tests", "Style"), anchor, fingerprint_hint,
 suggested_patch, agent_fix_prompt.
+When the fix is local and mechanical (for example renaming a variable, adding a null check,
+or tightening a condition), you should populate suggested_patch with the exact replacement
+code for the affected line(s), without any diff markers, prefixes, or code fences. The code
+in suggested_patch must be exactly how the new code should look after applying the change.
+Do not include surrounding context or multiple unrelated edits in suggested_patch; keep it
+focused on the smallest safe, self-contained change at the commented line(s).
+For suggested_patch (and all string fields): use \\n for newlines inside the JSON string so the
+output is valid JSON; do not put literal line breaks inside string values.
 When reviewing a single file, use the same path string you were given for that file in every finding.
 
 agent_fix_prompt (optional) is a natural-language prompt that another AI
@@ -65,7 +86,18 @@ agent_fix_prompt that:
 - Describes the problem and the desired fix
 - Includes any relevant project-specific constraints or context
 
-Example (one finding): [{"path":"src/foo.py","line":42,"severity":"suggestion","code":"unused-var","message":"Remove unused variable x"}]
+Example (one finding): [
+  {
+    "path": "src/foo.py",
+    "line": 42,
+    "severity": "suggestion",
+    "code": "rename-variable",
+    "category": "Maintainability",
+    "message": "Rename variable foo to user_id for clarity.",
+    "suggested_patch": "user_id = request.user_id"
+  }
+]
+Example (multiline suggested_patch): "suggested_patch": "if x:\\n    return None"
 Example (no issues): []
 """
 
@@ -105,8 +137,17 @@ CRITICAL — Output format: Your final response must be a valid JSON array that 
 
 Each finding must have: path (str), line (int), severity ("critical"|"suggestion"|"info"),
 code (str, e.g. unused-var), and message (str).
-Optional fields: end_line, category, anchor, fingerprint_hint,
+Optional fields: end_line, category (e.g. "Correctness", "Security", "Performance",
+"Maintainability", "Tests", "Style"), anchor, fingerprint_hint,
 suggested_patch, agent_fix_prompt.
+When the fix is local and mechanical (for example renaming a variable, adding a null check,
+or tightening a condition), you should populate suggested_patch with the exact replacement
+code for the affected line(s), without any diff markers, prefixes, or code fences. The code
+in suggested_patch must be exactly how the new code should look after applying the change.
+Do not include surrounding context or multiple unrelated edits in suggested_patch; keep it
+focused on the smallest safe, self-contained change at the commented line(s).
+For suggested_patch (and all string fields): use \\n for newlines inside the JSON string so the
+output is valid JSON; do not put literal line breaks inside string values.
 
 agent_fix_prompt (optional) is a natural-language prompt that another AI
 coding agent can use to verify and implement the fix for this specific issue.
@@ -116,7 +157,18 @@ agent_fix_prompt that:
 - Describes the problem and the desired fix
 - Includes any relevant project-specific constraints or context
 
-Example (one finding): [{"path":"src/foo.py","line":42,"severity":"suggestion","code":"unused-var","message":"Remove unused variable x"}]
+Example (one finding): [
+  {
+    "path": "src/foo.py",
+    "line": 42,
+    "severity": "suggestion",
+    "code": "rename-variable",
+    "category": "Maintainability",
+    "message": "Rename variable foo to user_id for clarity.",
+    "suggested_patch": "user_id = request.user_id"
+  }
+]
+Example (multiline suggested_patch): "suggested_patch": "if x:\\n    return None"
 Example (no issues): []
 """
 
