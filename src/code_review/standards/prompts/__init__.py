@@ -11,12 +11,13 @@ _PROMPTS_DIR = Path(__file__).parent
 
 _LANGUAGE_FILES: dict[str, str] = {
     "python": "python.md",
-    "javascript": "javascript.md",
-    "typescript": "typescript.md",
+    "javascript": "javascript_typescript.md",
+    "typescript": "javascript_typescript.md",
     "go": "go.md",
     "java": "java.md",
     "c": "c.md",
     "cpp": "cpp.md",
+    "dart": "dart.md",
 }
 
 

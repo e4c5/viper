@@ -54,6 +54,7 @@ _EXT_LANGUAGE: dict[str, str] = {
     ".cc": "cpp",
     ".cxx": "cpp",
     ".hpp": "cpp",
+    ".dart": "dart",
 }
 
 # Path/config pattern -> (language, framework | None)
@@ -70,6 +71,7 @@ _PATH_SIGNALS: dict[str, tuple[str, str | None]] = {
     "build.gradle.kts": ("java", None),
     "CMakeLists.txt": ("cpp", None),
     "meson.build": ("cpp", None),
+    "pubspec.yaml": ("dart", None),
 }
 
 # Dependency names (lowercase) -> framework
