@@ -23,6 +23,52 @@ logger = logging.getLogger("code_review")
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 CONTENT_TYPE_JSON = "application/json"
+_DEV_NULL = "/dev/null"
+
+
+def _diff_file_headers(src_path: str, dst_path: str) -> list[str]:
+    """Return the three header lines for one file in a unified diff.
+
+    Produces::
+
+        diff --git a/<path> b/<path>
+        --- a/<src>  (or --- /dev/null for new files)
+        +++ b/<dst>  (or +++ /dev/null for deleted files)
+
+    The ``diff --git`` header is required by :func:`parse_unified_diff` so it can
+    flush the previous file's hunks before starting a new file.  For deleted files
+    the effective path is taken from the source so the diff is still attributed
+    correctly.
+    """
+    src_header = _DEV_NULL if src_path == _DEV_NULL else f"a/{src_path}"
+    dst_header = _DEV_NULL if dst_path == _DEV_NULL else f"b/{dst_path}"
+    effective_path = dst_path if dst_path != _DEV_NULL else src_path
+    return [
+        f"diff --git a/{effective_path} b/{effective_path}",
+        f"--- {src_header}",
+        f"+++ {dst_header}",
+    ]
+
+
+def _hunk_header(hunk: dict) -> str:
+    """Return the ``@@ -old +new @@`` header line for one hunk dict."""
+    src_start = hunk.get("sourceLine", 0)
+    src_span = hunk.get("sourceSpan", 0)
+    dst_start = hunk.get("destinationLine", 0)
+    dst_span = hunk.get("destinationSpan", 0)
+    return f"@@ -{src_start},{src_span} +{dst_start},{dst_span} @@"
+
+
+def _segment_lines(segment: dict) -> list[str]:
+    """Return unified-diff lines for one Bitbucket Server diff segment.
+
+    Each segment has a ``type`` (``"ADDED"``, ``"REMOVED"``, or ``"CONTEXT"``)
+    and a ``lines`` list of ``{"line": "<content>"}`` dicts.
+    """
+    seg_type = segment.get("type", "CONTEXT")
+    _prefix = {"ADDED": "+", "REMOVED": "-"}
+    prefix = _prefix.get(seg_type, " ")
+    return [f"{prefix}{entry.get('line', '')}" for entry in segment.get("lines") or []]
 
 
 def _bitbucket_json_diff_to_unified(data: dict) -> str:
@@ -56,40 +102,13 @@ def _bitbucket_json_diff_to_unified(data: dict) -> str:
     """
     output: list[str] = []
     for file_diff in data.get("diffs") or []:
-        source = file_diff.get("source") or {}
-        destination = file_diff.get("destination") or {}
-        src_path = source.get("toString") or "/dev/null"
-        dst_path = destination.get("toString") or "/dev/null"
-
-        # Use the standard a/b prefix convention so parse_unified_diff extracts paths correctly.
-        src_header = "/dev/null" if src_path == "/dev/null" else f"a/{src_path}"
-        dst_header = "/dev/null" if dst_path == "/dev/null" else f"b/{dst_path}"
-
-        # The diff --git header is required by parse_unified_diff to flush the previous
-        # file's hunk before starting a new file.  The path used for the b/ side is
-        # what the parser records as the file path.  For deleted files (no destination)
-        # we use the source path so it is still attributed correctly.
-        effective_path = dst_path if dst_path != "/dev/null" else src_path
-        output.append(f"diff --git a/{effective_path} b/{effective_path}")
-        output.append(f"--- {src_header}")
-        output.append(f"+++ {dst_header}")
-
+        src_path = (file_diff.get("source") or {}).get("toString") or _DEV_NULL
+        dst_path = (file_diff.get("destination") or {}).get("toString") or _DEV_NULL
+        output.extend(_diff_file_headers(src_path, dst_path))
         for hunk in file_diff.get("hunks") or []:
-            src_start = hunk.get("sourceLine", 0)
-            src_span = hunk.get("sourceSpan", 0)
-            dst_start = hunk.get("destinationLine", 0)
-            dst_span = hunk.get("destinationSpan", 0)
-            output.append(f"@@ -{src_start},{src_span} +{dst_start},{dst_span} @@")
+            output.append(_hunk_header(hunk))
             for segment in hunk.get("segments") or []:
-                seg_type = segment.get("type", "CONTEXT")
-                for line_entry in segment.get("lines") or []:
-                    content = line_entry.get("line", "")
-                    if seg_type == "ADDED":
-                        output.append(f"+{content}")
-                    elif seg_type == "REMOVED":
-                        output.append(f"-{content}")
-                    else:  # CONTEXT
-                        output.append(f" {content}")
+                output.extend(_segment_lines(segment))
     return "\n".join(output)
 
 
