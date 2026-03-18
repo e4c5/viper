@@ -3,6 +3,9 @@
 import re
 from dataclasses import dataclass
 
+# Compiled once at module level to avoid recompilation on every call.
+_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
 
 @dataclass
 class DiffHunk:
@@ -47,7 +50,6 @@ def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
     current_lines: list[tuple[str, int | None, int | None]] = []
     old_ln = 0
     new_ln = 0
-    hunk_header = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
     for line in diff_text.splitlines():
         if line.startswith("diff --git "):
@@ -65,7 +67,7 @@ def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
                 current_path = line[6:].strip()
             continue
 
-        m = hunk_header.match(line)
+        m = _HUNK_HEADER_RE.match(line)
         if m:
             _flush_current_hunk()
             current_old_start = int(m.group(1))
@@ -146,7 +148,6 @@ def annotate_diff_with_line_numbers(diff_text: str) -> str:
     if not diff_text:
         return diff_text
 
-    _hunk_header = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
     result_lines: list[str] = []
     in_hunk = False
     new_ln = 0
@@ -163,7 +164,7 @@ def annotate_diff_with_line_numbers(diff_text: str) -> str:
             result_lines.append(line)
             continue
 
-        m = _hunk_header.match(line)
+        m = _HUNK_HEADER_RE.match(line)
         if m:
             new_ln = int(m.group(3))
             in_hunk = True

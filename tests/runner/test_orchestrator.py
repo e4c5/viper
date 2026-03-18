@@ -614,6 +614,13 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
         "per-file message must contain 'ref=<head_sha>' guidance so the agent reads "
         "file lines at the correct PR-head revision"
     )
+    # The per-file message must mention <L{n}> annotations so the LLM is reminded
+    # to use them as line numbers in every per-file session, not just in the
+    # system instruction that may be "forgotten" across many files.
+    assert "<L{n}>" in combined or "<L" in combined, (
+        "per-file message must mention <L{n}> annotations so the LLM uses them as "
+        "line numbers rather than computing from hunk headers"
+    )
 
 
 # --- Single-shot diff annotation ---

@@ -126,3 +126,23 @@ def test_findings_only_get_pr_diff_for_file_returns_annotated_diff():
     assert "<L11>+new_11" in result
     # context_12 must be annotated as new-file line 12
     assert "<L12> context_12" in result
+
+
+def test_findings_only_get_pr_diff_for_file_has_annotation_docstring():
+    """get_pr_diff_for_file tool must have a docstring mentioning <L{n}> annotations.
+
+    ADK uses the function docstring to build the tool description shown to the LLM.
+    Without it the LLM has no in-context reminder that the returned diff is annotated
+    and that it should use <L{n}> values as line numbers, not hunk-header arithmetic.
+    """
+    provider = _mock_provider()
+    tools = create_findings_only_tools(provider)
+    get_file_diff = next(t for t in tools if t.__name__ == "get_pr_diff_for_file")
+    doc = get_file_diff.__doc__ or ""
+    assert "<L{n}>" in doc or "<L" in doc, (
+        "get_pr_diff_for_file tool docstring must mention <L{n}> line annotations "
+        "so the ADK tool description reminds the LLM to use them as line numbers"
+    )
+    assert "line" in doc.lower(), (
+        "get_pr_diff_for_file docstring must explain that <L{n}> values are line numbers"
+    )

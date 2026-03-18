@@ -166,19 +166,77 @@ def create_findings_only_tools(provider: ProviderInterface) -> list[Callable]:
     """
 
     def get_pr_diff_for_file(owner: str, repo: str, pr_number: int, path: str) -> str:
+        """Fetch the unified diff for a single file in the PR, annotated with line numbers.
+
+        The returned diff has ``<L{n}>`` prefixes on every visible new-file line
+        (added ``+`` and context `` `` lines).  Removed lines (``-``) have no
+        annotation.  Use the ``<L{n}>`` value directly as the ``line`` field in
+        findings — do NOT compute line numbers from hunk headers.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            pr_number: Pull request number.
+            path: File path relative to repo root.
+
+        Returns:
+            Line-annotated unified diff string for that file only.
+        """
         return annotate_diff_with_line_numbers(
             provider.get_pr_diff_for_file(owner, repo, pr_number, path)
         )
 
     def get_file_content(owner: str, repo: str, ref: str, path: str) -> str:
+        """Fetch file content at a given ref (branch, tag, or SHA).
+
+        Use this for reading project-context files (e.g. AGENTS.md, README).
+        For the PR diff, call get_pr_diff_for_file instead.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            ref: Git ref (branch, tag, or commit SHA).
+            path: File path relative to repo root.
+
+        Returns:
+            File content as string (truncated to 16 KB if oversized).
+        """
         return truncate_repo_content(provider.get_file_content(owner, repo, ref, path))
 
     def get_file_lines(
         owner: str, repo: str, ref: str, path: str, start_line: int, end_line: int
     ) -> str:
+        """Fetch a line range from a file at ref for surrounding context.
+
+        Use this when you need additional context around a diff line.
+        Always pass head_sha as ref so you read the file at the correct revision.
+        Line numbers here are 1-based new-file line numbers, matching the
+        ``<L{n}>`` annotations in the diff.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            ref: Git ref (branch or commit SHA; use head_sha from the user message).
+            path: File path.
+            start_line: Start line (1-based inclusive).
+            end_line: End line (1-based inclusive).
+
+        Returns:
+            Lines start_line..end_line as string.
+        """
         return provider.get_file_lines(owner, repo, ref, path, start_line, end_line)
 
     def get_pr_files(owner: str, repo: str, pr_number: int) -> list[dict]:
+        """List files changed in a pull request.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            pr_number: Pull request number.
+
+        Returns:
+            List of dicts with path, status, additions, deletions.
+        """
         files = provider.get_pr_files(owner, repo, pr_number)
         return [f.model_dump() for f in files]
 

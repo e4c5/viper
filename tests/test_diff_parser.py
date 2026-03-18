@@ -223,8 +223,7 @@ def test_annotate_diff_roundtrip_line_numbers_match_parser():
 
     # Collect expected new-file lines from parser
     expected: dict[int, str] = {}
-    from code_review.diff.parser import parse_unified_diff as _parse
-    for hunk in _parse(diff):
+    for hunk in parse_unified_diff(diff):
         for content, old_ln, new_ln in hunk.lines:
             if new_ln is not None:
                 prefix = " " if old_ln is not None else "+"

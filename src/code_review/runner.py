@@ -1023,10 +1023,17 @@ class ReviewOrchestrator:
                 if head_sha
                 else ""
             )
+            annotation_guidance = (
+                " The diff returned by get_pr_diff_for_file has <L{n}> line-number"
+                " annotations on every visible line (added '+' and context ' ')."
+                " Use the <L{n}> value as the 'line' field in each finding."
+                " Do NOT compute line numbers from hunk headers."
+            )
             msg = (
                 f"Review exactly one file from this PR. owner={owner}, repo={repo}, pr_number={pr_number}."
                 + head_sha_clause
                 + f' Call get_pr_diff_for_file(owner, repo, pr_number, "{file_path}") to get the diff for this file.'
+                + annotation_guidance
                 + ref_guidance
                 + f' Then output a JSON array of findings for this file only. Use path "{file_path}" in every finding. '
                 "If there are no issues in this file, output exactly []."
