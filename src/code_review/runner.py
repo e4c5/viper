@@ -91,6 +91,100 @@ def _diff_visible_new_lines(diff_text: str) -> set[tuple[str, int]]:
     return out
 
 
+def _build_diff_line_index(diff_text: str) -> dict[tuple[str, int], str]:
+    """Build a mapping of (normalized_path, new_line) -> stripped line content from the diff.
+
+    Only includes lines visible in the new-file view (ADDED '+' and CONTEXT ' ').
+    Used by _validate_suggested_patches to check whether a patch is anchored to the
+    correct line.
+    """
+    index: dict[tuple[str, int], str] = {}
+    for hunk in parse_unified_diff(diff_text):
+        norm_path = _normalize_path_for_anchor(hunk.path)
+        for content, _old_ln, new_ln in hunk.lines:
+            if new_ln is not None:
+                index[(norm_path, new_ln)] = content.strip()
+    return index
+
+
+def _patch_tokens(text: str) -> set[str]:
+    """Return a set of non-trivial tokens (len >= 3) from a code string, lower-cased.
+
+    Used for a rough content-similarity check between a suggested_patch and the
+    actual diff line it is anchored to.
+    """
+    return {tok.lower() for tok in re.split(r"\W+", text) if len(tok) >= 3}
+
+
+def _validate_suggested_patches(
+    findings: list["FindingV1"],
+    diff_text: str,
+) -> list["FindingV1"]:
+    """Strip suggested_patch from findings where the patch doesn't match the anchored line.
+
+    For each finding with a suggested_patch, look up the actual content of finding.line
+    in the diff. If there is no meaningful token overlap between the patch's first line
+    and the actual diff line, the patch is almost certainly misplaced (the LLM named a
+    visible line but wrote a patch for a completely different piece of code).
+
+    In that case, clear suggested_patch and log a warning so the finding is still posted
+    as a plain comment rather than an incorrectly-placed suggestion block.
+
+    Findings without a suggested_patch are returned unchanged.
+    """
+    if not diff_text or not findings:
+        return findings
+
+    line_index = _build_diff_line_index(diff_text)
+    result: list[FindingV1] = []
+    for f in findings:
+        if not f.suggested_patch:
+            result.append(f)
+            continue
+
+        norm_path = _normalize_path_for_anchor(f.path)
+        actual_content = line_index.get((norm_path, f.line))
+        if actual_content is None:
+            # Line not in diff at all (will be caught by the visibility guardrail); keep as-is.
+            result.append(f)
+            continue
+
+        # Use the first non-empty line of the patch for comparison (the replacement).
+        patch_first_line = next(
+            (ln.strip() for ln in f.suggested_patch.splitlines() if ln.strip()), ""
+        )
+
+        actual_tokens = _patch_tokens(actual_content)
+        patch_tokens = _patch_tokens(patch_first_line)
+
+        # If neither side has meaningful tokens, keep the patch as-is (degenerate case).
+        if not actual_tokens or not patch_tokens:
+            result.append(f)
+            continue
+
+        overlap = actual_tokens & patch_tokens
+        # Require at least one shared token OR the actual line is very short (could be
+        # a single symbol like '{' or a blank line that the LLM replaces entirely).
+        is_plausible = bool(overlap) or len(actual_content) <= 5
+
+        if not is_plausible:
+            logger.warning(
+                "Stripping misplaced suggested_patch from finding %s:%d: "
+                "patch first line %r has no token overlap with actual diff line %r",
+                f.path,
+                f.line,
+                patch_first_line,
+                actual_content,
+            )
+            # Build a new FindingV1 without the patch.  FindingV1 is a Pydantic model;
+            # model_copy(update=...) is the safe, idiomatic way to produce a mutated copy.
+            f = f.model_copy(update={"suggested_patch": None})
+
+        result.append(f)
+    return result
+
+
+
 def _build_idempotency_key(
     scm_cfg,
     llm_cfg,
@@ -1118,7 +1212,7 @@ class ReviewOrchestrator:
         # Guardrail: only keep findings for files that are actually in the PR diff.
         # LLMs can occasionally emit findings for unrelated paths; we never want to post
         # comments on files outside the reviewed change set.
-        # Paths may include prefixes like dst:// or src:// (especially for Bitbucket);
+        # Paths may include prefixes like dst:// or src:// (especially for Bitbucket);\
         # normalize both diff paths and finding paths before comparison so valid findings
         # are not dropped just because of a prefix difference.
         path_filtered = self._filter_findings_to_pr_paths(findings, paths)
@@ -1130,7 +1224,15 @@ class ReviewOrchestrator:
         # full multi-file diff and may report lines that are in the file but outside any
         # hunk (e.g. unchanged code far from the changed region). Filtering here ensures
         # every posted comment appears inline in the diff view.
-        return self._filter_findings_to_visible_diff_lines(path_filtered, full_diff)
+        line_filtered = self._filter_findings_to_visible_diff_lines(path_filtered, full_diff)
+
+        # Guardrail: strip suggested_patch from findings where the patch content has no
+        # token overlap with the actual diff line it is anchored to.  This catches the
+        # common LLM error of hallucinating a patch for a different line of code while
+        # naming a visible line (so the line-visibility guard above passes).  Without
+        # this guard, the patch would be rendered as a suggestion block replacing the
+        # wrong code.  Stripping it degrades gracefully to a plain inline comment.
+        return _validate_suggested_patches(line_filtered, full_diff)
 
     def run(self) -> list[FindingV1]:
         """
