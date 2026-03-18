@@ -26,7 +26,9 @@ if TYPE_CHECKING:
 # The three bullet-point rules shared by both instructions in the
 # "IMPORTANT — Line numbers" section (the intro sentence differs per mode).
 _SHARED_LINE_NUMBER_RULES = """\
-- Use the ``<Ln>`` annotation as the ``line`` value in your findings.
+- Each added/context line is annotated ``<Ln>`` where ``n`` is an integer (e.g. ``<L42>``).
+  Use that integer ``n`` as the ``line`` value (e.g. 42) in your findings.
+  Do NOT emit the ``<Ln>`` tag itself as the line value; extract only the number.
   Do NOT compute line numbers yourself from the hunk headers.
 - Only report findings for lines that have a ``<Ln>`` annotation (added ``+``
   or context `` `` lines). Never report a finding for a removed ``-`` line.

@@ -721,11 +721,12 @@ def _suppress_ssl_teardown_errors(loop, context: dict) -> None:
     """
     exc = context.get("exception")
     msg = context.get("message", "")
-    if isinstance(exc, OSError) and getattr(exc, "errno", None) == 9:
-        return
-    if isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc):
-        return
-    if "SSL" in msg or "Fatal write error" in msg or "write backlog" in msg:
+    _teardown_msg = "SSL" in msg or "Fatal write error" in msg or "write backlog" in msg
+    _teardown_exc = (
+        (isinstance(exc, OSError) and getattr(exc, "errno", None) == 9)
+        or (isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc))
+    )
+    if _teardown_msg and _teardown_exc:
         return
     loop.default_exception_handler(context)
 
