@@ -3,6 +3,7 @@
 from collections.abc import Callable
 
 from code_review.agent.tools.review_helpers import detect_language_context
+from code_review.diff.parser import annotate_diff_with_line_numbers
 from code_review.providers.base import ProviderInterface
 from code_review.providers.safety import truncate_repo_content
 
@@ -165,7 +166,9 @@ def create_findings_only_tools(provider: ProviderInterface) -> list[Callable]:
     """
 
     def get_pr_diff_for_file(owner: str, repo: str, pr_number: int, path: str) -> str:
-        return provider.get_pr_diff_for_file(owner, repo, pr_number, path)
+        return annotate_diff_with_line_numbers(
+            provider.get_pr_diff_for_file(owner, repo, pr_number, path)
+        )
 
     def get_file_content(owner: str, repo: str, ref: str, path: str) -> str:
         return truncate_repo_content(provider.get_file_content(owner, repo, ref, path))

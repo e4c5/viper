@@ -22,7 +22,7 @@ from code_review.diff.fingerprint import (
     parse_marker_from_comment_body,
     surrounding_content_hash,
 )
-from code_review.diff.parser import iter_new_lines, parse_unified_diff
+from code_review.diff.parser import annotate_diff_with_line_numbers, iter_new_lines, parse_unified_diff
 from code_review.formatters.comment import finding_to_comment_body
 from code_review.models import get_context_window
 from code_review.providers import get_provider
@@ -1086,14 +1086,21 @@ class ReviewOrchestrator:
         # LLM can review the changes even if tool calls are unavailable or flaky.
         # We only reach this branch when the diff fits within the configured
         # DIFF_TOKEN_BUDGET_RATIO, so including the full diff is safe.
+        #
+        # Annotate the diff with explicit <L{n}> new-file line numbers before
+        # embedding it in the prompt.  Without annotations the LLM has to derive
+        # absolute line numbers from hunk headers by counting +/- lines — a
+        # calculation it frequently gets wrong, causing comments to land on the
+        # wrong lines in the diff view.
         msg = f"Review this PR: owner={owner}, repo={repo}, pr_number={pr_number}." + (
             f" head_sha={head_sha}." if head_sha else ""
         )
         if full_diff:
+            annotated = annotate_diff_with_line_numbers(full_diff)
             msg += (
                 "\n\nHere is the unified diff for this PR:\n"
                 "```diff\n"
-                f"{full_diff}\n"
+                f"{annotated}\n"
                 "```"
             )
         if logger.isEnabledFor(logging.DEBUG):

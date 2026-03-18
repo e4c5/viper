@@ -34,15 +34,18 @@ range. Always pass head_sha (from the user message) as the ref parameter
 so you read the file at the correct revision.
 
 IMPORTANT — Line numbers:
-- Every finding's line number MUST correspond to a line actually shown in
-  the diff returned by get_pr_diff_for_file.
-- Use the new-file line numbers from the '@@ -old_start,count +new_start,count @@'
-  hunk headers to determine which absolute line numbers are visible.
-- Only report findings for lines with '+' prefix (added lines) or ' ' prefix
-  (context/unchanged lines shown in the diff hunk).
-- Do NOT report findings for lines that are not shown in the diff. If the exact line
-  containing the issue is outside the visible diff hunk, DO NOT artificially map the
-  issue to a nearby visible line. You must drop the finding entirely.
+- The diff returned by get_pr_diff_for_file is annotated with explicit
+  new-file line numbers using the format ``<L{n}>`` at the start of each
+  line visible in the new file.
+  For example: ``<L42> +def new_function():`` means this line is new-file line 42.
+  Context lines look like: ``<L10>  unchanged_code``.
+  Removed lines (prefix ``-``) have NO annotation and cannot be referenced.
+- Use the ``<L{n}>`` annotation as the ``line`` value in your findings.
+  Do NOT compute line numbers yourself from the hunk headers.
+- Only report findings for lines that have a ``<L{n}>`` annotation (added ``+``
+  or context `` `` lines). Never report a finding for a removed ``-`` line.
+- If the exact line containing the issue has no ``<L{n}>`` annotation, drop the
+  finding entirely. Do NOT shift it to the nearest annotated line.
 
 Valid file paths:
 - Only report findings for files that are actually part of the current PR diff.
@@ -125,14 +128,17 @@ limited to: bugs, security vulnerabilities, performance problems, logic errors,
 missing error handling, and style violations.
 
 IMPORTANT — Line numbers:
-- Every finding's line number MUST correspond to a line actually shown in the diff.
-- Use the new-file line numbers from the '@@ -old_start,count +new_start,count @@'
-  hunk headers to determine which absolute line numbers are visible.
-- Only report findings for lines with '+' prefix (added lines) or ' ' prefix
-  (context/unchanged lines shown in the diff hunk).
-- Do NOT report findings for lines that are not shown in the diff. If the exact line
-  containing the issue is outside the visible diff hunk, DO NOT artificially map the
-  issue to a nearby visible line. You must drop the finding entirely.
+- The diff lines are annotated with explicit new-file line numbers using the
+  format ``<L{n}>`` at the start of each line visible in the new file.
+  For example: ``<L42> +def new_function():`` means this line is new-file line 42.
+  Context lines look like: ``<L10>  unchanged_code``.
+  Removed lines (prefix ``-``) have NO annotation and cannot be referenced.
+- Use the ``<L{n}>`` annotation as the ``line`` value in your findings.
+  Do NOT compute line numbers yourself from the hunk headers.
+- Only report findings for lines that have a ``<L{n}>`` annotation (added ``+``
+  or context `` `` lines). Never report a finding for a removed ``-`` line.
+- If the exact line containing the issue has no ``<L{n}>`` annotation, drop the
+  finding entirely. Do NOT shift it to the nearest annotated line.
 
 Valid file paths:
 - Only report findings for files that appear in the diff.

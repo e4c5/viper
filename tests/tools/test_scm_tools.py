@@ -92,3 +92,37 @@ def test_findings_only_tools_include_get_pr_diff_for_file_but_not_full_diff():
     assert "get_pr_diff_for_file" in names
     assert "post_review_comment" not in names
     assert "get_existing_review_comments" not in names
+
+
+def test_findings_only_get_pr_diff_for_file_returns_annotated_diff():
+    """get_pr_diff_for_file in findings-only tools must return a line-annotated diff.
+
+    The annotation (<L{n}> prefixes on visible new-file lines) is critical for
+    correct comment placement: without it, the LLM has to compute absolute line
+    numbers from hunk headers by counting +/- lines — a calculation it frequently
+    gets wrong when deletions precede the target line.
+    """
+    diff_with_deletion = (
+        "diff --git a/foo.py b/foo.py\n"
+        "--- a/foo.py\n+++ b/foo.py\n"
+        "@@ -10,3 +10,3 @@\n"
+        " context_10\n"
+        "-old_11\n"
+        "+new_11\n"
+        " context_12\n"
+    )
+    provider = _mock_provider()
+    provider.get_pr_diff_for_file.return_value = diff_with_deletion
+
+    tools = create_findings_only_tools(provider)
+    get_file_diff = next(t for t in tools if t.__name__ == "get_pr_diff_for_file")
+    result = get_file_diff("o", "r", 1, "foo.py")
+
+    # context_10 must be annotated as new-file line 10
+    assert "<L10> context_10" in result
+    # old_11 (removed) must NOT have an annotation
+    assert all("<L" not in ln for ln in result.splitlines() if "-old_11" in ln)
+    # new_11 (added) must be annotated as new-file line 11
+    assert "<L11>+new_11" in result
+    # context_12 must be annotated as new-file line 12
+    assert "<L12> context_12" in result

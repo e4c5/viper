@@ -614,3 +614,99 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
         "per-file message must contain 'ref=<head_sha>' guidance so the agent reads "
         "file lines at the correct PR-head revision"
     )
+
+
+# --- Single-shot diff annotation ---
+
+
+def test_single_shot_mode_prompt_contains_annotated_diff():
+    """In single-shot mode the diff embedded in the LLM prompt must carry <L{n}> annotations.
+
+    Without annotations the LLM has to derive absolute new-file line numbers by
+    counting +/- lines relative to hunk headers — a calculation it frequently gets
+    wrong when deletions precede the target line.  Annotations make the line number
+    explicit so the LLM can copy it directly into the ``line`` field of a finding.
+    """
+    from unittest.mock import AsyncMock
+
+    # A diff with a deletion that would cause off-by-one errors without annotations.
+    # The added line (+added_line) is at new-file line 11, NOT line 12.
+    diff_with_deletion = (
+        "diff --git a/foo.py b/foo.py\n"
+        "--- a/foo.py\n+++ b/foo.py\n"
+        "@@ -10,3 +10,3 @@\n"
+        " ctx_10\n"
+        "-old_11\n"
+        "+added_line\n"
+        " ctx_12\n"
+    )
+    captured_messages: list[str] = []
+
+    async def _capture_run_async(*args, **kwargs):
+        new_msg = kwargs.get("new_message")
+        if new_msg and hasattr(new_msg, "parts"):
+            for part in new_msg.parts:
+                if hasattr(part, "text") and part.text:
+                    captured_messages.append(part.text)
+        event = MagicMock()
+        event.is_final_response.return_value = True
+        event.content = MagicMock()
+        event.content.parts = [MagicMock(text="[]")]
+        yield event
+
+    from code_review.providers.base import FileInfo
+
+    with (
+        patch("code_review.runner.get_context_window", return_value=1_000_000),  # force single-shot
+        patch("code_review.runner.get_provider") as mock_get_provider,
+        patch("code_review.runner.get_scm_config") as mock_scm,
+        patch("code_review.runner.get_llm_config") as mock_llm,
+        patch("google.adk.runners.Runner") as mock_runner_cls,
+        patch("google.adk.sessions.InMemorySessionService") as mock_session_svc_cls,
+    ):
+        mock_scm.return_value = MagicMock(
+            provider="gitea",
+            url="https://x.com",
+            token="x",
+            skip_label="",
+            skip_title_pattern="",
+        )
+        mock_llm.return_value = MagicMock(disable_tool_calls=False)
+        provider = MagicMock()
+        provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
+        provider.get_pr_diff.return_value = diff_with_deletion
+        provider.get_existing_review_comments.return_value = []
+        provider.get_file_content.return_value = "line1\n"
+        provider.get_pr_info.return_value = None
+        provider.capabilities.return_value = MagicMock(
+            resolvable_comments=False,
+            supports_suggestions=False,
+            omit_fingerprint_marker_in_body=False,
+            markup_supports_collapsible=False,
+            markup_hides_html_comment=False,
+        )
+        mock_get_provider.return_value = provider
+
+        mock_session_svc = MagicMock()
+        mock_session_svc.create_session = AsyncMock()
+        mock_session_svc_cls.return_value = mock_session_svc
+
+        mock_runner_instance = MagicMock()
+        mock_runner_instance.run_async = _capture_run_async
+        mock_runner_cls.return_value = mock_runner_instance
+
+        orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="sha1", dry_run=True)
+        orchestrator.run()
+
+    combined = " ".join(captured_messages)
+
+    # Annotations must be present for visible lines
+    assert "<L10>" in combined, "context line 10 must be annotated as <L10>"
+    assert "<L11>" in combined, "added line must be annotated as <L11> (not <L12>)"
+    assert "<L12>" in combined, "context line 12 must be annotated as <L12>"
+
+    # Removed line must NOT be annotated — split prompt into lines and check directly
+    removed_lines = [ln for ln in combined.splitlines() if "-old_11" in ln]
+    assert all(not ln.strip().startswith("<L") for ln in removed_lines), (
+        "removed line -old_11 must not carry a <L{n}> annotation"
+    )
