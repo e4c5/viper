@@ -16,6 +16,7 @@ from code_review.providers.base import (
     _log_pr_info_warning,
     pr_info_from_api_dict,
 )
+from code_review.formatters.comment import render_suggestion_block
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
@@ -156,11 +157,7 @@ class GitLabProvider(ProviderInterface):
         Render comment body, appending suggestion block when suggested_patch is present.
         Optionally prefix with path/line header for MR-level notes.
         """
-        base = (
-            comment.body
-            if not comment.suggested_patch
-            else f"{comment.body}\n\n```suggestion\n{comment.suggested_patch}\n```"
-        )
+        base = render_suggestion_block(comment.body, comment.suggested_patch)
         if with_path_prefix:
             return f"**{comment.path}:L{comment.line}**\n\n{base}"
         return base

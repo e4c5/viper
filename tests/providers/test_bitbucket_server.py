@@ -627,3 +627,8 @@ def test_fallback_no_pr_summary_when_inline_fails():
     assert count == 0
     # PR summary fallback must NOT be called
     provider.post_pr_summary_comment.assert_not_called()
+
+def test_capabilities():
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    caps = p.capabilities()
+    assert caps.supports_suggestions is True

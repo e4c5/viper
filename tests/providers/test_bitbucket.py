@@ -178,3 +178,9 @@ def test_get_pr_info(mock_client):
     assert info is not None
     assert info.title == "Fix bug"
     assert "skip-review" in info.labels
+
+
+def test_capabilities():
+    p = BitbucketProvider("https://api.bitbucket.org/2.0", "tok")
+    caps = p.capabilities()
+    assert caps.supports_suggestions is True

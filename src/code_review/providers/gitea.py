@@ -19,6 +19,7 @@ from code_review.providers.base import (
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
+from code_review.formatters.comment import render_suggestion_block
 from code_review.providers.safety import truncate_repo_content
 
 logger = logging.getLogger(__name__)
@@ -147,7 +148,7 @@ class GiteaProvider(ProviderInterface):
                 path_norm = c.path or ""
             item: dict[str, Any] = {
                 "path": path_norm,
-                "body": c.body,
+                "body": render_suggestion_block(c.body, c.suggested_patch),
                 "old_position": 0,
                 "new_position": int(c.line),
             }
@@ -249,4 +250,4 @@ class GiteaProvider(ProviderInterface):
 
         Gitea does not support resolving/unresolving PR review comments.
         """
-        return ProviderCapabilities(resolvable_comments=False, supports_suggestions=False)
+        return ProviderCapabilities(resolvable_comments=False, supports_suggestions=True)

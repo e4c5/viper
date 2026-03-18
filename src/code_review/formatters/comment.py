@@ -22,6 +22,16 @@ SEVERITY_EMOJIS: dict[str, str] = {
 _LEADING_TAGS_RE = re.compile(r"^(?:\s*\[[^\]]+\])+\s*", flags=re.IGNORECASE)
 
 
+def render_suggestion_block(body: str, patch: str | None) -> str:
+    """
+    Append a ```suggestion block to the body when a patch is provided.
+    Used by providers that support suggestions (GitHub, GitLab, Gitea, Bitbucket).
+    """
+    if not patch:
+        return body
+    return f"{body}\n\n```suggestion\n{patch}\n```"
+
+
 def _strip_leading_tags(text: str) -> str:
     """Remove duplicated [Tag] prefixes from the body before we add our own."""
     return _LEADING_TAGS_RE.sub("", text).lstrip()

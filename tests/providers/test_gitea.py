@@ -305,4 +305,4 @@ def test_capabilities():
     p = GiteaProvider("https://gitea.example.com", "tok")
     caps = p.capabilities()
     assert caps.resolvable_comments is False
-    assert caps.supports_suggestions is False
+    assert caps.supports_suggestions is True

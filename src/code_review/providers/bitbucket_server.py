@@ -17,6 +17,7 @@ from code_review.providers.base import (
     normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
+from code_review.formatters.comment import render_suggestion_block
 from code_review.providers.safety import truncate_repo_content
 
 logger = logging.getLogger("code_review")
@@ -313,7 +314,10 @@ class BitbucketServerProvider(ProviderInterface):
                 anchor["fromHash"] = target_hash
                 anchor["toHash"] = source_hash
                 anchor["diffType"] = "EFFECTIVE"
-            payload = {"text": c.body, "anchor": anchor}
+            payload = {
+                "text": render_suggestion_block(c.body, c.suggested_patch),
+                "anchor": anchor,
+            }
             try:
                 self._post(path, payload)
             except httpx.HTTPStatusError as exc:
@@ -336,7 +340,13 @@ class BitbucketServerProvider(ProviderInterface):
                         k: v for k, v in anchor.items()
                         if k not in ("fromHash", "toHash", "diffType")
                     }
-                    self._post(path, {"text": c.body, "anchor": anchor_simple})
+                    self._post(
+                        path,
+                        {
+                            "text": render_suggestion_block(c.body, c.suggested_patch),
+                            "anchor": anchor_simple,
+                        },
+                    )
                 else:
                     raise
 
@@ -428,7 +438,7 @@ class BitbucketServerProvider(ProviderInterface):
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
             resolvable_comments=False,
-            supports_suggestions=False,
+            supports_suggestions=True,
             markup_hides_html_comment=False,
             markup_supports_collapsible=False,
             omit_fingerprint_marker_in_body=True,
