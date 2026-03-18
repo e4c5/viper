@@ -1,7 +1,5 @@
 import litellm
 
-# litellm.suppress_debug_info = True
-
 messages = [{"role": "user", "content": "hello"}]
 for _ in range(2):
     response = litellm.completion(

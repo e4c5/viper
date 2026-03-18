@@ -112,7 +112,7 @@ class GitHubProvider(ProviderInterface):
                 "side": "RIGHT",
                 "body": render_suggestion_block(c.body, c.suggested_patch),
                 **(
-                    {"start_line": c.line, "line": c.end_line}
+                    {"start_line": c.line, "start_side": "RIGHT", "line": c.end_line}
                     if (c.end_line is not None and c.end_line != c.line)
                     else {"line": c.line}
                 ),
