@@ -184,6 +184,82 @@ def _validate_suggested_patches(
     return result
 
 
+# Default search radius for anchor-based line relocation (lines above & below finding.line).
+_ANCHOR_RELOCATION_WINDOW = 20
+
+
+def _relocate_findings_by_anchor(
+    findings: list["FindingV1"],
+    diff_text: str,
+    window: int = _ANCHOR_RELOCATION_WINDOW,
+) -> list["FindingV1"]:
+    """Correct finding line numbers when the anchor text doesn't match the reported line.
+
+    The LLM sometimes identifies the right code issue but reports a line number
+    that is off by a few lines.  When a finding has a non-empty ``anchor`` or
+    ``fingerprint_hint``, this function checks whether that text appears in the
+    diff content at ``finding.line``.  If not, it searches nearby visible lines
+    (within *window* lines above and below) in the same file and relocates the
+    finding to the closest line whose content contains the anchor substring.
+
+    Findings without an anchor/fingerprint_hint, or whose anchor already matches
+    at the reported line, are returned unchanged.
+    """
+    if not diff_text or not findings:
+        return findings
+
+    # Build per-file line index: {norm_path: {new_line: stripped_content}}
+    file_lines: dict[str, dict[int, str]] = {}
+    for hunk in parse_unified_diff(diff_text):
+        norm_path = _normalize_path_for_anchor(hunk.path)
+        bucket = file_lines.setdefault(norm_path, {})
+        for content, _old_ln, new_ln in hunk.lines:
+            if new_ln is not None:
+                bucket[new_ln] = content.strip()
+
+    result: list[FindingV1] = []
+    for f in findings:
+        anchor_text = (f.anchor or f.fingerprint_hint or "").strip()
+        if not anchor_text:
+            result.append(f)
+            continue
+
+        norm_path = _normalize_path_for_anchor(f.path)
+        lines_map = file_lines.get(norm_path)
+        if not lines_map:
+            result.append(f)
+            continue
+
+        # Check if the anchor is already present at the reported line.
+        current_content = lines_map.get(f.line, "")
+        if anchor_text.lower() in current_content.lower():
+            result.append(f)
+            continue
+
+        # Search nearby lines for the anchor text; pick the closest match.
+        best_line: int | None = None
+        best_distance = window + 1
+        for ln, content in lines_map.items():
+            if anchor_text.lower() in content.lower():
+                distance = abs(ln - f.line)
+                if distance <= window and distance < best_distance:
+                    best_line = ln
+                    best_distance = distance
+
+        if best_line is not None and best_line != f.line:
+            logger.info(
+                "Relocating finding %s:%d -> %d (anchor %r found at line %d)",
+                f.path,
+                f.line,
+                best_line,
+                anchor_text,
+                best_line,
+            )
+            f = f.model_copy(update={"line": best_line})
+
+        result.append(f)
+    return result
+
 
 def _build_idempotency_key(
     scm_cfg,
@@ -1217,6 +1293,13 @@ class ReviewOrchestrator:
         # are not dropped just because of a prefix difference.
         path_filtered = self._filter_findings_to_pr_paths(findings, paths)
 
+        # Guardrail: relocate findings whose anchor/fingerprint_hint text doesn't
+        # match the diff content at the reported line.  The LLM sometimes identifies
+        # the right code issue but reports a line number that is off by a few lines.
+        # Relocating before line-visibility filtering ensures corrected findings are
+        # also validated against the visible diff range.
+        relocated = _relocate_findings_by_anchor(path_filtered, full_diff)
+
         # Guardrail: only keep findings for lines that are actually visible in the diff.
         # Comments on lines outside diff hunks cannot be placed inline: Bitbucket Cloud
         # rejects them (causing fallback to PR-level activity comments) and GitHub/Gitea
@@ -1224,7 +1307,7 @@ class ReviewOrchestrator:
         # full multi-file diff and may report lines that are in the file but outside any
         # hunk (e.g. unchanged code far from the changed region). Filtering here ensures
         # every posted comment appears inline in the diff view.
-        line_filtered = self._filter_findings_to_visible_diff_lines(path_filtered, full_diff)
+        line_filtered = self._filter_findings_to_visible_diff_lines(relocated, full_diff)
 
         # Guardrail: strip suggested_patch from findings where the patch content has no
         # token overlap with the actual diff line it is anchored to.  This catches the

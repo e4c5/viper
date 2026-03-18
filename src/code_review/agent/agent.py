@@ -69,6 +69,15 @@ Optional fields: end_line, category (e.g. "Correctness", "Security", "Performanc
 "Maintainability", "Tests", "Style"), anchor, fingerprint_hint,
 suggested_patch, agent_fix_prompt.
 
+IMPORTANT — anchor field (strongly recommended):
+- Always include an `anchor` field containing a distinctive code snippet (a substring)
+  from the exact line where the issue occurs. The anchor is used by the runner to
+  verify and correct the comment placement, so it MUST come from the actual code at
+  the reported line number.
+- Good anchors: a function call like "Files.writeString", a variable assignment like
+  "viewName + \".\" +", or a method signature fragment.
+- The anchor should be short but specific enough to uniquely identify the line.
+
 CRITICAL - Placement of suggestions:
 - The `line` MUST be the exact line where the issue occurs, NOT a blank line above it or a nearby line.
 - If the true line for the issue or replacement is not available in the diff, you MUST completely omit the finding. Do NOT shift the `line` to the closest visible line.
@@ -96,6 +105,7 @@ Example (one finding): [
     "code": "rename-variable",
     "category": "Maintainability",
     "message": "Rename variable foo to user_id for clarity.",
+    "anchor": "foo = request.user_id",
     "suggested_patch": "user_id = request.user_id"
   }
 ]
@@ -143,6 +153,15 @@ Optional fields: end_line, category (e.g. "Correctness", "Security", "Performanc
 "Maintainability", "Tests", "Style"), anchor, fingerprint_hint,
 suggested_patch, agent_fix_prompt.
 
+IMPORTANT — anchor field (strongly recommended):
+- Always include an `anchor` field containing a distinctive code snippet (a substring)
+  from the exact line where the issue occurs. The anchor is used by the runner to
+  verify and correct the comment placement, so it MUST come from the actual code at
+  the reported line number.
+- Good anchors: a function call like "Files.writeString", a variable assignment like
+  "viewName + \".\" +", or a method signature fragment.
+- The anchor should be short but specific enough to uniquely identify the line.
+
 CRITICAL - Placement of suggestions:
 - The `line` MUST be the exact line where the issue occurs, NOT a blank line above it or a nearby line.
 - If the true line for the issue or replacement is not available in the diff, you MUST completely omit the finding. Do NOT shift the `line` to the closest visible line.
@@ -169,6 +188,7 @@ Example (one finding): [
     "code": "rename-variable",
     "category": "Maintainability",
     "message": "Rename variable foo to user_id for clarity.",
+    "anchor": "foo = request.user_id",
     "suggested_patch": "user_id = request.user_id"
   }
 ]
