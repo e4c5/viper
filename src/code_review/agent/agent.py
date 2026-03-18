@@ -26,11 +26,13 @@ if TYPE_CHECKING:
 # The three bullet-point rules shared by both instructions in the
 # "IMPORTANT — Line numbers" section (the intro sentence differs per mode).
 _SHARED_LINE_NUMBER_RULES = """\
-- Use the ``<L{n}>`` annotation as the ``line`` value in your findings.
+- Each added/context line is annotated ``<Ln>`` where ``n`` is an integer (e.g. ``<L42>``).
+  Use that integer ``n`` as the ``line`` value (e.g. 42) in your findings.
+  Do NOT emit the ``<Ln>`` tag itself as the line value; extract only the number.
   Do NOT compute line numbers yourself from the hunk headers.
-- Only report findings for lines that have a ``<L{n}>`` annotation (added ``+``
+- Only report findings for lines that have a ``<Ln>`` annotation (added ``+``
   or context `` `` lines). Never report a finding for a removed ``-`` line.
-- If the exact line containing the issue has no ``<L{n}>`` annotation, drop the
+- If the exact line containing the issue has no ``<Ln>`` annotation, drop the
   finding entirely. Do NOT shift it to the nearest annotated line."""
 
 # Output format + finding schema + anchor + placement rules.
@@ -118,7 +120,7 @@ FINDINGS_ONLY_INSTRUCTION = (
     "\n"
     "IMPORTANT — Line numbers:\n"
     "- The diff returned by get_pr_diff_for_file is annotated with explicit\n"
-    "  new-file line numbers using the format ``<L{n}>`` at the start of each\n"
+    "  new-file line numbers using the format ``<Ln>`` at the start of each\n"
     "  line visible in the new file.\n"
     "  For example: ``<L42> +def new_function():`` means this line is new-file line 42.\n"
     "  Context lines look like: ``<L10>  unchanged_code``.\n"
@@ -160,7 +162,7 @@ SINGLE_SHOT_INSTRUCTION = (
     "\n"
     "IMPORTANT — Line numbers:\n"
     "- The diff lines are annotated with explicit new-file line numbers using the\n"
-    "  format ``<L{n}>`` at the start of each line visible in the new file.\n"
+    "  format ``<Ln>`` at the start of each line visible in the new file.\n"
     "  For example: ``<L42> +def new_function():`` means this line is new-file line 42.\n"
     "  Context lines look like: ``<L10>  unchanged_code``.\n"
     "  Removed lines (prefix ``-``) have NO annotation and cannot be referenced.\n"

@@ -708,6 +708,29 @@ def _log_run_complete(
     )
 
 
+def _suppress_ssl_teardown_errors(loop, context: dict) -> None:
+    """Asyncio exception handler that silences known SSL-transport teardown noise.
+
+    When asyncio.run() closes the event loop the Google GenAI SDK's HTTPS
+    connections may still be flushing their SSL write-backlog.  The underlying
+    socket file-descriptor has already been closed, so the write raises
+    ``OSError: [Errno 9] Bad file descriptor``, which asyncio turns into a
+    ``RuntimeError: Event loop is closed``.  Neither of these is actionable —
+    the review completed successfully — so we drop them here and fall through
+    to the default handler for everything else.
+    """
+    exc = context.get("exception")
+    msg = context.get("message", "")
+    _teardown_msg = "SSL" in msg or "Fatal write error" in msg or "write backlog" in msg
+    _teardown_exc = (
+        (isinstance(exc, OSError) and getattr(exc, "errno", None) == 9)
+        or (isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc))
+    )
+    if _teardown_msg and _teardown_exc:
+        return
+    loop.default_exception_handler(context)
+
+
 async def _collect_response_async(
     runner, session_service, session_id: str, content: types.Content
 ) -> str:
@@ -715,6 +738,10 @@ async def _collect_response_async(
 
     When CODE_REVIEW_LOG_LEVEL=DEBUG, log the raw final text we received from the LLM.
     """
+    # Install the exception handler early so it covers SSL teardown that occurs
+    # when asyncio.run() calls loop.close() after this coroutine returns.
+    asyncio.get_running_loop().set_exception_handler(_suppress_ssl_teardown_errors)
+
     await session_service.create_session(
         app_name=APP_NAME,
         user_id=USER_ID,
