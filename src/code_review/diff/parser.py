@@ -3,6 +3,9 @@
 import re
 from dataclasses import dataclass
 
+# Module-level constant avoids the regex pattern lookup cost on every call.
+_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
 
 @dataclass
 class DiffHunk:
@@ -47,7 +50,6 @@ def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
     current_lines: list[tuple[str, int | None, int | None]] = []
     old_ln = 0
     new_ln = 0
-    hunk_header = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
     for line in diff_text.splitlines():
         if line.startswith("diff --git "):
@@ -65,7 +67,7 @@ def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
                 current_path = line[6:].strip()
             continue
 
-        m = hunk_header.match(line)
+        m = _HUNK_HEADER_RE.match(line)
         if m:
             _flush_current_hunk()
             current_old_start = int(m.group(1))
@@ -108,3 +110,78 @@ def iter_new_lines(diff_text: str):
         for content, old_ln, new_ln in hunk.lines:
             if new_ln is not None and old_ln is None:
                 yield (hunk.path, new_ln, content)
+
+
+def annotate_diff_with_line_numbers(diff_text: str) -> str:
+    """Annotate a unified diff with explicit new-file line numbers.
+
+    For each line visible in the new file ('+' added or ' ' context), prepend
+    ``<L{n}>`` where *n* is the absolute new-file line number.  Removed lines
+    ('-' prefix) are kept as-is without annotation because they do not exist
+    in the new file.
+
+    This makes line numbers explicit for the LLM so it does not have to
+    compute positions by counting lines relative to hunk headers — a
+    calculation that models frequently get wrong, especially when deletions
+    precede the line of interest.
+
+    Example input::
+
+        @@ -100,4 +100,4 @@
+         context_line_100
+        -old_line_101
+        +new_line_101
+         context_line_102
+
+    Example output::
+
+        @@ -100,4 +100,4 @@
+        <L100>  context_line_100
+        -old_line_101
+        <L101> +new_line_101
+        <L102>  context_line_102
+
+    The updated agent instructions tell the model to use the ``<L{n}>``
+    annotation as the ``line`` value in findings, rather than inferring it
+    from hunk arithmetic.
+    """
+    if not diff_text:
+        return diff_text
+
+    result_lines: list[str] = []
+    in_hunk = False
+    new_ln = 0
+
+    for line in diff_text.splitlines():
+        # File-level header lines — pass through unchanged.
+        if (
+            line.startswith("diff --git ")
+            or line.startswith("index ")
+            or line.startswith("--- ")
+            or line.startswith("+++ ")
+        ):
+            in_hunk = False
+            result_lines.append(line)
+            continue
+
+        m = _HUNK_HEADER_RE.match(line)
+        if m:
+            new_ln = int(m.group(3))
+            in_hunk = True
+            result_lines.append(line)
+            continue
+
+        if not in_hunk:
+            result_lines.append(line)
+            continue
+
+        prefix = line[0] if line else " "
+        if prefix in (" ", "+"):
+            result_lines.append(f"<L{new_ln}>" + line)
+            new_ln += 1
+        else:
+            # Removed lines (-), no-newline markers (\), and any other prefix
+            # have no new-file line number — pass through unchanged.
+            result_lines.append(line)
+
+    return "\n".join(result_lines)

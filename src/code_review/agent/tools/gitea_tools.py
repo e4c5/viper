@@ -3,8 +3,88 @@
 from collections.abc import Callable
 
 from code_review.agent.tools.review_helpers import detect_language_context
+from code_review.diff.parser import annotate_diff_with_line_numbers
 from code_review.providers.base import ProviderInterface
 from code_review.providers.safety import truncate_repo_content
+
+
+# ---------------------------------------------------------------------------
+# Shared tool factories
+# get_file_content, get_file_lines, and get_pr_files have identical
+# implementations in both create_gitea_tools and create_findings_only_tools.
+# They are factored out here so changes only need to be made in one place.
+# ---------------------------------------------------------------------------
+
+def _make_get_file_content(provider: ProviderInterface) -> Callable:
+    """Build the get_file_content ADK tool for the given provider."""
+
+    def get_file_content(owner: str, repo: str, ref: str, path: str) -> str:
+        """Fetch file content at a given ref (branch, tag, or SHA).
+
+        Use this for reading project-context files (e.g. AGENTS.md, README).
+        For the PR diff, call get_pr_diff_for_file instead.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            ref: Git ref (branch, tag, or commit SHA).
+            path: File path relative to repo root.
+
+        Returns:
+            File content as string (truncated to 16 KB if oversized).
+        """
+        return truncate_repo_content(provider.get_file_content(owner, repo, ref, path))
+
+    return get_file_content
+
+
+def _make_get_file_lines(provider: ProviderInterface) -> Callable:
+    """Build the get_file_lines ADK tool for the given provider."""
+
+    def get_file_lines(
+        owner: str, repo: str, ref: str, path: str, start_line: int, end_line: int
+    ) -> str:
+        """Fetch a line range from a file at ref for surrounding context.
+
+        Use this when you need additional context around a diff line.
+        Always pass head_sha as ref so you read the file at the correct revision.
+        Line numbers here are 1-based new-file line numbers, matching the
+        ``<L{n}>`` annotations in the diff.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            ref: Git ref (branch or commit SHA; use head_sha from the user message).
+            path: File path.
+            start_line: Start line (1-based inclusive).
+            end_line: End line (1-based inclusive).
+
+        Returns:
+            Lines start_line..end_line as string.
+        """
+        return provider.get_file_lines(owner, repo, ref, path, start_line, end_line)
+
+    return get_file_lines
+
+
+def _make_get_pr_files(provider: ProviderInterface) -> Callable:
+    """Build the get_pr_files ADK tool for the given provider."""
+
+    def get_pr_files(owner: str, repo: str, pr_number: int) -> list[dict]:
+        """List files changed in a pull request.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            pr_number: Pull request number.
+
+        Returns:
+            List of dicts with path, status, additions, deletions.
+        """
+        files = provider.get_pr_files(owner, repo, pr_number)
+        return [f.model_dump() for f in files]
+
+    return get_pr_files
 
 
 def create_gitea_tools(provider: ProviderInterface) -> list[Callable]:
@@ -39,57 +119,6 @@ def create_gitea_tools(provider: ProviderInterface) -> list[Callable]:
             Unified diff string for that file only.
         """
         return provider.get_pr_diff_for_file(owner, repo, pr_number, path)
-
-    def get_file_content(owner: str, repo: str, ref: str, path: str) -> str:
-        """Fetch file content at a given ref (branch, tag, or SHA).
-
-        Args:
-            owner: Repository owner.
-            repo: Repository name.
-            ref: Git ref (branch, tag, or commit SHA).
-            path: File path relative to repo root.
-
-        Returns:
-            File content as string (truncated to 16 KB if oversized).
-        """
-        return truncate_repo_content(provider.get_file_content(owner, repo, ref, path))
-
-    def get_pr_files(owner: str, repo: str, pr_number: int) -> list[dict]:
-        """List files changed in a pull request.
-
-        Args:
-            owner: Repository owner.
-            repo: Repository name.
-            pr_number: Pull request number.
-
-        Returns:
-            List of dicts with path, status, additions, deletions.
-        """
-        files = provider.get_pr_files(owner, repo, pr_number)
-        return [f.model_dump() for f in files]
-
-    def get_file_lines(
-        owner: str,
-        repo: str,
-        ref: str,
-        path: str,
-        start_line: int,
-        end_line: int,
-    ) -> str:
-        """Fetch a line range from a file at ref (e.g. head_sha for context).
-
-        Args:
-            owner: Repository owner.
-            repo: Repository name.
-            ref: Git ref (branch or commit SHA).
-            path: File path.
-            start_line: Start line (1-based inclusive).
-            end_line: End line (1-based inclusive).
-
-        Returns:
-            Lines start_line..end_line as string.
-        """
-        return provider.get_file_lines(owner, repo, ref, path, start_line, end_line)
 
     def post_review_comment(
         owner: str,
@@ -142,9 +171,9 @@ def create_gitea_tools(provider: ProviderInterface) -> list[Callable]:
     return [
         get_pr_diff,
         get_pr_diff_for_file,
-        get_file_content,
-        get_file_lines,
-        get_pr_files,
+        _make_get_file_content(provider),
+        _make_get_file_lines(provider),
+        _make_get_pr_files(provider),
         post_review_comment,
         get_existing_review_comments,
         detect_language_context,
@@ -165,24 +194,30 @@ def create_findings_only_tools(provider: ProviderInterface) -> list[Callable]:
     """
 
     def get_pr_diff_for_file(owner: str, repo: str, pr_number: int, path: str) -> str:
-        return provider.get_pr_diff_for_file(owner, repo, pr_number, path)
+        """Fetch the unified diff for a single file in the PR, annotated with line numbers.
 
-    def get_file_content(owner: str, repo: str, ref: str, path: str) -> str:
-        return truncate_repo_content(provider.get_file_content(owner, repo, ref, path))
+        The returned diff has ``<L{n}>`` prefixes on every visible new-file line
+        (added ``+`` and context `` `` lines).  Removed lines (``-``) have no
+        annotation.  Use the ``<L{n}>`` value directly as the ``line`` field in
+        findings — do NOT compute line numbers from hunk headers.
 
-    def get_file_lines(
-        owner: str, repo: str, ref: str, path: str, start_line: int, end_line: int
-    ) -> str:
-        return provider.get_file_lines(owner, repo, ref, path, start_line, end_line)
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            pr_number: Pull request number.
+            path: File path relative to repo root.
 
-    def get_pr_files(owner: str, repo: str, pr_number: int) -> list[dict]:
-        files = provider.get_pr_files(owner, repo, pr_number)
-        return [f.model_dump() for f in files]
+        Returns:
+            Line-annotated unified diff string for that file only.
+        """
+        return annotate_diff_with_line_numbers(
+            provider.get_pr_diff_for_file(owner, repo, pr_number, path)
+        )
 
     return [
         get_pr_diff_for_file,
-        get_file_content,
-        get_file_lines,
-        get_pr_files,
+        _make_get_file_content(provider),
+        _make_get_file_lines(provider),
+        _make_get_pr_files(provider),
         detect_language_context,
     ]

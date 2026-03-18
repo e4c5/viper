@@ -167,29 +167,31 @@ def test_file_by_file_uses_findings_only_instruction(
 
 
 def test_findings_only_instruction_contains_line_number_guidance():
-    """FINDINGS_ONLY_INSTRUCTION must contain hunk-header line number guidance.
+    """FINDINGS_ONLY_INSTRUCTION must contain line number guidance based on <L{n}> annotations.
 
     In file-by-file mode the agent reads a diff returned from get_pr_diff_for_file.
-    Without explicit guidance on reading @@ hunk headers, the agent may report wrong
-    line numbers or lines that are not visible in the diff.
+    The diff is pre-annotated with <L{n}> prefixes on visible new-file lines.
+    The instruction must tell the agent to use these annotations as the 'line'
+    value in findings so it does not have to compute line numbers from hunk headers.
     """
-    assert "@@" in FINDINGS_ONLY_INSTRUCTION, (
-        "FINDINGS_ONLY_INSTRUCTION must explain how to read hunk headers for line numbers"
+    assert "<L{n}>" in FINDINGS_ONLY_INSTRUCTION or "<L" in FINDINGS_ONLY_INSTRUCTION, (
+        "FINDINGS_ONLY_INSTRUCTION must explain the <L{n}> line number annotation format"
     )
-    assert "hunk" in FINDINGS_ONLY_INSTRUCTION.lower() or "+new_start" in FINDINGS_ONLY_INSTRUCTION, (
-        "FINDINGS_ONLY_INSTRUCTION must reference hunk headers for computing valid line numbers"
+    assert "annotation" in FINDINGS_ONLY_INSTRUCTION.lower(), (
+        "FINDINGS_ONLY_INSTRUCTION must reference the line number annotations"
     )
 
 
 def test_findings_only_instruction_restricts_to_visible_diff_lines():
     """FINDINGS_ONLY_INSTRUCTION must tell the agent to only report lines visible in the diff."""
     instr = FINDINGS_ONLY_INSTRUCTION
-    assert "not shown in the diff" in instr or "not visible" in instr, (
-        "FINDINGS_ONLY_INSTRUCTION must prohibit reporting lines that are not in the diff"
+    # Must tell the agent to drop findings for lines with no annotation
+    assert "annotation" in instr.lower() or "annotated" in instr.lower(), (
+        "FINDINGS_ONLY_INSTRUCTION must describe the <L{n}> annotation mechanism"
     )
-    # Must distinguish added (+) vs context ( ) lines
-    assert "'+' prefix" in instr or "'+'" in instr, (
-        "FINDINGS_ONLY_INSTRUCTION must mention '+' prefix for added lines"
+    # Must distinguish added (+) vs context lines
+    assert "+" in instr, (
+        "FINDINGS_ONLY_INSTRUCTION must mention '+' for added lines"
     )
 
 
@@ -233,4 +235,54 @@ def test_instructions_consistent_category_guidance():
         assert category in SINGLE_SHOT_INSTRUCTION, (
             f"SINGLE_SHOT_INSTRUCTION missing category example: {category}"
         )
+
+
+# --- Shared fragment consistency tests ---
+
+
+def test_shared_line_number_rules_appear_in_both_instructions():
+    """Both instructions must contain the shared <L{n}> line-number rule bullets.
+
+    These bullets are extracted into ``_SHARED_LINE_NUMBER_RULES`` to avoid
+    duplication.  Verifying both instructions contain the shared text ensures
+    the composition is correct and a change to the shared fragment propagates
+    to both modes automatically.
+    """
+    from code_review.agent.agent import _SHARED_LINE_NUMBER_RULES
+
+    assert _SHARED_LINE_NUMBER_RULES in FINDINGS_ONLY_INSTRUCTION, (
+        "FINDINGS_ONLY_INSTRUCTION must contain the shared line-number rules fragment"
+    )
+    assert _SHARED_LINE_NUMBER_RULES in SINGLE_SHOT_INSTRUCTION, (
+        "SINGLE_SHOT_INSTRUCTION must contain the shared line-number rules fragment"
+    )
+
+
+def test_shared_format_and_placement_appear_in_both_instructions():
+    """Both instructions must contain the shared output-format and placement rules.
+
+    ``_SHARED_FORMAT_AND_PLACEMENT`` covers output format, finding schema,
+    anchor guidance, and placement rules — all identical in both modes.
+    """
+    from code_review.agent.agent import _SHARED_FORMAT_AND_PLACEMENT
+
+    assert _SHARED_FORMAT_AND_PLACEMENT in FINDINGS_ONLY_INSTRUCTION, (
+        "FINDINGS_ONLY_INSTRUCTION must contain the shared format/placement fragment"
+    )
+    assert _SHARED_FORMAT_AND_PLACEMENT in SINGLE_SHOT_INSTRUCTION, (
+        "SINGLE_SHOT_INSTRUCTION must contain the shared format/placement fragment"
+    )
+
+
+def test_shared_agent_fix_and_examples_appear_in_both_instructions():
+    """Both instructions must contain the shared agent_fix_prompt guidance and examples."""
+    from code_review.agent.agent import _SHARED_AGENT_FIX_AND_EXAMPLES
+
+    assert _SHARED_AGENT_FIX_AND_EXAMPLES in FINDINGS_ONLY_INSTRUCTION, (
+        "FINDINGS_ONLY_INSTRUCTION must contain the shared agent_fix_prompt/examples fragment"
+    )
+    assert _SHARED_AGENT_FIX_AND_EXAMPLES in SINGLE_SHOT_INSTRUCTION, (
+        "SINGLE_SHOT_INSTRUCTION must contain the shared agent_fix_prompt/examples fragment"
+    )
+
 
