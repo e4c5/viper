@@ -109,7 +109,7 @@ def test_agent_vs_gitea_posts_findings_to_mocked_api(
         {
             "path": "foo.py",
             "line": 2,
-            "severity": "suggestion",
+            "severity": "medium",
             "code": "unused-import",
             "message": "Remove unused import os."
         }
@@ -139,5 +139,5 @@ def test_agent_vs_gitea_posts_findings_to_mocked_api(
     # Gitea CreatePullReviewComment uses old_position/new_position for diff coordinates.
     assert comment["old_position"] == 0
     assert comment["new_position"] == 2
-    assert "[Suggestion]" in comment["body"]
+    assert "[Medium]" in comment["body"]
     assert payload.get("commit_id") == head_sha

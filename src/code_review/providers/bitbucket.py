@@ -16,6 +16,7 @@ from code_review.providers.base import (
     normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
+from code_review.formatters.comment import render_suggestion_block
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
@@ -160,7 +161,7 @@ class BitbucketProvider(ProviderInterface):
             if c.end_line is not None and c.end_line != c.line:
                 inline["from"] = c.line
             payload: dict[str, Any] = {
-                "content": {"raw": c.body},
+                "content": {"raw": render_suggestion_block(c.body, c.suggested_patch)},
                 "inline": inline,
             }
             self._post(path, payload)
@@ -244,7 +245,8 @@ class BitbucketProvider(ProviderInterface):
         # Skip-by-label is ineffective; see get_pr_info.
         return ProviderCapabilities(
             resolvable_comments=False,
-            supports_suggestions=False,
+            supports_suggestions=True,
+            supports_multiline_suggestions=True,
             markup_hides_html_comment=False,
             markup_supports_collapsible=False,
             omit_fingerprint_marker_in_body=True,

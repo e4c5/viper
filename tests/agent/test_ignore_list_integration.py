@@ -39,7 +39,7 @@ def test_manually_resolved_comment_does_not_block_changed_code(
     # Existing comment is manually resolved, with fingerprint "old-fp" and body text
     # that matches the body which will be generated for the new finding.
     existing_body = format_comment_body_with_marker(
-        "[Suggestion] Use a constant.", fingerprint="old-fp", version="1", run_id="run-1"
+        "[Medium] Use a constant.", fingerprint="old-fp", version="1", run_id="run-1"
     )
     existing = [
         ReviewComment(
@@ -61,7 +61,7 @@ def test_manually_resolved_comment_does_not_block_changed_code(
         {
             "path": "foo.py",
             "line": 1,
-            "severity": "suggestion",
+            "severity": "medium",
             "code": "use-const",
             "message": "Use a constant."
         }

@@ -16,7 +16,7 @@ class FindingV1(BaseModel):
         ge=1,
         description="Optional end line for multi-line findings",
     )
-    severity: Literal["critical", "suggestion", "info"]
+    severity: Literal["high", "medium", "low", "nit"]
     code: str = Field(..., description="Issue code (e.g. unused-var) for fingerprinting")
     message: str = Field(..., description="Human-readable message body")
     body: str | None = Field(

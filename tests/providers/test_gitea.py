@@ -76,7 +76,7 @@ def test_post_review_comments(mock_client):
         "owner",
         "repo",
         1,
-        [InlineComment(path="foo.py", line=10, body="[Critical] Bug here")],
+        [InlineComment(path="foo.py", line=10, body="[High] Bug here")],
         head_sha="abc123",
     )
     call_args = mock_client.return_value.__enter__.return_value.request.call_args
@@ -85,7 +85,7 @@ def test_post_review_comments(mock_client):
     assert payload["comments"] == [
         {
             "path": "foo.py",
-            "body": "[Critical] Bug here",
+            "body": "[High] Bug here",
             "old_position": 0,
             "new_position": 10,
         }
@@ -120,7 +120,7 @@ def test_post_review_comments_with_diff_hunk(mock_client):
         "owner",
         "repo",
         1,
-        [InlineComment(path="foo.py", line=2, body="[Suggestion] Consider y")],
+        [InlineComment(path="foo.py", line=2, body="[Medium] Consider y")],
         head_sha="abc123",
     )
     calls = mock_client.return_value.__enter__.return_value.request.call_args_list
@@ -204,8 +204,8 @@ def test_post_review_comments_empty_path_fallback(mock_client):
 def test_get_existing_review_comments(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = [
-        {"id": 1, "path": "foo.py", "line": 10, "body": "[Critical] Bug", "resolved": False},
-        {"id": 2, "path": "bar.py", "line": 5, "body": "[Info] Nit", "resolved": True},
+        {"id": 1, "path": "foo.py", "line": 10, "body": "[High] Bug", "resolved": False},
+        {"id": 2, "path": "bar.py", "line": 5, "body": "[Low] Nit", "resolved": True},
     ]
     mock_resp.headers = {"content-type": "application/json"}
     mock_client.return_value.__enter__.return_value.request.return_value = mock_resp
@@ -305,4 +305,4 @@ def test_capabilities():
     p = GiteaProvider("https://gitea.example.com", "tok")
     caps = p.capabilities()
     assert caps.resolvable_comments is False
-    assert caps.supports_suggestions is False
+    assert caps.supports_suggestions is True

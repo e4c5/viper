@@ -17,6 +17,7 @@ from code_review.providers.base import (
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
+from code_review.formatters.comment import render_suggestion_block
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
@@ -107,17 +108,11 @@ class GitHubProvider(ProviderInterface):
             return
         review_comments = [
             {
-                **{
-                    "path": c.path,
-                    "side": "RIGHT",
-                    "body": (
-                        c.body
-                        if not c.suggested_patch
-                        else f"{c.body}\n\n```suggestion\n{c.suggested_patch}\n```"
-                    ),
-                },
+                "path": c.path,
+                "side": "RIGHT",
+                "body": render_suggestion_block(c.body, c.suggested_patch),
                 **(
-                    {"start_line": c.line, "line": c.end_line}
+                    {"start_line": c.line, "start_side": "RIGHT", "line": c.end_line}
                     if (c.end_line is not None and c.end_line != c.line)
                     else {"line": c.line}
                 ),
@@ -178,4 +173,8 @@ class GitHubProvider(ProviderInterface):
 
     def capabilities(self) -> ProviderCapabilities:
         """GitHub supports suggestion blocks; resolved is per-conversation, not per-comment."""
-        return ProviderCapabilities(resolvable_comments=False, supports_suggestions=True)
+        return ProviderCapabilities(
+            resolvable_comments=False, 
+            supports_suggestions=True,
+            supports_multiline_suggestions=True,
+        )

@@ -13,7 +13,7 @@ from code_review.providers.base import (
 
 
 def test_review_comment_has_resolved():
-    c = ReviewComment(id="1", path="foo.py", line=10, body="[Critical] Bug.", resolved=False)
+    c = ReviewComment(id="1", path="foo.py", line=10, body="[High] Bug.", resolved=False)
     assert c.resolved is False
     c2 = ReviewComment(id="2", path="a.py", line=1, body="Done", resolved=True)
     assert c2.resolved is True
@@ -100,7 +100,7 @@ def _run_with_single_stale_comment(
 
     provider = _ProviderWithCapabilities(resolvable=resolvable)
     body_with_marker = format_comment_body_with_marker(
-        "[Suggestion] Old issue.", fingerprint="stale-fp", version="1", run_id="run-1"
+        "[Medium] Old issue.", fingerprint="stale-fp", version="1", run_id="run-1"
     )
     existing = [
         ReviewComment(

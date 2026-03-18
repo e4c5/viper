@@ -6,7 +6,7 @@ This file helps AI coding assistants (e.g. Cursor, Codex) work effectively on th
 
 ## Project summary
 
-**code-review-agent**: An AI-driven code review tool for CI/CD. It reviews pull request diffs using a configurable LLM (Google ADK), returns structured findings, and posts inline comments via a pluggable SCM provider (Gitea, GitHub, GitLab, Bitbucket). The **runner** orchestrates; the **agent** only discovers issues (findings-only mode by default).
+**code-review-agent**: An AI-driven code review tool for CI/CD. It reviews pull request diffs using a configurable LLM (Google ADK), returns structured findings, and posts inline comments via a pluggable SCM provider (Gitea, GitHub, GitLab, Bitbucket, Bitbucket Data Center). The **runner** orchestrates; the **agent** only discovers issues (findings-only mode by default).
 
 ---
 
@@ -18,12 +18,13 @@ This file helps AI coding assistants (e.g. Cursor, Codex) work effectively on th
 | **Orchestration** | `src/code_review/runner.py` | Config, provider, skip/idempotency, agent run, filter, post |
 | **ADK agent** | `src/code_review/agent/agent.py` | `create_review_agent(provider, review_standards, findings_only)` |
 | **Tools** | `src/code_review/agent/tools/gitea_tools.py` | Tools wrap `ProviderInterface`; used by ADK agent |
-| **SCM** | `src/code_review/providers/` | `base.py` = interface; `gitea.py`, `github.py`, `gitlab.py`, `bitbucket.py`; `get_provider()` in `__init__.py` |
+| **SCM** | `src/code_review/providers/` | `base.py` = interface; `gitea.py`, `github.py`, `gitlab.py`, `bitbucket.py`, `bitbucket_server.py`; `get_provider()` in `__init__.py` |
 | **Config** | `src/code_review/config.py` | `SCMConfig`, `LLMConfig` (Pydantic Settings, `SCM_*`, `LLM_*` env) |
+| **Logging** | `src/code_review/logging_config.py` | Centralized logging configuration |
 | **Model** | `src/code_review/models.py` | `get_configured_model()`, `get_context_window()`, `get_max_output_tokens()` |
 | **Findings** | `src/code_review/schemas/findings.py` | `FindingV1` — contract for agent JSON output |
 | **Diff** | `src/code_review/diff/` | Parser, position, fingerprint/marker for dedup and comments |
-| **Standards** | `src/code_review/standards/` | Language/framework detection; review prompt fragments |
+| **Standards** | `src/code_review/standards/` | Language/framework detection; `prompts/` contains review prompt fragments |
 | **Formatters** | `src/code_review/formatters/comment.py` | `finding_to_comment_body()` |
 | **Observability** | `src/code_review/observability.py` | Optional Prometheus/OTel; used only in runner |
 
@@ -33,9 +34,9 @@ Tests mirror `src/`: `tests/test_runner.py`, `tests/providers/`, `tests/runner/`
 
 ## Conventions
 
-- **Configuration**: All env-based; no `.env` loading by default. SCM: `SCM_PROVIDER`, `SCM_URL`, `SCM_TOKEN`, … LLM: `LLM_PROVIDER`, `LLM_MODEL`, `LLM_API_KEY` (single key for the chosen provider). See `config.py` and `.env.example`.
+- **Configuration**: All env-based; no `.env` loading by default (matches `config.py`). SCM: `SCM_PROVIDER` (gitea, github, gitlab, bitbucket, bitbucket_server), `SCM_URL`, `SCM_TOKEN`, … LLM: `LLM_PROVIDER` (gemini, openai, anthropic, ollama, vertex, openrouter), `LLM_MODEL`, `LLM_API_KEY` (single key for the chosen provider). See `config.py` and `.env.example`.
 - **New SCM**: Implement `ProviderInterface` in `providers/<name>.py`, register in `get_provider()` in `providers/__init__.py`, add tests under `tests/providers/test_<name>.py` with mocked HTTP.
-- **Agent behavior**: Instruction and tools are in `agent/agent.py` and `agent/tools/`. Findings-only mode: agent has no post/get_existing tools; runner does filtering and posting.
+- **Agent behavior**: Instruction and tools are in `agent/agent.py` and `agent/tools/`. Findings-only mode: agent has no post/get_existing tools; runner does filtering and posting. For large diffs, the runner uses **single-shot mode** (tool-free) to reduce token usage.
 - **Testing**: Use `MockProvider` or `MagicMock` for the provider; **patch `google.adk.runners.Runner`** so `run()` yields a final event with JSON findings (no real LLM). Run: `pytest` (exclude `tests/e2e` unless `RUN_E2E=1`).
 
 ---
@@ -43,7 +44,7 @@ Tests mirror `src/`: `tests/test_runner.py`, `tests/providers/`, `tests/runner/`
 ## When editing
 
 - **Runner flow** (`runner.py`): Preserve order (config → provider → skip → existing comments → idempotency → files → language → agent → run → parse → filter → post). Any new step should fit this sequence.
-- **Provider interface** (`providers/base.py`): Adding a method? Implement it in all four providers (gitea, github, gitlab, bitbucket) or document the default.
+- **Provider interface** (`providers/base.py`): Adding a method? Implement it in all providers (gitea, github, gitlab, bitbucket, bitbucket_server) or document the default.
 - **Finding schema** (`schemas/findings.py`): `FindingV1` is the agent output contract. Backward-compatible changes only (optional fields, defaults).
 - **Agent instruction** (`agent/agent.py`): Keep findings-only instruction clear that the agent must **not** post or fetch existing comments; the runner handles that.
 

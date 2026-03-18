@@ -9,7 +9,7 @@ def test_finding_v1_minimal():
     f = FindingV1(
         path="a.py",
         line=10,
-        severity="suggestion",
+        severity="medium",
         code="unused-var",
         message="Remove unused variable.",
     )
@@ -24,7 +24,7 @@ def test_finding_v1_with_body():
     f = FindingV1(
         path="b.py",
         line=1,
-        severity="critical",
+        severity="high",
         code="sql-injection",
         message="Default message",
         body="Custom body text",
@@ -37,7 +37,7 @@ def test_finding_v1_optional_fields():
         path="c.py",
         line=5,
         end_line=7,
-        severity="info",
+        severity="low",
         code="style",
         message="Prefer X.",
         category="Style",
@@ -53,7 +53,7 @@ def test_finding_v1_line_ge_1():
         FindingV1(
             path="x",
             line=0,
-            severity="info",
+            severity="low",
             code="x",
             message="x",
         )
@@ -65,7 +65,7 @@ def test_finding_v1_end_line_not_less_than_line():
             path="x.py",
             line=5,
             end_line=2,
-            severity="suggestion",
+            severity="medium",
             code="x",
             message="Invalid range",
         )

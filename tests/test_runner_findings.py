@@ -17,7 +17,7 @@ def test_build_ignore_set_from_dicts():
 
 
 def test_parse_findings_json_raw_array():
-    text = '[{"path":"x","line":1,"severity":"info","code":"c","message":"m"}]'
+    text = '[{"path":"x","line":1,"severity":"low","code":"c","message":"m"}]'
     out = _parse_findings_json(text)
     assert len(out) == 1
     assert out[0]["path"] == "x" and out[0]["line"] == 1
@@ -25,7 +25,7 @@ def test_parse_findings_json_raw_array():
 
 def test_parse_findings_json_markdown_wrapped():
     text = (
-        '```json\n[{"path":"y","line":2,"severity":"suggestion",'
+        '```json\n[{"path":"y","line":2,"severity":"medium",'
         '"code":"s","message":"msg"}]\n```'
     )
     out = _parse_findings_json(text)
@@ -34,11 +34,11 @@ def test_parse_findings_json_markdown_wrapped():
 
 
 def test_findings_from_response_valid():
-    text = '[{"path":"p","line":3,"severity":"critical","code":"x","message":"fix it"}]'
+    text = '[{"path":"p","line":3,"severity":"high","code":"x","message":"fix it"}]'
     findings = _findings_from_response(text)
     assert len(findings) == 1
     assert isinstance(findings[0], FindingV1)
-    assert findings[0].severity == "critical"
+    assert findings[0].severity == "high"
 
 
 def test_findings_from_response_invalid_skipped():
@@ -56,22 +56,22 @@ def test_findings_from_response_malformed_json_returns_empty():
 
 
 def test_finding_to_comment_body():
-    f = FindingV1(path="a.py", line=1, severity="suggestion", code="x", message="Do Y.")
+    f = FindingV1(path="a.py", line=1, severity="medium", code="x", message="Do Y.")
     body = finding_to_comment_body(f)
-    assert body == "[Suggestion] Do Y."
+    assert body == "[Medium] Do Y."
 
 
 def test_finding_to_comment_body_includes_agent_fix_prompt_in_collapsible_block():
     f = FindingV1(
         path="a.py",
         line=1,
-        severity="suggestion",
+        severity="medium",
         code="x",
         message="Do Y.",
         agent_fix_prompt="Verify Y and apply fix.",
     )
     body = finding_to_comment_body(f)
-    assert body.startswith("[Suggestion] Do Y.")
+    assert body.startswith("[Medium] Do Y.")
     assert "<details>" in body
     assert "<summary>Prompt for AI Agents</summary>" in body
     assert "Verify Y and apply fix." in body
@@ -83,13 +83,13 @@ def test_finding_to_comment_body_plain_prompt_when_not_collapsible():
     f = FindingV1(
         path="a.py",
         line=1,
-        severity="critical",
+        severity="high",
         code="x",
         message="Do Y.",
         agent_fix_prompt="Verify Y and apply fix.",
     )
     body = finding_to_comment_body(f, use_collapsible_prompt=False)
-    assert body.startswith("[Critical] Do Y.")
+    assert body.startswith("[High] Do Y.")
     assert "<details>" not in body
     assert "<summary>" not in body
     assert "**Prompt for AI Agents**" in body

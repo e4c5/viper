@@ -56,7 +56,7 @@ def review(
     fail_on_critical: bool = typer.Option(
         False,
         "--fail-on-critical",
-        help="Exit with non-zero status if any finding is critical",
+        help="Exit with non-zero status if any finding is high severity",
     ),
 ) -> None:
     """Run the code review agent on a pull request."""
@@ -97,7 +97,7 @@ def review(
         dry_run=dry_run,
         print_findings=print_findings,
     )
-    if fail_on_critical and any(f.severity == "critical" for f in findings):
+    if fail_on_critical and any(f.severity == "high" for f in findings):
         raise typer.Exit(2)
 
 

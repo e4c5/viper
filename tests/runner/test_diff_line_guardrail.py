@@ -90,8 +90,8 @@ diff --git a/src/foo.py b/src/foo.py
 # ---------------------------------------------------------------------------
 
 _FINDINGS_WITH_OUT_OF_DIFF_LINE = (
-    '[{"path":"foo.py","line":1,"severity":"info","code":"c","message":"line 1 not in diff"},'
-    '{"path":"foo.py","line":10,"severity":"info","code":"d","message":"line 10 is in diff"}]'
+    '[{"path":"foo.py","line":1,"severity":"low","code":"c","message":"line 1 not in diff"},'
+    '{"path":"foo.py","line":10,"severity":"low","code":"d","message":"line 10 is in diff"}]'
 )
 
 
@@ -185,7 +185,7 @@ def test_runner_keeps_context_line_findings(
 
     # Line 8 is a context line visible in the diff — it should NOT be filtered.
     context_line_finding = (
-        '[{"path":"foo.py","line":8,"severity":"suggestion","code":"c","message":"context line issue"}]'
+        '[{"path":"foo.py","line":8,"severity":"medium","code":"c","message":"context line issue"}]'
     )
 
     findings = _run_review_with_mocked_bitbucket_runner(

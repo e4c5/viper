@@ -20,15 +20,15 @@ def test_strip_path_prefixes():
 
 
 def test_severity_labels_canonical():
-    """Canonical prefixes are [Critical], [Suggestion], [Info]."""
-    assert SEVERITY_LABELS["critical"] == "[Critical]"
-    assert SEVERITY_LABELS["suggestion"] == "[Suggestion]"
-    assert SEVERITY_LABELS["info"] == "[Info]"
+    """Canonical prefixes are [High], [Medium], [Low]."""
+    assert SEVERITY_LABELS["high"] == "[High]"
+    assert SEVERITY_LABELS["medium"] == "[Medium]"
+    assert SEVERITY_LABELS["low"] == "[Low]"
 
 
-@pytest.mark.parametrize("severity", ["critical", "suggestion", "info"])
+@pytest.mark.parametrize("severity", ["high", "medium", "low"])
 def test_finding_to_comment_body_prefix(severity: str):
-    """Body starts with [Critical]/[Suggestion]/[Info] and contains message."""
+    """Body starts with [High]/[Medium]/[Low] and contains message."""
     f = FindingV1(
         path="foo.py",
         line=10,
@@ -47,13 +47,13 @@ def test_finding_to_comment_body_uses_get_body():
     f = FindingV1(
         path="a.py",
         line=1,
-        severity="suggestion",
+        severity="medium",
         code="x",
         message="msg",
         body="custom body text",
     )
     result = finding_to_comment_body(f)
-    assert result == "[Suggestion] custom body text"
+    assert result == "[Medium] custom body text"
     assert "msg" not in result
 
 
@@ -62,12 +62,12 @@ def test_finding_to_comment_body_fallback_unknown_severity():
     f = FindingV1(
         path="x",
         line=1,
-        severity="critical",  # valid
+        severity="high",  # valid
         code="c",
         message="m",
     )
     body = finding_to_comment_body(f)
-    assert body.startswith("[Critical]")
+    assert body.startswith("[High]")
 
     # If we had a hypothetical "warning", formatter would use "[Warning]" via .title()
     # SEVERITY_LABELS only has critical/suggestion/info; others use f"[{f.severity.title()}]"
@@ -78,19 +78,19 @@ def test_marker_injection_after_formatter():
     f = FindingV1(
         path="p.py",
         line=5,
-        severity="info",
+        severity="low",
         code="code",
         message="Note here.",
     )
     body = finding_to_comment_body(f)
-    assert body == "[Info] Note here."
+    assert body == "[Low] Note here."
     with_marker = format_comment_body_with_marker(
         body, fingerprint="abc123", version="1.0", run_id="run-1"
     )
     assert "<!-- code-review-agent:" in with_marker
     assert "fingerprint=abc123" in with_marker
     assert "run=run-1" in with_marker
-    assert with_marker.endswith("\n\n[Info] Note here.")
+    assert with_marker.endswith("\n\n[Low] Note here.")
 
 
 def test_location_path_line_consistency():
@@ -101,7 +101,7 @@ def test_location_path_line_consistency():
     f = FindingV1(
         path="src/bar.py",
         line=42,
-        severity="suggestion",
+        severity="medium",
         code="unused-import",
         message="Remove unused import os.",
     )
@@ -109,12 +109,12 @@ def test_location_path_line_consistency():
     # Body is severity + message only; path and line are in the API payload tuple
     assert "src/bar.py" not in body
     assert "42" not in body
-    assert body == "[Suggestion] Remove unused import os."
+    assert body == "[Medium] Remove unused import os."
     # Simulate runner building the comment tuple
     comment_tuple = (f.path, f.line, body)
     assert comment_tuple[0] == "src/bar.py"
     assert comment_tuple[1] == 42
-    assert comment_tuple[2].startswith("[Suggestion]")
+    assert comment_tuple[2].startswith("[Medium]")
 
 
 def test_finding_to_comment_body_empty_body_uses_label_only():
@@ -122,12 +122,12 @@ def test_finding_to_comment_body_empty_body_uses_label_only():
     f = FindingV1(
         path="x.py",
         line=1,
-        severity="suggestion",
+        severity="medium",
         code="x",
         message="",
     )
     body = finding_to_comment_body(f)
-    assert body == "[Suggestion]"
+    assert body == "[Medium]"
 
 
 def test_finding_to_comment_body_strips_dst_prefix_from_message_and_prompt():
@@ -135,7 +135,7 @@ def test_finding_to_comment_body_strips_dst_prefix_from_message_and_prompt():
     f = FindingV1(
         path="dst://src/foo.py",
         line=1,
-        severity="suggestion",
+        severity="medium",
         code="x",
         message="In dst://src/foo.py at line 1, consider X.",
         agent_fix_prompt="In the file dst://src/foo.py at line 1, do Y.",

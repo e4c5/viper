@@ -87,7 +87,7 @@ def test_cli_fail_on_critical_exits_2():
 
     with patch("code_review.__main__.run_review") as mock_run:
         mock_run.return_value = [
-            FindingV1(path="x.py", line=1, severity="critical", code="x", message="Bug"),
+            FindingV1(path="x.py", line=1, severity="high", code="x", message="Bug"),
         ]
         with pytest.raises(ClickExit) as exc_info:
             review(

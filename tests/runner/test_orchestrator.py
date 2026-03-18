@@ -15,7 +15,7 @@ from code_review.runner import (
 
 @contextmanager
 def _orchestrator_run_env(
-    findings_json: str = '[{"path":"foo.py","line":1,"severity":"info","code":"c","message":"m"}]',
+    findings_json: str = '[{"path":"foo.py","line":1,"severity":"low","code":"c","message":"m"}]',
 ):
     """Context manager: patch config/provider and ADK Runner; yield (provider, mock_runner)."""
     from code_review.providers.base import FileInfo
@@ -400,7 +400,7 @@ def test_attach_fingerprints_and_filter_findings_returns_to_post():
     from code_review.schemas.findings import FindingV1
 
     o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
-    finding = FindingV1(path="foo.py", line=1, severity="info", code="X", message="msg")
+    finding = FindingV1(path="foo.py", line=1, severity="low", code="X", message="msg")
     all_findings = [finding]
     provider = MagicMock()
     provider.get_file_content.return_value = "line1\nline2\n"
@@ -448,7 +448,7 @@ def test_record_observability_and_build_result_returns_findings_and_emits_log():
     from code_review.schemas.findings import FindingV1
 
     o = ReviewOrchestrator("o", "r", 1)
-    finding = FindingV1(path="a.py", line=1, severity="info", code="X", message="m")
+    finding = FindingV1(path="a.py", line=1, severity="low", code="X", message="m")
     to_post = [(finding, "fp1")]
     with (
         patch("code_review.runner._log_run_complete") as mock_log,

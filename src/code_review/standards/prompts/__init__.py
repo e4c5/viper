@@ -17,6 +17,7 @@ _LANGUAGE_FILES: dict[str, str] = {
     "java": "java.md",
     "c": "c.md",
     "cpp": "cpp.md",
+    "dart": "dart.md",
 }
 
 

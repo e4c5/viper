@@ -6,20 +6,44 @@ from code_review.schemas.findings import FindingV1
 
 # Canonical severity labels for comment body prefix (Phase 4.1)
 SEVERITY_LABELS: dict[str, str] = {
-    "critical": "[Critical]",
-    "suggestion": "[Suggestion]",
-    "info": "[Info]",
+    "high": "[High]",
+    "medium": "[Medium]",
+    "low": "[Low]",
+    "nit": "[Nit]",
 }
 
 # Emoji markers by severity for quick visual scanning in SCM UIs.
 SEVERITY_EMOJIS: dict[str, str] = {
-    "critical": "🛑",
-    "suggestion": "💡",
-    "info": "ℹ️",
+    "high": "🛑",
+    "medium": "⚠️",
+    "low": "💡",
+    "nit": "ℹ️",
 }
 
 # Strip any leading "[Something]" tags the agent may have already added to the body
 _LEADING_TAGS_RE = re.compile(r"^(?:\s*\[[^\]]+\])+\s*", flags=re.IGNORECASE)
+
+# Matches a single outer fenced code block (optional language tag) so it can be
+# unwrapped before insertion into a ```suggestion block.
+_CODE_FENCE_RE = re.compile(r"^```[^\n]*\n([\s\S]*?)\n?```\s*$", re.MULTILINE)
+
+
+def _strip_code_fence(text: str) -> str:
+    """Remove a single outer fenced code block wrapper if present, return raw content."""
+    m = _CODE_FENCE_RE.match(text.strip())
+    return m.group(1) if m else text
+
+
+def render_suggestion_block(body: str, patch: str | None) -> str:
+    """
+    Append a ```suggestion block to the body when a patch is provided.
+    Used by providers that support suggestions (GitHub, GitLab, Gitea, Bitbucket).
+    Any outer fenced code block already wrapping the patch is stripped first so
+    nested fences don't prematurely close the suggestion block.
+    """
+    if not patch:
+        return body
+    return f"{body}\n\n```suggestion\n{_strip_code_fence(patch)}\n```"
 
 
 def _strip_leading_tags(text: str) -> str:
@@ -40,7 +64,7 @@ def finding_to_comment_body(
     use_collapsible_prompt: bool = True,
 ) -> str:
     """
-    Format a finding as inline comment body with a [Critical]/[Suggestion]/[Info] prefix.
+    Format a finding as inline comment body with a [High]/[Medium]/[Low]/[Nit] prefix.
     Location (path, line, optional end_line) is carried by the runner when posting;
     this returns only the body text.
     When use_collapsible_prompt is False (e.g. Bitbucket), the agent prompt is

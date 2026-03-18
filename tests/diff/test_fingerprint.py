@@ -75,7 +75,7 @@ def test_format_comment_body_with_marker_at_end():
 
 
 def test_parse_marker_from_comment_body():
-    body = "<!-- code-review-agent:fingerprint=abc;version=0.1.0;run=key1 -->\n\n[Critical] Fix."
+    body = "<!-- code-review-agent:fingerprint=abc;version=0.1.0;run=key1 -->\n\n[High] Fix."
     out = parse_marker_from_comment_body(body)
     assert out["fingerprint"] == "abc"
     assert out["version"] == "0.1.0"

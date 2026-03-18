@@ -1,0 +1,12 @@
+import litellm
+
+def test_litellm_mocked_completion():
+    messages = [{"role": "user", "content": "hello"}]
+    for _ in range(2):
+        response = litellm.completion(
+            model="openrouter/google/gemini-2.5-flash",
+            messages=messages,
+            api_key="sk-or-fake",
+            mock_response="hi"  # Use mock to avoid API call
+        )
+        assert response.choices[0].message.content == "hi"

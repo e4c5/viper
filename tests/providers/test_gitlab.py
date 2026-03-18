@@ -96,13 +96,13 @@ def test_post_review_comments(mock_client):
         "owner",
         "repo",
         1,
-        [InlineComment(path="foo.py", line=10, body="[Critical] Bug here")],
+        [InlineComment(path="foo.py", line=10, body="[High] Bug here")],
         head_sha="head123",
     )
     post_call = mock_client.return_value.__enter__.return_value.post.call_args
     payload = post_call[1]["json"]
     assert "body" in payload
-    assert "[Critical] Bug here" in payload["body"]
+    assert "[High] Bug here" in payload["body"]
     assert payload.get("position", {}).get("new_path") == "foo.py"
     assert payload["position"].get("new_line") == 10
 
@@ -130,7 +130,7 @@ def test_post_review_comments_with_suggested_patch(mock_client):
             InlineComment(
                 path="foo.py",
                 line=10,
-                body="[Suggestion] Consider refactor.",
+                body="[Medium] Consider refactor.",
                 suggested_patch="replacement_code();",
             )
         ],
@@ -139,7 +139,7 @@ def test_post_review_comments_with_suggested_patch(mock_client):
     post_call = mock_client.return_value.__enter__.return_value.post.call_args
     payload = post_call[1]["json"]
     body = payload["body"]
-    assert "[Suggestion] Consider refactor." in body
+    assert "[Medium] Consider refactor." in body
     assert "```suggestion" in body
     assert "replacement_code();" in body
 
@@ -154,7 +154,7 @@ def test_get_existing_review_comments(mock_client):
                 {
                     "id": 1,
                     "type": "DiffNote",
-                    "body": "[Critical] Bug",
+                    "body": "[High] Bug",
                     "position": {"new_path": "foo.py", "new_line": 10},
                     "resolved": False,
                 }
@@ -166,7 +166,7 @@ def test_get_existing_review_comments(mock_client):
                 {
                     "id": 2,
                     "type": "DiffNote",
-                    "body": "[Info] Nit",
+                    "body": "[Low] Nit",
                     "position": {"new_path": "bar.py", "new_line": 5},
                     "resolved": True,
                 }

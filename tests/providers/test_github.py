@@ -71,7 +71,7 @@ def test_post_review_comments(mock_client):
         "owner",
         "repo",
         1,
-        [InlineComment(path="foo.py", line=10, body="[Critical] Bug here")],
+        [InlineComment(path="foo.py", line=10, body="[High] Bug here")],
         head_sha="abc123",
     )
     call_args = mock_client.return_value.__enter__.return_value.post.call_args
@@ -79,7 +79,7 @@ def test_post_review_comments(mock_client):
     payload = call_args[1]["json"]
     assert "comments" in payload
     assert payload["comments"] == [
-        {"path": "foo.py", "line": 10, "side": "RIGHT", "body": "[Critical] Bug here"}
+        {"path": "foo.py", "line": 10, "side": "RIGHT", "body": "[High] Bug here"}
     ]
     assert payload["commit_id"] == "abc123"
     assert payload["event"] == "COMMENT"
@@ -101,7 +101,7 @@ def test_post_review_comments_with_suggested_patch(mock_client):
             InlineComment(
                 path="foo.py",
                 line=10,
-                body="[Suggestion] Consider refactor.",
+                body="[Medium] Consider refactor.",
                 suggested_patch="replacement_code();",
             )
         ],
@@ -110,7 +110,7 @@ def test_post_review_comments_with_suggested_patch(mock_client):
     call_args = mock_client.return_value.__enter__.return_value.post.call_args
     payload = call_args[1]["json"]
     comment_body = payload["comments"][0]["body"]
-    assert "[Suggestion] Consider refactor." in comment_body
+    assert "[Medium] Consider refactor." in comment_body
     assert "```suggestion" in comment_body
     assert "replacement_code();" in comment_body
 
@@ -119,8 +119,8 @@ def test_post_review_comments_with_suggested_patch(mock_client):
 def test_get_existing_review_comments(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = [
-        {"id": 1, "path": "foo.py", "line": 10, "body": "[Critical] Bug"},
-        {"id": 2, "path": "bar.py", "line": 5, "body": "[Info] Nit"},
+        {"id": 1, "path": "foo.py", "line": 10, "body": "[High] Bug"},
+        {"id": 2, "path": "bar.py", "line": 5, "body": "[Low] Nit"},
     ]
     mock_resp.headers = {"content-type": "application/json"}
     mock_client.return_value.__enter__.return_value.get.return_value = mock_resp

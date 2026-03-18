@@ -35,16 +35,6 @@ USER_ID = "reviewer"
 AGENT_VERSION = getattr(code_review, "__version__", "0.1.0")
 logger = logging.getLogger(__name__)
 
-# Suppress expected "non-text parts" warning from google-genai when the model returns
-# tool/function-call parts; we only use text parts in _collect_response_async.
-def _filter_non_text_parts_warning(record: logging.LogRecord) -> bool:
-    msg = record.getMessage()
-    return "non-text parts" not in msg
-
-
-_genai_logger = logging.getLogger("google_genai.types")
-_genai_logger.addFilter(_filter_non_text_parts_warning)
-
 # Fraction of context window reserved for diff content; rest for system prompt, tools, response.
 # Configurable via LLM_DIFF_BUDGET_RATIO env var.
 try:
@@ -99,6 +89,206 @@ def _diff_visible_new_lines(diff_text: str) -> set[tuple[str, int]]:
             if new_ln is not None:  # ADDED (old_ln=None) and CONTEXT (old_ln!=None)
                 out.add((norm_path, new_ln))
     return out
+
+
+def _build_diff_line_index(diff_text: str) -> dict[tuple[str, int], str]:
+    """Build a mapping of (normalized_path, new_line) -> stripped line content from the diff.
+
+    Only includes lines visible in the new-file view (ADDED '+' and CONTEXT ' ').
+    Used by _validate_suggested_patches to check whether a patch is anchored to the
+    correct line.
+    """
+    index: dict[tuple[str, int], str] = {}
+    for hunk in parse_unified_diff(diff_text):
+        norm_path = _normalize_path_for_anchor(hunk.path)
+        for content, _old_ln, new_ln in hunk.lines:
+            if new_ln is not None:
+                index[(norm_path, new_ln)] = content.strip()
+    return index
+
+
+def _patch_tokens(text: str) -> set[str]:
+    """Return a set of non-trivial tokens (len >= 3) from a code string, lower-cased.
+
+    Used for a rough content-similarity check between a suggested_patch and the
+    actual diff line it is anchored to.
+    """
+    return {tok.lower() for tok in re.split(r"\W+", text) if len(tok) >= 3}
+
+
+def _validate_suggested_patches(
+    findings: list["FindingV1"],
+    diff_text: str,
+) -> list["FindingV1"]:
+    """Strip suggested_patch from findings where the patch doesn't match the anchored line.
+
+    For each finding with a suggested_patch, look up the actual content of finding.line
+    in the diff. If there is no meaningful token overlap between the patch's first line
+    and the actual diff line, the patch is almost certainly misplaced (the LLM named a
+    visible line but wrote a patch for a completely different piece of code).
+
+    In that case, clear suggested_patch and log a warning so the finding is still posted
+    as a plain comment rather than an incorrectly-placed suggestion block.
+
+    Findings without a suggested_patch are returned unchanged.
+    """
+    if not diff_text or not findings:
+        return findings
+
+    line_index = _build_diff_line_index(diff_text)
+    result: list[FindingV1] = []
+    for f in findings:
+        if not f.suggested_patch:
+            result.append(f)
+            continue
+
+        norm_path = _normalize_path_for_anchor(f.path)
+        actual_content = line_index.get((norm_path, f.line))
+        if actual_content is None:
+            # Line not in diff at all (will be caught by the visibility guardrail); keep as-is.
+            result.append(f)
+            continue
+
+        # Use the first non-empty line of the patch for comparison (the replacement).
+        patch_first_line = next(
+            (ln.strip() for ln in f.suggested_patch.splitlines() if ln.strip()), ""
+        )
+
+        actual_tokens = _patch_tokens(actual_content)
+        patch_tokens = _patch_tokens(patch_first_line)
+
+        # If neither side has meaningful tokens, keep the patch as-is (degenerate case).
+        if not actual_tokens or not patch_tokens:
+            result.append(f)
+            continue
+
+        overlap = actual_tokens & patch_tokens
+        # Require at least one shared token OR the actual line is very short (could be
+        # a single symbol like '{' or a blank line that the LLM replaces entirely).
+        is_plausible = bool(overlap) or len(actual_content) <= 5
+
+        if not is_plausible:
+            logger.warning(
+                "Stripping misplaced suggested_patch from finding %s:%d: "
+                "patch first line %r has no token overlap with actual diff line %r",
+                f.path,
+                f.line,
+                patch_first_line,
+                actual_content,
+            )
+            # Build a new FindingV1 without the patch.  FindingV1 is a Pydantic model;
+            # model_copy(update=...) is the safe, idiomatic way to produce a mutated copy.
+            f = f.model_copy(update={"suggested_patch": None})
+
+        result.append(f)
+    return result
+
+
+# Default search radius for anchor-based line relocation (lines above & below finding.line).
+_ANCHOR_RELOCATION_WINDOW = 20
+
+
+def _build_per_file_line_index(
+    diff_text: str,
+) -> dict[str, dict[int, str]]:
+    """Build {normalized_path: {new_line_no: stripped_content}} from a unified diff.
+
+    Only includes lines visible in the new-file view (ADDED and CONTEXT).
+    """
+    file_lines: dict[str, dict[int, str]] = {}
+    for hunk in parse_unified_diff(diff_text):
+        norm_path = _normalize_path_for_anchor(hunk.path)
+        bucket = file_lines.setdefault(norm_path, {})
+        for content, _old_ln, new_ln in hunk.lines:
+            if new_ln is not None:
+                bucket[new_ln] = content.strip()
+    return file_lines
+
+
+def _find_closest_anchor_line(
+    lines_map: dict[int, str],
+    anchor_text: str,
+    reported_line: int,
+    window: int,
+) -> int | None:
+    """Return the closest line number whose content contains *anchor_text* (case-insensitive).
+
+    Only considers lines within *window* of *reported_line*.  Returns ``None``
+    when no match is found or the best match is the reported line itself.
+    """
+    anchor_lower = anchor_text.lower()
+    best_line: int | None = None
+    best_distance = window + 1
+    for ln, content in lines_map.items():
+        if anchor_lower not in content.lower():
+            continue
+        distance = abs(ln - reported_line)
+        if distance <= window and distance < best_distance:
+            best_line = ln
+            best_distance = distance
+    return best_line
+
+
+def _relocate_findings_by_anchor(
+    findings: list["FindingV1"],
+    diff_text: str,
+    window: int = _ANCHOR_RELOCATION_WINDOW,
+) -> list["FindingV1"]:
+    """Correct finding line numbers when the anchor text doesn't match the reported line.
+
+    The LLM sometimes identifies the right code issue but reports a line number
+    that is off by a few lines.  When a finding has a non-empty ``anchor`` or
+    ``fingerprint_hint``, this function checks whether that text appears in the
+    diff content at ``finding.line``.  If not, it searches nearby visible lines
+    (within *window* lines above and below) in the same file and relocates the
+    finding to the closest line whose content contains the anchor substring.
+
+    Findings without an anchor/fingerprint_hint, or whose anchor already matches
+    at the reported line, are returned unchanged.
+    """
+    if not diff_text or not findings:
+        return findings
+
+    file_lines = _build_per_file_line_index(diff_text)
+
+    result: list[FindingV1] = []
+    for f in findings:
+        result.append(_maybe_relocate_finding(f, file_lines, window))
+    return result
+
+
+def _maybe_relocate_finding(
+    f: "FindingV1",
+    file_lines: dict[str, dict[int, str]],
+    window: int,
+) -> "FindingV1":
+    """Return *f* relocated to the correct line if anchor text doesn't match, else unchanged."""
+    anchor_text = (f.anchor or f.fingerprint_hint or "").strip()
+    if not anchor_text:
+        return f
+
+    norm_path = _normalize_path_for_anchor(f.path)
+    lines_map = file_lines.get(norm_path)
+    if not lines_map:
+        return f
+
+    # Anchor already present at the reported line — nothing to do.
+    current_content = lines_map.get(f.line, "")
+    if anchor_text.lower() in current_content.lower():
+        return f
+
+    best_line = _find_closest_anchor_line(lines_map, anchor_text, f.line, window)
+    if best_line is not None and best_line != f.line:
+        logger.info(
+            "Relocating finding %s:%d -> %d (anchor %r found at line %d)",
+            f.path,
+            f.line,
+            best_line,
+            anchor_text,
+            best_line,
+        )
+        return f.model_copy(update={"line": best_line})
+    return f
 
 
 def _build_idempotency_key(
@@ -1054,8 +1244,19 @@ class ReviewOrchestrator:
         if not print_findings:
             return
         if to_post:
+            print("\n" + "=" * 60)
+            print(f"Code Review Findings ({len(to_post)} total)")
+            print("=" * 60)
             for f, _ in to_post:
-                print(f"{f.path}:{f.line} [{f.severity}] {f.get_body()}")
+                line_info = f"{f.line}" if not f.end_line or f.end_line == f.line else f"{f.line}-{f.end_line}"
+                print(f"[{f.severity.upper()}] {f.path}:{line_info}")
+                print(f"Message: {f.get_body()}")
+                if f.suggested_patch:
+                    print("-" * 40)
+                    print("Suggested Patch:")
+                    print(f.suggested_patch)
+                print("=" * 60)
+            print()
         else:
             print("No findings to post.")
 
@@ -1117,10 +1318,17 @@ class ReviewOrchestrator:
         # Guardrail: only keep findings for files that are actually in the PR diff.
         # LLMs can occasionally emit findings for unrelated paths; we never want to post
         # comments on files outside the reviewed change set.
-        # Paths may include prefixes like dst:// or src:// (especially for Bitbucket);
+        # Paths may include prefixes like dst:// or src:// (especially for Bitbucket);\
         # normalize both diff paths and finding paths before comparison so valid findings
         # are not dropped just because of a prefix difference.
         path_filtered = self._filter_findings_to_pr_paths(findings, paths)
+
+        # Guardrail: relocate findings whose anchor/fingerprint_hint text doesn't
+        # match the diff content at the reported line.  The LLM sometimes identifies
+        # the right code issue but reports a line number that is off by a few lines.
+        # Relocating before line-visibility filtering ensures corrected findings are
+        # also validated against the visible diff range.
+        relocated = _relocate_findings_by_anchor(path_filtered, full_diff)
 
         # Guardrail: only keep findings for lines that are actually visible in the diff.
         # Comments on lines outside diff hunks cannot be placed inline: Bitbucket Cloud
@@ -1129,7 +1337,15 @@ class ReviewOrchestrator:
         # full multi-file diff and may report lines that are in the file but outside any
         # hunk (e.g. unchanged code far from the changed region). Filtering here ensures
         # every posted comment appears inline in the diff view.
-        return self._filter_findings_to_visible_diff_lines(path_filtered, full_diff)
+        line_filtered = self._filter_findings_to_visible_diff_lines(relocated, full_diff)
+
+        # Guardrail: strip suggested_patch from findings where the patch content has no
+        # token overlap with the actual diff line it is anchored to.  This catches the
+        # common LLM error of hallucinating a patch for a different line of code while
+        # naming a visible line (so the line-visibility guard above passes).  Without
+        # this guard, the patch would be rendered as a suggestion block replacing the
+        # wrong code.  Stripping it degrades gracefully to a plain inline comment.
+        return _validate_suggested_patches(line_filtered, full_diff)
 
     def run(self) -> list[FindingV1]:
         """
@@ -1149,13 +1365,28 @@ class ReviewOrchestrator:
         run_handle = observability.start_run(trace_id)
 
         cfg, llm_cfg, provider = self._load_config_and_provider()
+        
+        base_url = cfg.url.rstrip("/")
+        if cfg.provider == "github":
+            pr_url = f"{base_url}/{owner}/{repo}/pull/{pr_number}"
+        elif cfg.provider == "gitlab":
+            pr_url = f"{base_url}/{owner}/{repo}/-/merge_requests/{pr_number}"
+        elif cfg.provider == "bitbucket":
+            pr_url = f"https://bitbucket.org/{owner}/{repo}/pull-requests/{pr_number}"
+        elif cfg.provider == "bitbucket_server":
+            pr_url = f"{base_url}/projects/{owner}/repos/{repo}/pull-requests/{pr_number}"
+        else:
+            pr_url = f"{base_url}/{owner}/{repo}/pulls/{pr_number}"
+            
         logger.info(
-            "Reviewing %s/%s PR %s (provider=%s)",
+            "Reviewing %s/%s PR %s (provider=%s) URL: %s",
             owner,
             repo,
             pr_number,
             cfg.provider,
+            pr_url,
         )
+        print(f"Starting review for PR: {pr_url}")
 
         skip_result = self._determine_skip_reason(
             provider, cfg, owner, repo, pr_number, trace_id, start_time, run_handle

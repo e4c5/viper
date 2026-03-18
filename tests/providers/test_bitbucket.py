@@ -68,13 +68,13 @@ def test_post_review_comments(mock_client):
         "owner",
         "repo",
         1,
-        [InlineComment(path="foo.py", line=10, body="[Critical] Bug here")],
+        [InlineComment(path="foo.py", line=10, body="[High] Bug here")],
         head_sha="abc123",
     )
     call_args = mock_client.return_value.__enter__.return_value.post.call_args
     assert "comments" in call_args[0][0]
     payload = call_args[1]["json"]
-    assert payload["content"]["raw"] == "[Critical] Bug here"
+    assert payload["content"]["raw"] == "[High] Bug here"
     assert payload["inline"]["path"] == "foo.py"
     assert payload["inline"]["to"] == 10
 
@@ -134,8 +134,8 @@ def test_get_existing_review_comments(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
         "values": [
-            {"id": 1, "content": {"raw": "[Critical] Bug"}, "inline": {"path": "foo.py", "to": 10}},
-            {"id": 2, "content": {"raw": "[Info] Nit"}, "inline": {"path": "bar.py", "to": 5}},
+            {"id": 1, "content": {"raw": "[High] Bug"}, "inline": {"path": "foo.py", "to": 10}},
+            {"id": 2, "content": {"raw": "[Low] Nit"}, "inline": {"path": "bar.py", "to": 5}},
         ]
     }
     mock_resp.headers = {"content-type": "application/json"}
@@ -178,3 +178,9 @@ def test_get_pr_info(mock_client):
     assert info is not None
     assert info.title == "Fix bug"
     assert "skip-review" in info.labels
+
+
+def test_capabilities():
+    p = BitbucketProvider("https://api.bitbucket.org/2.0", "tok")
+    caps = p.capabilities()
+    assert caps.supports_suggestions is True

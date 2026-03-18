@@ -33,6 +33,13 @@ class MockProvider:
     def get_pr_info(self, owner, repo, pr_number):
         return None
 
+    def capabilities(self):
+        return ProviderCapabilities(
+            resolvable_comments=False,
+            supports_suggestions=False,
+            supports_multiline_suggestions=False
+        )
+
 
 def test_create_review_agent():
     """Agent creation with mocked provider and review standards."""
@@ -65,7 +72,7 @@ def test_run_review_ignore_list_and_posts_net_new(
     provider.get_file_content.return_value = "content"
     # Existing comment body matches the fully formatted body the runner will
     # generate for the duplicate finding, including severity prefix.
-    existing_body = "[Critical] Duplicate finding."
+    existing_body = "[High] Duplicate finding."
     provider.get_existing_review_comments.return_value = [
         MagicMock(
             path="foo.py",
@@ -83,8 +90,8 @@ def test_run_review_ignore_list_and_posts_net_new(
 
     # Mock Runner.run_async to yield one final response with JSON findings (one duplicate, one net-new)
     findings_json = """[
-        {"path":"foo.py","line":1,"severity":"critical","code":"x","message":"Duplicate finding."},
-        {"path":"foo.py","line":2,"severity":"suggestion","code":"y","message":"Net new finding."}
+        {"path":"foo.py","line":1,"severity":"high","code":"x","message":"Duplicate finding."},
+        {"path":"foo.py","line":2,"severity":"medium","code":"y","message":"Net new finding."}
     ]"""
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
@@ -104,7 +111,7 @@ def test_run_review_ignore_list_and_posts_net_new(
     comments = call_args[0][3]
     assert len(comments) == 1
     body = comments[0].body
-    assert "[Suggestion] Net new finding." in body
+    assert "[Medium] Net new finding." in body
     assert "code-review-agent:" in body and "fingerprint=" in body
     assert call_args[1]["head_sha"] == "abc123"
 
@@ -138,7 +145,7 @@ def test_run_review_raises_when_posting_without_head_sha(
     mock_get_context_window.return_value = 1_000_000
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"suggestion","code":"x",'
+        '[{"path":"foo.py","line":1,"severity":"medium","code":"x",'
         '"message":"Fix."}]'
     )
     mock_event = MagicMock()
@@ -291,7 +298,7 @@ def test_run_review_uses_file_by_file_mode_when_diff_exceeds_budget(
     mock_get_context_window.return_value = 16
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"suggestion","code":"x",'
+        '[{"path":"foo.py","line":1,"severity":"medium","code":"x",'
         '"message":"Fix."}]'
     )
     mock_event = MagicMock()

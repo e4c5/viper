@@ -140,8 +140,8 @@ def test_post_review_comments_always_one_by_one(
         provider.post_pr_summary_comment = MagicMock()
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"suggestion","code":"x","message":"Fix."},'
-        '{"path":"foo.py","line":2,"severity":"critical","code":"y","message":"Bug."}]'
+        '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."},'
+        '{"path":"foo.py","line":2,"severity":"high","code":"y","message":"Bug."}]'
     )
     to_post, provider = _exercise_error_path(
         mock_get_scm_config,
@@ -184,7 +184,7 @@ def test_post_review_comment_skipped_not_fallback_to_pr_summary(
         provider.post_pr_summary_comment = MagicMock()
 
     findings_json = (
-        '[{"path":"foo.py","line":2,"severity":"critical","code":"x","message":"Fix now."}]'
+        '[{"path":"foo.py","line":2,"severity":"high","code":"x","message":"Fix now."}]'
     )
     to_post, provider = _exercise_error_path(
         mock_get_scm_config,
@@ -223,7 +223,7 @@ def test_file_by_file_skips_file_on_rate_limit_error(
 ):
     """File-by-file mode skips a file and continues when a RateLimitError is raised."""
     call_count = [0]
-    findings = '[{"path":"b.py","line":1,"severity":"info","code":"ok","message":"Fine."}]'
+    findings = '[{"path":"b.py","line":1,"severity":"low","code":"ok","message":"Fine."}]'
 
     run_async_side_effect = _build_file_by_file_run_async_side_effect(
         call_count, lambda: RateLimitError("HTTP 429 Too Many Requests"), findings
@@ -253,7 +253,7 @@ def test_file_by_file_skips_file_on_generic_error(
     """File-by-file mode skips a file and continues when an unexpected error is raised."""
     call_count = [0]
     findings = (
-        '[{"path":"b.py","line":2,"severity":"suggestion","code":"s","message":"Improve."}]'
+        '[{"path":"b.py","line":2,"severity":"medium","code":"s","message":"Improve."}]'
     )
 
     run_async_side_effect = _build_file_by_file_run_async_side_effect(
@@ -287,7 +287,7 @@ def test_file_by_file_authentication_error_is_fatal(
     """
     call_count = [0]
     findings = (
-        '[{"path":"b.py","line":3,"severity":"info","code":"ok","message":"Still fine."}]'
+        '[{"path":"b.py","line":3,"severity":"low","code":"ok","message":"Still fine."}]'
     )
 
     def make_auth_error():
@@ -337,7 +337,7 @@ def test_run_marker_comment_posted_for_omit_marker_providers(
         provider.post_pr_summary_comment = MagicMock()
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"suggestion","code":"x","message":"Fix."}]'
+        '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
     )
     to_post, provider = _exercise_error_path(
         mock_get_scm_config,
@@ -381,7 +381,7 @@ def test_run_marker_comment_not_posted_for_standard_providers(
         provider.post_pr_summary_comment = MagicMock()
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"suggestion","code":"x","message":"Fix."}]'
+        '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
     )
     _to_post, provider = _exercise_error_path(
         mock_get_scm_config,
@@ -421,7 +421,7 @@ def test_run_marker_comment_not_posted_when_inline_succeeds_for_omit_marker_prov
         provider.post_pr_summary_comment = MagicMock()
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"suggestion","code":"x","message":"Fix."}]'
+        '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
     )
     _to_post, provider = _exercise_error_path(
         mock_get_scm_config,
