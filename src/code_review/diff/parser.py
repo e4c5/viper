@@ -176,17 +176,12 @@ def annotate_diff_with_line_numbers(diff_text: str) -> str:
             continue
 
         prefix = line[0] if line else " "
-        if prefix == " ":
+        if prefix in (" ", "+"):
             result_lines.append(f"<L{new_ln}>" + line)
             new_ln += 1
-        elif prefix == "+":
-            result_lines.append(f"<L{new_ln}>" + line)
-            new_ln += 1
-        elif prefix == "-":
-            # Removed line — no new-file line number.
-            result_lines.append(line)
         else:
-            # '\' (no-newline marker) and any unexpected prefix — pass through.
+            # Removed lines (-), no-newline markers (\), and any other prefix
+            # have no new-file line number — pass through unchanged.
             result_lines.append(line)
 
     return "\n".join(result_lines)
