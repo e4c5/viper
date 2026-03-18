@@ -20,7 +20,7 @@ pipeline {
         string(name: 'LLM_PROVIDER', defaultValue: 'gemini', description: 'LLM provider')
         string(name: 'LLM_MODEL', defaultValue: 'gemini-2.5-flash', description: 'LLM model')
         string(name: 'COMPOSE_PROJECT_NAME', defaultValue: 'code-review', description: 'Docker Compose project name')
-        string(name: 'IMAGE_NAME', defaultValue: 'e4c5/code-review-agent:v1.0.0', description: 'Container image name (e.g. user/name:tag); must match published image when using container agent. Pinning to a specific version (e.g. :v1.2.3) is recommended over :latest.')
+        string(name: 'IMAGE_NAME', defaultValue: 'e4c5/code-review-agent:1.0.0', description: 'Container image name (e.g. user/name:tag); must match published image when using container agent. Pinning to a specific version (e.g. :1.2.3) is recommended over :latest.')
     }
 
     stages {
