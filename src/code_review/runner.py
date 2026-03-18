@@ -188,6 +188,47 @@ def _validate_suggested_patches(
 _ANCHOR_RELOCATION_WINDOW = 20
 
 
+def _build_per_file_line_index(
+    diff_text: str,
+) -> dict[str, dict[int, str]]:
+    """Build {normalized_path: {new_line_no: stripped_content}} from a unified diff.
+
+    Only includes lines visible in the new-file view (ADDED and CONTEXT).
+    """
+    file_lines: dict[str, dict[int, str]] = {}
+    for hunk in parse_unified_diff(diff_text):
+        norm_path = _normalize_path_for_anchor(hunk.path)
+        bucket = file_lines.setdefault(norm_path, {})
+        for content, _old_ln, new_ln in hunk.lines:
+            if new_ln is not None:
+                bucket[new_ln] = content.strip()
+    return file_lines
+
+
+def _find_closest_anchor_line(
+    lines_map: dict[int, str],
+    anchor_text: str,
+    reported_line: int,
+    window: int,
+) -> int | None:
+    """Return the closest line number whose content contains *anchor_text* (case-insensitive).
+
+    Only considers lines within *window* of *reported_line*.  Returns ``None``
+    when no match is found or the best match is the reported line itself.
+    """
+    anchor_lower = anchor_text.lower()
+    best_line: int | None = None
+    best_distance = window + 1
+    for ln, content in lines_map.items():
+        if anchor_lower not in content.lower():
+            continue
+        distance = abs(ln - reported_line)
+        if distance <= window and distance < best_distance:
+            best_line = ln
+            best_distance = distance
+    return best_line
+
+
 def _relocate_findings_by_anchor(
     findings: list["FindingV1"],
     diff_text: str,
@@ -208,57 +249,46 @@ def _relocate_findings_by_anchor(
     if not diff_text or not findings:
         return findings
 
-    # Build per-file line index: {norm_path: {new_line: stripped_content}}
-    file_lines: dict[str, dict[int, str]] = {}
-    for hunk in parse_unified_diff(diff_text):
-        norm_path = _normalize_path_for_anchor(hunk.path)
-        bucket = file_lines.setdefault(norm_path, {})
-        for content, _old_ln, new_ln in hunk.lines:
-            if new_ln is not None:
-                bucket[new_ln] = content.strip()
+    file_lines = _build_per_file_line_index(diff_text)
 
     result: list[FindingV1] = []
     for f in findings:
-        anchor_text = (f.anchor or f.fingerprint_hint or "").strip()
-        if not anchor_text:
-            result.append(f)
-            continue
-
-        norm_path = _normalize_path_for_anchor(f.path)
-        lines_map = file_lines.get(norm_path)
-        if not lines_map:
-            result.append(f)
-            continue
-
-        # Check if the anchor is already present at the reported line.
-        current_content = lines_map.get(f.line, "")
-        if anchor_text.lower() in current_content.lower():
-            result.append(f)
-            continue
-
-        # Search nearby lines for the anchor text; pick the closest match.
-        best_line: int | None = None
-        best_distance = window + 1
-        for ln, content in lines_map.items():
-            if anchor_text.lower() in content.lower():
-                distance = abs(ln - f.line)
-                if distance <= window and distance < best_distance:
-                    best_line = ln
-                    best_distance = distance
-
-        if best_line is not None and best_line != f.line:
-            logger.info(
-                "Relocating finding %s:%d -> %d (anchor %r found at line %d)",
-                f.path,
-                f.line,
-                best_line,
-                anchor_text,
-                best_line,
-            )
-            f = f.model_copy(update={"line": best_line})
-
-        result.append(f)
+        result.append(_maybe_relocate_finding(f, file_lines, window))
     return result
+
+
+def _maybe_relocate_finding(
+    f: "FindingV1",
+    file_lines: dict[str, dict[int, str]],
+    window: int,
+) -> "FindingV1":
+    """Return *f* relocated to the correct line if anchor text doesn't match, else unchanged."""
+    anchor_text = (f.anchor or f.fingerprint_hint or "").strip()
+    if not anchor_text:
+        return f
+
+    norm_path = _normalize_path_for_anchor(f.path)
+    lines_map = file_lines.get(norm_path)
+    if not lines_map:
+        return f
+
+    # Anchor already present at the reported line — nothing to do.
+    current_content = lines_map.get(f.line, "")
+    if anchor_text.lower() in current_content.lower():
+        return f
+
+    best_line = _find_closest_anchor_line(lines_map, anchor_text, f.line, window)
+    if best_line is not None and best_line != f.line:
+        logger.info(
+            "Relocating finding %s:%d -> %d (anchor %r found at line %d)",
+            f.path,
+            f.line,
+            best_line,
+            anchor_text,
+            best_line,
+        )
+        return f.model_copy(update={"line": best_line})
+    return f
 
 
 def _build_idempotency_key(
