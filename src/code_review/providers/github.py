@@ -173,4 +173,8 @@ class GitHubProvider(ProviderInterface):
 
     def capabilities(self) -> ProviderCapabilities:
         """GitHub supports suggestion blocks; resolved is per-conversation, not per-comment."""
-        return ProviderCapabilities(resolvable_comments=False, supports_suggestions=True)
+        return ProviderCapabilities(
+            resolvable_comments=False, 
+            supports_suggestions=True,
+            supports_multiline_suggestions=True,
+        )

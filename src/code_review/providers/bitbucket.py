@@ -246,6 +246,7 @@ class BitbucketProvider(ProviderInterface):
         return ProviderCapabilities(
             resolvable_comments=False,
             supports_suggestions=True,
+            supports_multiline_suggestions=True,
             markup_hides_html_comment=False,
             markup_supports_collapsible=False,
             omit_fingerprint_marker_in_body=True,

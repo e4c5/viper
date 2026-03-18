@@ -270,4 +270,8 @@ class GitLabProvider(ProviderInterface):
         GitLab supports suggestion blocks. resolve_comment is not implemented, so
         resolvable_comments=False to avoid silent failures.
         """
-        return ProviderCapabilities(resolvable_comments=False, supports_suggestions=True)
+        return ProviderCapabilities(
+            resolvable_comments=False, 
+            supports_suggestions=True,
+            supports_multiline_suggestions=True,
+        )

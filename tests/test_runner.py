@@ -33,6 +33,13 @@ class MockProvider:
     def get_pr_info(self, owner, repo, pr_number):
         return None
 
+    def capabilities(self):
+        return ProviderCapabilities(
+            resolvable_comments=False,
+            supports_suggestions=False,
+            supports_multiline_suggestions=False
+        )
+
 
 def test_create_review_agent():
     """Agent creation with mocked provider and review standards."""

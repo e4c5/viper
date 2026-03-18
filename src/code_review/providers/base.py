@@ -56,6 +56,7 @@ class ProviderCapabilities(BaseModel):
 
     resolvable_comments: bool = False
     supports_suggestions: bool = False
+    supports_multiline_suggestions: bool = False
     markup_hides_html_comment: bool = True
     markup_supports_collapsible: bool = True
     omit_fingerprint_marker_in_body: bool = False
@@ -316,7 +317,11 @@ class ProviderInterface(ABC):
 
     def capabilities(self) -> ProviderCapabilities:
         """Return provider capability flags."""
-        return ProviderCapabilities(resolvable_comments=False, supports_suggestions=False)
+        return ProviderCapabilities(
+            resolvable_comments=False,
+            supports_suggestions=False,
+            supports_multiline_suggestions=False,
+        )
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """

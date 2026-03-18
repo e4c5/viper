@@ -10,6 +10,7 @@ import os
 
 LOG_LEVEL_ENV = "CODE_REVIEW_LOG_LEVEL"
 DEFAULT_LEVEL = "WARNING"
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
 
 def _filter_non_text_parts_warning(record: logging.LogRecord) -> bool:

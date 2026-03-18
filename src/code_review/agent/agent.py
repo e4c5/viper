@@ -68,12 +68,13 @@ code (str, e.g. unused-var), and message (str).
 Optional fields: end_line, category (e.g. "Correctness", "Security", "Performance",
 "Maintainability", "Tests", "Style"), anchor, fingerprint_hint,
 suggested_patch, agent_fix_prompt.
-When the fix is local and mechanical (for example renaming a variable, adding a null check,
-or tightening a condition), you should populate suggested_patch with the exact replacement
-code for the affected line(s), without any diff markers, prefixes, or code fences. The code
-in suggested_patch must be exactly how the new code should look after applying the change.
-Do not include surrounding context or multiple unrelated edits in suggested_patch; keep it
-focused on the smallest safe, self-contained change at the commented line(s).
+
+CRITICAL - Placement of suggestions:
+- The `line` MUST be the exact line where the issue occurs, NOT a blank line above it.
+- If you use `suggested_patch`, the `line` (and `end_line` if applicable) MUST exactly cover the lines that your patch replaces. If you omit `end_line`, your `suggested_patch` will replace ONLY the single `line`.
+- Never attach a finding to a blank line or a preceding line if the `suggested_patch` is meant to replace the code below it. Doing so will insert duplicate code.
+- Keep `suggested_patch` focused on the smallest safe, self-contained change. Do not include surrounding unchanged context.
+
 For suggested_patch (and all string fields): use \\n for newlines inside the JSON string so the
 output is valid JSON; do not put literal line breaks inside string values.
 When reviewing a single file, use the same path string you were given for that file in every finding.
@@ -140,12 +141,13 @@ code (str, e.g. unused-var), and message (str).
 Optional fields: end_line, category (e.g. "Correctness", "Security", "Performance",
 "Maintainability", "Tests", "Style"), anchor, fingerprint_hint,
 suggested_patch, agent_fix_prompt.
-When the fix is local and mechanical (for example renaming a variable, adding a null check,
-or tightening a condition), you should populate suggested_patch with the exact replacement
-code for the affected line(s), without any diff markers, prefixes, or code fences. The code
-in suggested_patch must be exactly how the new code should look after applying the change.
-Do not include surrounding context or multiple unrelated edits in suggested_patch; keep it
-focused on the smallest safe, self-contained change at the commented line(s).
+
+CRITICAL - Placement of suggestions:
+- The `line` MUST be the exact line where the issue occurs, NOT a blank line above it.
+- If you use `suggested_patch`, the `line` (and `end_line` if applicable) MUST exactly cover the lines that your patch replaces. If you omit `end_line`, your `suggested_patch` will replace ONLY the single `line`.
+- Never attach a finding to a blank line or a preceding line if the `suggested_patch` is meant to replace the code below it. Doing so will insert duplicate code.
+- Keep `suggested_patch` focused on the smallest safe, self-contained change. Do not include surrounding unchanged context.
+
 For suggested_patch (and all string fields): use \\n for newlines inside the JSON string so the
 output is valid JSON; do not put literal line breaks inside string values.
 
@@ -218,6 +220,15 @@ def create_review_agent(
         tools = create_findings_only_tools(provider)
     if review_standards:
         instruction = instruction.rstrip() + "\n\n" + review_standards
+        
+    capabilities = provider.capabilities()
+    if capabilities.supports_suggestions and not capabilities.supports_multiline_suggestions:
+        instruction = instruction.rstrip() + (
+            "\n\nCRITICAL - Single-line suggestions only:\n"
+            "The target platform ONLY supports replacing a single line of code with a suggestion. "
+            "If your fix requires replacing multiple lines of existing code, do NOT provide a `suggested_patch` at all. "
+            "Only provide a `suggested_patch` if it replaces exactly one line of the original code."
+        )
 
     return Agent(
         model=get_configured_model(),
