@@ -35,16 +35,6 @@ USER_ID = "reviewer"
 AGENT_VERSION = getattr(code_review, "__version__", "0.1.0")
 logger = logging.getLogger(__name__)
 
-# Suppress expected "non-text parts" warning from google-genai when the model returns
-# tool/function-call parts; we only use text parts in _collect_response_async.
-def _filter_non_text_parts_warning(record: logging.LogRecord) -> bool:
-    msg = record.getMessage()
-    return "non-text parts" not in msg
-
-
-_genai_logger = logging.getLogger("google_genai.types")
-_genai_logger.addFilter(_filter_non_text_parts_warning)
-
 # Fraction of context window reserved for diff content; rest for system prompt, tools, response.
 # Configurable via LLM_DIFF_BUDGET_RATIO env var.
 try:
