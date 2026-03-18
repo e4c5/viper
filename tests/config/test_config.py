@@ -99,3 +99,59 @@ def test_reset_config_cache_clears_both():
     assert scm1 is not scm2
     assert llm1 is not llm2
     reset_config_cache()
+
+
+def test_context_config_defaults():
+    """ContextConfig defaults: disabled, no Jira/Confluence credentials."""
+    from code_review.config import ContextConfig, reset_config_cache
+
+    reset_config_cache()
+    with patch.dict(os.environ, {}, clear=False):
+        cfg = ContextConfig()
+    assert cfg.enabled is False
+    assert cfg.github_issues_enabled is True
+    assert cfg.jira_enabled is False
+    assert cfg.confluence_enabled is False
+    assert cfg.jira_url is None
+    assert cfg.confluence_url is None
+    assert cfg.max_context_tokens == 20_000
+    reset_config_cache()
+
+
+def test_context_config_enabled_via_env():
+    """CONTEXT_ENABLED=true activates context enrichment."""
+    from code_review.config import ContextConfig, reset_config_cache
+
+    reset_config_cache()
+    with patch.dict(
+        os.environ,
+        {
+            "CONTEXT_ENABLED": "true",
+            "CONTEXT_JIRA_ENABLED": "true",
+            "CONTEXT_JIRA_URL": "https://company.atlassian.net",
+            "CONTEXT_JIRA_EMAIL": "user@company.com",
+            "CONTEXT_JIRA_TOKEN": "secret-token",
+            "CONTEXT_JIRA_PROJECT_KEYS": "PROJ,APP",
+        },
+        clear=False,
+    ):
+        cfg = ContextConfig()
+    assert cfg.enabled is True
+    assert cfg.jira_enabled is True
+    assert cfg.jira_url == "https://company.atlassian.net"
+    assert cfg.jira_email == "user@company.com"
+    assert cfg.jira_token is not None
+    assert cfg.jira_token.get_secret_value() == "secret-token"
+    assert cfg.jira_project_keys == "PROJ,APP"
+    reset_config_cache()
+
+
+def test_get_context_config_cached():
+    """get_context_config() returns the same instance on repeated calls."""
+    from code_review.config import get_context_config, reset_config_cache
+
+    reset_config_cache()
+    cfg1 = get_context_config()
+    cfg2 = get_context_config()
+    assert cfg1 is cfg2
+    reset_config_cache()

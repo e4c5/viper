@@ -375,7 +375,7 @@ def test_create_agent_and_runner_returns_session_id_service_runner(mock_create_a
         )
 
     mock_create_agent.assert_called_once_with(
-        provider, review_standards, findings_only=True, disable_tools=True
+        provider, review_standards, findings_only=True, disable_tools=True, pr_context=""
     )
     assert session_id.startswith("o/r/pr-42/")
     assert len(session_id) > len("o/r/pr-42/")

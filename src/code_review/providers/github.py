@@ -6,7 +6,9 @@ from typing import Any
 
 import httpx
 
+from code_review.formatters.comment import render_suggestion_block
 from code_review.providers.base import (
+    CommitInfo,
     FileInfo,
     InlineComment,
     PRInfo,
@@ -17,7 +19,6 @@ from code_review.providers.base import (
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
-from code_review.formatters.comment import render_suggestion_block
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
@@ -178,3 +179,21 @@ class GitHubProvider(ProviderInterface):
             supports_suggestions=True,
             supports_multiline_suggestions=True,
         )
+
+    def get_pr_commits(self, owner: str, repo: str, pr_number: int) -> list[CommitInfo]:
+        """Return commits in the PR with their SHA and full commit message."""
+        try:
+            path = f"/repos/{owner}/{repo}/pulls/{pr_number}/commits"
+            data = self._get(path, params={"per_page": 100})
+            if not isinstance(data, list):
+                return []
+            result: list[CommitInfo] = []
+            for item in data:
+                sha = item.get("sha", "")
+                commit_obj = item.get("commit", {})
+                message = commit_obj.get("message", "") if isinstance(commit_obj, dict) else ""
+                result.append(CommitInfo(sha=sha, message=message))
+            return result
+        except Exception:
+            logger.debug("get_pr_commits failed for %s/%s#%d", owner, repo, pr_number)
+            return []

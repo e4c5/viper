@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SCM_CONFIG: "SCMConfig | None" = None
 _LLM_CONFIG: "LLMConfig | None" = None
+_CONTEXT_CONFIG: "ContextConfig | None" = None
 
 
 class SCMConfig(BaseSettings):
@@ -115,6 +116,76 @@ class LLMConfig(BaseSettings):
         return SecretStr(normalized)
 
 
+class ContextConfig(BaseSettings):
+    """Configuration for context-aware code review (GitHub Issues, Jira, Confluence)."""
+
+    model_config = SettingsConfigDict(env_prefix="CONTEXT_", extra="ignore")
+
+    # Master switch — set CONTEXT_ENABLED=true to activate context enrichment.
+    enabled: bool = Field(
+        default=False,
+        description="Enable context-aware review (GitHub Issues, Jira, Confluence).",
+    )
+
+    # Per-source toggles (effective only when enabled=True)
+    github_issues_enabled: bool = Field(
+        default=True,
+        description="Fetch linked GitHub Issue content when enabled.",
+    )
+    jira_enabled: bool = Field(
+        default=False,
+        description="Fetch linked Jira ticket content when enabled.",
+    )
+    confluence_enabled: bool = Field(
+        default=False,
+        description="Fetch linked Confluence page content when enabled.",
+    )
+
+    # Jira connection (required when jira_enabled=True)
+    jira_url: str | None = Field(
+        default=None,
+        description="Jira base URL, e.g. https://yourcompany.atlassian.net",
+    )
+    jira_email: str | None = Field(
+        default=None,
+        description="Email address for Jira basic-auth (user:token).",
+    )
+    jira_token: SecretStr | None = Field(
+        default=None,
+        description="Jira API token for basic-auth.",
+    )
+    jira_project_keys: str | None = Field(
+        default=None,
+        description=(
+            "Optional comma-separated Jira project key prefixes to restrict extraction "
+            "(e.g. 'PROJ,MYAPP'). When unset, all WORD-NNN patterns are considered Jira keys."
+        ),
+    )
+
+    # Confluence connection (required when confluence_enabled=True)
+    confluence_url: str | None = Field(
+        default=None,
+        description="Confluence base URL, e.g. https://yourcompany.atlassian.net/wiki",
+    )
+    confluence_email: str | None = Field(
+        default=None,
+        description="Email address for Confluence basic-auth.",
+    )
+    confluence_token: SecretStr | None = Field(
+        default=None,
+        description="Confluence API token for basic-auth.",
+    )
+
+    # Token budget
+    max_context_tokens: int = Field(
+        default=20_000,
+        description=(
+            "Maximum tokens to spend on issue/ticket/page context. "
+            "Content is truncated when the total exceeds this limit."
+        ),
+    )
+
+
 def get_scm_config() -> SCMConfig:
     """Return cached SCM config instance."""
     global _SCM_CONFIG
@@ -131,8 +202,17 @@ def get_llm_config() -> LLMConfig:
     return _LLM_CONFIG
 
 
+def get_context_config() -> ContextConfig:
+    """Return cached context config instance."""
+    global _CONTEXT_CONFIG
+    if _CONTEXT_CONFIG is None:
+        _CONTEXT_CONFIG = ContextConfig()
+    return _CONTEXT_CONFIG
+
+
 def reset_config_cache() -> None:
     """Reset cached config instances. Intended for use in tests."""
-    global _SCM_CONFIG, _LLM_CONFIG
+    global _SCM_CONFIG, _LLM_CONFIG, _CONTEXT_CONFIG
     _SCM_CONFIG = None
     _LLM_CONFIG = None
+    _CONTEXT_CONFIG = None

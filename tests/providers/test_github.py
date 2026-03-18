@@ -165,3 +165,38 @@ def test_get_pr_info(mock_client):
     assert info is not None
     assert info.title == "Fix bug"
     assert "skip-review" in info.labels
+
+
+@patch("code_review.providers.github.httpx.Client")
+def test_get_pr_commits(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = [
+        {
+            "sha": "abc123",
+            "commit": {"message": "Fix login bug\n\nFixes #42"},
+        },
+        {
+            "sha": "def456",
+            "commit": {"message": "Add tests for rate limiting"},
+        },
+    ]
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    commits = p.get_pr_commits("owner", "repo", 7)
+    assert len(commits) == 2
+    assert commits[0].sha == "abc123"
+    assert "Fixes #42" in commits[0].message
+    assert commits[1].sha == "def456"
+    call_args = mock_client.return_value.__enter__.return_value.get.call_args
+    assert "/pulls/7/commits" in call_args[0][0]
+
+
+@patch("code_review.providers.github.httpx.Client")
+def test_get_pr_commits_returns_empty_on_error(mock_client):
+    mock_client.return_value.__enter__.return_value.get.side_effect = Exception("network error")
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    commits = p.get_pr_commits("owner", "repo", 1)
+    assert commits == []

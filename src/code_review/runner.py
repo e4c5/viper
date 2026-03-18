@@ -15,7 +15,8 @@ from litellm import AuthenticationError
 import code_review
 from code_review import observability
 from code_review.agent import create_review_agent
-from code_review.config import get_llm_config, get_scm_config
+from code_review.config import get_context_config, get_llm_config, get_scm_config
+from code_review.context.fetcher import ContextFetcher
 from code_review.diff.fingerprint import (
     build_fingerprint,
     format_comment_body_with_marker,
@@ -899,6 +900,51 @@ class ReviewOrchestrator:
         full_diff = provider.get_pr_diff(owner, repo, pr_number)
         return (files, paths, full_diff)
 
+    def _fetch_pr_context(
+        self,
+        provider,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        pr_info,
+    ) -> str:
+        """Fetch context from linked GitHub Issues, Jira tickets, and Confluence pages.
+
+        Returns a formatted context string (possibly empty) for injection into the
+        review prompt. The string is wrapped in <context>...</context> tags.
+        """
+        try:
+            context_cfg = get_context_config()
+            if not context_cfg.enabled:
+                return ""
+
+            scm_cfg = get_scm_config()
+            fetcher = ContextFetcher(
+                scm_base_url=scm_cfg.url,
+                scm_token=scm_cfg.token.get_secret_value(),
+                context_config=context_cfg,
+                owner=owner,
+                repo=repo,
+            )
+
+            # Collect text sources: PR title, description, and all commit messages.
+            pr_title = getattr(pr_info, "title", "") or ""
+            pr_description = getattr(pr_info, "description", "") or ""
+            commits = provider.get_pr_commits(owner, repo, pr_number)
+            commit_messages = [c.message for c in commits if c.message]
+
+            context_text = fetcher.build_context(
+                pr_description=pr_description,
+                pr_title=pr_title,
+                commit_messages=commit_messages,
+            )
+            if context_text:
+                logger.info("Context enrichment: fetched context (%d chars)", len(context_text))
+            return context_text
+        except Exception as exc:
+            logger.warning("Context enrichment failed: %s", exc)
+            return ""
+
     def _build_ignore_set_and_filter_files(self, paths: list[str]) -> list[str]:
         """
         Optionally filter which file paths to review (e.g. by ignore patterns).
@@ -922,6 +968,7 @@ class ReviewOrchestrator:
         pr_number: int,
         *,
         use_file_by_file: bool = False,
+        pr_context: str = "",
     ):
         """
         Build the findings-only agent, session service, and ADK Runner.
@@ -952,6 +999,7 @@ class ReviewOrchestrator:
             review_standards,
             findings_only=True,
             disable_tools=not use_file_by_file,
+            pr_context=pr_context,
         )
         session_id = f"{owner}/{repo}/pr-{pr_number}/{uuid.uuid4().hex[:12]}"
         session_service = InMemorySessionService()
@@ -974,6 +1022,7 @@ class ReviewOrchestrator:
         paths: list[str],
         use_file_by_file: bool,
         full_diff: str = "",
+        pr_context: str = "",
     ) -> list[FindingV1]:
         """
         Run the agent (file-by-file or single shot), parse response into FindingV1 list.
@@ -992,6 +1041,7 @@ class ReviewOrchestrator:
                 pr_number,
                 head_sha,
                 paths,
+                pr_context=pr_context,
             )
         return self._run_single_shot_mode(
             runner,
@@ -1002,6 +1052,7 @@ class ReviewOrchestrator:
             pr_number,
             head_sha,
             full_diff,
+            pr_context=pr_context,
         )
 
     def _run_file_by_file_mode(
@@ -1013,6 +1064,8 @@ class ReviewOrchestrator:
         pr_number: int,
         head_sha: str,
         paths: list[str],
+        *,
+        pr_context: str = "",
     ) -> list[FindingV1]:
         all_findings: list[FindingV1] = []
         for file_path in paths:
@@ -1031,6 +1084,8 @@ class ReviewOrchestrator:
                 + f' Then output a JSON array of findings for this file only. Use path "{file_path}" in every finding. '
                 "If there are no issues in this file, output exactly []."
             )
+            if pr_context:
+                msg += f"\n\n{pr_context}"
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     "LLM request (file-by-file) session=%s file=%s prompt=%s",
@@ -1081,6 +1136,8 @@ class ReviewOrchestrator:
         pr_number: int,
         head_sha: str,
         full_diff: str,
+        *,
+        pr_context: str = "",
     ) -> list[FindingV1]:
         # Single-shot mode: include the unified diff directly in the prompt so the
         # LLM can review the changes even if tool calls are unavailable or flaky.
@@ -1096,6 +1153,8 @@ class ReviewOrchestrator:
                 f"{full_diff}\n"
                 "```"
             )
+        if pr_context:
+            msg += f"\n\n{pr_context}"
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "LLM request (single-shot) session=%s prompt=%s",
@@ -1421,6 +1480,10 @@ class ReviewOrchestrator:
 
         pr_info_for_metadata = provider.get_pr_info(owner, repo, pr_number)
 
+        # Fetch context from linked GitHub Issues, Jira tickets, and Confluence pages.
+        # This is done early so context can be injected into the agent prompt.
+        pr_context = self._fetch_pr_context(provider, owner, repo, pr_number, pr_info_for_metadata)
+
         _, paths, full_diff = self._fetch_pr_files_and_diffs(provider, owner, repo, pr_number)
         paths = self._build_ignore_set_and_filter_files(paths)
         logger.info("Fetched diff, %d file(s) to review", len(paths))
@@ -1455,7 +1518,8 @@ class ReviewOrchestrator:
 
         session_id, session_service, runner = self._create_agent_and_runner(
             provider, review_standards, owner, repo, pr_number,
-            use_file_by_file=use_file_by_file
+            use_file_by_file=use_file_by_file,
+            pr_context=pr_context,
         )
 
         all_findings = self._run_agent_and_collect_findings(
@@ -1469,6 +1533,7 @@ class ReviewOrchestrator:
             paths,
             use_file_by_file,
             full_diff=full_diff,
+            pr_context=pr_context,
         )
 
         all_findings = self._filter_findings_by_diff_scope(all_findings, paths, full_diff)

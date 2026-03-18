@@ -79,6 +79,13 @@ class PRInfo(BaseModel):
     description: str = ""
 
 
+class CommitInfo(BaseModel):
+    """A single commit from a pull request."""
+
+    sha: str = ""
+    message: str = ""
+
+
 def pr_info_from_api_dict(data: dict, description_key: str = "body") -> PRInfo:
     """Build PRInfo from a provider API dict. Use description_key='description' for GitLab/Bitbucket."""
     title = data.get("title", "") or ""
@@ -330,3 +337,12 @@ class ProviderInterface(ABC):
         Default: None (skip check not supported).
         """
         return None
+
+    def get_pr_commits(self, owner: str, repo: str, pr_number: int) -> list[CommitInfo]:
+        """
+        Return commits included in the PR, each with its SHA and message.
+
+        Used to extract linked issue/ticket references from commit messages for
+        context-aware review. Default: empty list (provider does not support this).
+        """
+        return []
