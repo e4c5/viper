@@ -1150,13 +1150,28 @@ class ReviewOrchestrator:
         run_handle = observability.start_run(trace_id)
 
         cfg, llm_cfg, provider = self._load_config_and_provider()
+        
+        base_url = cfg.url.rstrip("/")
+        if cfg.provider == "github":
+            pr_url = f"{base_url}/{owner}/{repo}/pull/{pr_number}"
+        elif cfg.provider == "gitlab":
+            pr_url = f"{base_url}/{owner}/{repo}/-/merge_requests/{pr_number}"
+        elif cfg.provider == "bitbucket":
+            pr_url = f"https://bitbucket.org/{owner}/{repo}/pull-requests/{pr_number}"
+        elif cfg.provider == "bitbucket_server":
+            pr_url = f"{base_url}/projects/{owner}/repos/{repo}/pull-requests/{pr_number}"
+        else:
+            pr_url = f"{base_url}/{owner}/{repo}/pulls/{pr_number}"
+            
         logger.info(
-            "Reviewing %s/%s PR %s (provider=%s)",
+            "Reviewing %s/%s PR %s (provider=%s) URL: %s",
             owner,
             repo,
             pr_number,
             cfg.provider,
+            pr_url,
         )
+        print(f"Starting review for PR: {pr_url}")
 
         skip_result = self._determine_skip_reason(
             provider, cfg, owner, repo, pr_number, trace_id, start_time, run_handle
