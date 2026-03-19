@@ -88,23 +88,30 @@ Design principles:
 src/code_review/
 ├── __init__.py
 ├── __main__.py              # CLI: Typer app → run_review()
-├── config.py                 # SCMConfig, LLMConfig (Pydantic Settings); get_scm_config(), get_llm_config()
+├── config.py                 # SCMConfig, LLMConfig, ContextConfig (Pydantic Settings); get_scm_config(), get_llm_config(), get_context_config()
 ├── models.py                 # get_configured_model(), get_context_window(), get_max_output_tokens()
 ├── runner.py                 # run_review(); orchestration and ADK Runner
 ├── observability.py          # Optional Prometheus/OTel; start_run(), finish_run(), get_prometheus_registry()
 ├── agent/
 │   ├── __init__.py           # create_review_agent
-│   ├── agent.py              # create_review_agent(provider, review_standards, findings_only)
+│   ├── agent.py              # create_review_agent(provider, review_standards, findings_only, pr_context)
 │   └── tools/
 │       ├── __init__.py
 │       ├── gitea_tools.py    # create_gitea_tools(), create_findings_only_tools() — wrap ProviderInterface
 │       └── review_helpers.py # detect_language_context() — agent tool
+├── context/
+│   ├── __init__.py           # Re-exports ContextFetcher, Reference, ReferenceType, extract_references
+│   ├── extractor.py          # extract_references() — regex extraction of GitHub/Jira/Confluence refs
+│   ├── fetcher.py            # ContextFetcher.build_context() — orchestrate fetch + token budget
+│   ├── github_issues.py      # GitHubIssuesFetcher — fetch issue title, body, labels, comments
+│   ├── jira.py               # JiraFetcher — fetch Jira ticket fields and comments (plain text + ADF)
+│   └── confluence.py         # ConfluenceFetcher — fetch Confluence page by ID or URL; HTML→plain text
 ├── providers/
 │   ├── __init__.py           # get_provider(name, base_url, token); exports base types
-│   ├── base.py               # ProviderInterface, InlineComment, ReviewComment, FileInfo, PRInfo, ProviderCapabilities
+│   ├── base.py               # ProviderInterface, InlineComment, ReviewComment, FileInfo, PRInfo, CommitInfo, ProviderCapabilities
 │   ├── safety.py             # truncate_repo_content()
 │   ├── gitea.py              # GiteaProvider
-│   ├── github.py             # GitHubProvider
+│   ├── github.py             # GitHubProvider (implements get_pr_commits())
 │   ├── gitlab.py             # GitLabProvider
 │   └── bitbucket.py          # BitbucketProvider
 ├── schemas/
@@ -141,17 +148,18 @@ src/code_review/
 | 3 | **Skip review**: `provider.get_pr_info(owner, repo, pr_number)`; if skip label or title pattern matches → log, `finish_run`, return `[]`. |
 | 4 | **Existing comments**: `provider.get_existing_review_comments(...)`; build `ignore_set` with `_build_ignore_set()` (path + body hash, path + fingerprint from marker). |
 | 5 | **Idempotency**: If `head_sha` is set, build `run_id` from provider/owner/repo/pr/head_sha/agent_version/config_hash. If any existing comment body contains this run id in the marker → skip run, return `[]`. |
-| 6 | **PR files**: `provider.get_pr_files(owner, repo, pr_number)` → list of paths. |
-| 7 | **Language & standards**: `detect_from_paths(paths)` → `DetectedContext`; `get_review_standards(language, framework)` → string appended to agent instruction. |
-| 8 | **Agent**: `create_review_agent(provider, review_standards, findings_only=True)` → ADK `Agent` with model, instruction, tools, `generate_content_config`. |
-| 9 | **Session**: `InMemorySessionService()`; create session with `app_name`, `user_id`, `session_id`. |
-| 10 | **Runner**: `Runner(agent=agent, app_name=..., session_service=...)`. |
-| 11 | **Token budget**: `diff_budget = get_context_window() * DIFF_TOKEN_BUDGET_RATIO`; `full_diff = provider.get_pr_diff(...)`; if `_estimate_tokens(full_diff) > diff_budget` and there are paths → **file-by-file**: for each path, build user message “Review this PR … Review only this file: {path}”, call `runner.run(..., new_message=content)`, collect response, parse findings; else single message “Review this PR …”, one `runner.run()`, parse findings. |
-| 12 | **Parse**: `_findings_from_response(response_text)` extracts JSON array and maps to `FindingV1` (invalid entries skipped). |
-| 13 | **Filter**: For each finding, compute comment body and body hash; optionally `_fingerprint_for_finding()` using file lines at `head_sha`. Skip if `(path, body_hash)` or `(path, fingerprint)` in `ignore_set`; else append to `to_post`. |
-| 14 | **Optional**: If `print_findings`, print each finding to stdout. |
-| 15 | **Post** (if not dry_run and `to_post`): Require `head_sha`. For each finding, build `body` with `finding_to_comment_body()` and `format_comment_body_with_marker(fingerprint, version, run_id)`. Build list of `InlineComment`; call `provider.post_review_comments(...)`. On exception, fall back to posting one-by-one; on per-comment failure, post that finding as PR-level summary. Then `provider.post_pr_summary_comment(...)` with summary body. |
-| 16 | **Finish**: `_log_run_complete(...)`; `observability.finish_run(run_handle, ...)`; return list of findings that were (or would be) posted. |
+| 6 | **PR metadata + context enrichment** (opt-in): `provider.get_pr_info(...)` for title/description; if `CONTEXT_ENABLED=true`, `_fetch_pr_context()` calls `provider.get_pr_commits(...)`, extracts GitHub/Jira/Confluence references from the PR title, description, and commit messages, fetches their content, and assembles a `<context>…</context>` string for the prompt. |
+| 7 | **PR files**: `provider.get_pr_files(owner, repo, pr_number)` → list of paths. |
+| 8 | **Language & standards**: `detect_from_paths(paths)` → `DetectedContext`; `get_review_standards(language, framework)` → string appended to agent instruction. |
+| 9 | **Agent**: `create_review_agent(provider, review_standards, findings_only=True, pr_context=pr_context)` → ADK `Agent` with model, instruction (extended with `_CONTEXT_INSTRUCTION` when `pr_context` is non-empty), tools, `generate_content_config`. |
+| 10 | **Session**: `InMemorySessionService()`; create session with `app_name`, `user_id`, `session_id`. |
+| 11 | **Runner**: `Runner(agent=agent, app_name=..., session_service=...)`. |
+| 12 | **Token budget**: `diff_budget = get_context_window() * DIFF_TOKEN_BUDGET_RATIO`; `full_diff = provider.get_pr_diff(...)`; if `_estimate_tokens(full_diff) > diff_budget` and there are paths → **file-by-file**: for each path, build user message “Review this PR … Review only this file: {path}” (appending `pr_context` when present), call `runner.run(..., new_message=content)`, collect response, parse findings; else single message “Review this PR …” (appending `pr_context` when present), one `runner.run()`, parse findings. |
+| 13 | **Parse**: `_findings_from_response(response_text)` extracts JSON array and maps to `FindingV1` (invalid entries skipped). |
+| 14 | **Filter**: For each finding, compute comment body and body hash; optionally `_fingerprint_for_finding()` using file lines at `head_sha`. Skip if `(path, body_hash)` or `(path, fingerprint)` in `ignore_set`; else append to `to_post`. |
+| 15 | **Optional**: If `print_findings`, print each finding to stdout. |
+| 16 | **Post** (if not dry_run and `to_post`): Require `head_sha`. For each finding, build `body` with `finding_to_comment_body()` and `format_comment_body_with_marker(fingerprint, version, run_id)`. Build list of `InlineComment`; call `provider.post_review_comments(...)`. On exception, fall back to posting one-by-one; on per-comment failure, post that finding as PR-level summary. Then `provider.post_pr_summary_comment(...)` with summary body. |
+| 17 | **Finish**: `_log_run_complete(...)`; `observability.finish_run(run_handle, ...)`; return list of findings that were (or would be) posted. |
 
 ### 4.3 Where the LLM Is Used
 
@@ -171,7 +179,8 @@ The agent (inside ADK) uses `get_configured_model()` for the model and calls too
 
 - **SCMConfig**: `env_prefix="SCM_"`. Fields: `provider`, `url`, `token`, `owner`, `repo`, `pr_num`, `head_sha`, `base_sha`, `event`, `skip_label`, `skip_title_pattern`.
 - **LLMConfig**: `env_prefix="LLM_"`. Fields: `provider`, `model`, `context_window`, `max_output_tokens`, `temperature`, `disable_tool_calls`, `timeout_seconds`, `max_retries`.
-- **get_scm_config()**, **get_llm_config()**: Cached (lru_cache) so config is read once per process.
+- **ContextConfig**: `env_prefix="CONTEXT_"`. Fields: `enabled`, `github_issues_enabled`, `jira_enabled`, `jira_url`, `jira_email`, `jira_token`, `jira_project_keys`, `confluence_enabled`, `confluence_url`, `confluence_email`, `confluence_token`, `max_context_tokens`. Disabled by default.
+- **get_scm_config()**, **get_llm_config()**, **get_context_config()**: Cached so config is read once per process.
 
 ### 5.2 `models.py`
 
@@ -180,10 +189,11 @@ The agent (inside ADK) uses `get_configured_model()` for the model and calls too
 
 ### 5.3 `agent/agent.py`
 
-- **create_review_agent(provider, review_standards="", findings_only=True)**:
+- **create_review_agent(provider, review_standards="", findings_only=True, *, pr_context="")**:
   - If `findings_only`: tools from `create_findings_only_tools(provider)` (get_pr_diff, get_pr_diff_for_file, get_file_content, get_file_lines, get_pr_files, detect_language_context); instruction = `FINDINGS_ONLY_INSTRUCTION`.
   - Else: tools from `create_gitea_tools(provider)` (adds post_review_comment, get_existing_review_comments); instruction = `BASE_INSTRUCTION`.
   - Appends `review_standards` to instruction.
+  - If `pr_context` is non-empty, appends `_CONTEXT_INSTRUCTION` to the instruction so the LLM knows how to use the context block.
   - Builds `generate_content_config` from `get_llm_config()` (temperature, max_output_tokens).
   - Returns ADK `Agent(model=get_configured_model(), name="code_review_agent", instruction=..., tools=..., generate_content_config=...)`.
 
@@ -194,7 +204,7 @@ The agent (inside ADK) uses `get_configured_model()` for the model and calls too
 
 ### 5.5 `providers/`
 
-- **base.py**: Defines `ProviderInterface` (ABC) and shared types: `InlineComment`, `ReviewComment`, `FileInfo`, `PRInfo`, `ProviderCapabilities`. All concrete providers implement the same interface.
+- **base.py**: Defines `ProviderInterface` (ABC) and shared types: `InlineComment`, `ReviewComment`, `FileInfo`, `PRInfo`, `CommitInfo`, `ProviderCapabilities`. All concrete providers implement the same interface. The `get_pr_commits()` method returns a list of `CommitInfo` (sha + message) for context enrichment; the base implementation returns `[]` and GitHub overrides it.
 - **get_provider(name, base_url, token)**: Returns `GiteaProvider` | `GitHubProvider` | `GitLabProvider` | `BitbucketProvider` for `name` in `gitea` | `github` | `gitlab` | `bitbucket`.
 - **safety.py**: `truncate_repo_content(content, max_bytes)` used when feeding repo file content (e.g. README, AGENTS.md) to the agent to avoid unbounded context.
 
@@ -220,6 +230,27 @@ The agent (inside ADK) uses `get_configured_model()` for the model and calls too
 ### 5.10 `observability.py`
 
 - Optional. When `CODE_REVIEW_METRICS=prometheus` (or similar) or `CODE_REVIEW_TRACING=otel` is set and optional deps are installed: **start_run(trace_id)**, **finish_run(run_handle, owner, repo, pr_number, files_count, findings_count, posts_count, duration_seconds)**. Can expose Prometheus metrics and/or OTel spans. Runner calls these at start and end of each run.
+
+
+### 5.11 `context/`
+
+Opt-in context enrichment — disabled by default; enabled by `CONTEXT_ENABLED=true`.
+
+- **extractor.py**: `extract_references(text, owner, repo, jira_project_keys)` scans arbitrary text
+  for GitHub issue refs (`#N`, `GH-N`, full GitHub URLs), Jira ticket keys (`PROJ-NNN`, Jira browse
+  URLs), and Confluence page URLs. Returns a deduplicated `list[Reference]`.
+- **fetcher.py**: `ContextFetcher.build_context(pr_title, pr_description, commit_messages)` orchestrates
+  reference extraction, fetching, deduplication, and token-budget enforcement. Returns a
+  `<context>…</context>` string ready for injection into the LLM prompt, or empty string.
+- **github_issues.py**: `GitHubIssuesFetcher` — fetches issue title, state, labels, body, and comments
+  via the GitHub Issues REST API. Reuses `SCM_TOKEN`; no extra credentials needed.
+- **jira.py**: `JiraFetcher` — fetches Jira ticket summary, description (plain text or Atlassian
+  Document Format), issue type, status, priority, labels, and comments via Jira REST API v2.
+- **confluence.py**: `ConfluenceFetcher` — fetches Confluence pages by numeric ID or URL (supports
+  `/wiki/spaces/SPACE/pages/{id}/…` and `/wiki/display/SPACE/Title` patterns); strips HTML to plain
+  text. Credential-based Basic Auth (compatible with both Cloud and Server/DC).
+
+See [CONTEXT-AWARE-REVIEW.md](CONTEXT-AWARE-REVIEW.md) for the full feature guide.
 
 ---
 
@@ -322,6 +353,29 @@ Compare with and without this env var; if you get findings only with `LLM_DIFF_B
 - **Prometheus**: `CODE_REVIEW_METRICS=prometheus` or `CODE_REVIEW_PROMETHEUS=1`; optional deps: `pip install -e ".[observability]"`. Use `code_review.observability.get_prometheus_registry()` to expose `/metrics`.
 - **OpenTelemetry**: `CODE_REVIEW_TRACING=otel` or `CODE_REVIEW_OTEL=1`; set `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` for export.
 
+
+### 6.5 Context Enrichment (`CONTEXT_` prefix)
+
+Opt-in feature for cross-referencing code against linked GitHub Issues, Jira tickets, and
+Confluence pages. Disabled by default (`CONTEXT_ENABLED=false`).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CONTEXT_ENABLED` | `false` | Master switch. Set to `true` to activate. |
+| `CONTEXT_GITHUB_ISSUES_ENABLED` | `true` | Fetch linked GitHub Issue content. Uses `SCM_TOKEN`. |
+| `CONTEXT_JIRA_ENABLED` | `false` | Fetch linked Jira ticket content. |
+| `CONTEXT_JIRA_URL` | — | Jira base URL (e.g. `https://yourcompany.atlassian.net`). |
+| `CONTEXT_JIRA_EMAIL` | — | Email for Jira Basic-Auth. |
+| `CONTEXT_JIRA_TOKEN` | — | Jira API token. Treated as a secret. |
+| `CONTEXT_JIRA_PROJECT_KEYS` | — | Comma-separated project key prefixes (e.g. `PROJ,APP`) to restrict Jira extraction. |
+| `CONTEXT_CONFLUENCE_ENABLED` | `false` | Fetch linked Confluence page content. |
+| `CONTEXT_CONFLUENCE_URL` | — | Confluence base URL (e.g. `https://yourcompany.atlassian.net/wiki`). |
+| `CONTEXT_CONFLUENCE_EMAIL` | — | Email for Confluence Basic-Auth. |
+| `CONTEXT_CONFLUENCE_TOKEN` | — | Confluence API token. Treated as a secret. |
+| `CONTEXT_MAX_CONTEXT_TOKENS` | `20000` | Token budget for fetched context. Content is truncated when limit is reached. |
+
+See **[CONTEXT-AWARE-REVIEW.md](CONTEXT-AWARE-REVIEW.md)** for setup instructions, reference extraction patterns, and the token budget model.
+
 ---
 
 ## 7. Extension Points
@@ -355,6 +409,20 @@ Compare with and without this env var; if you get findings only with `LLM_DIFF_B
 ### 7.6 Programmatic Entry Point
 
 - **run_review(owner, repo, pr_number, head_sha="", *, dry_run=False, print_findings=False)** in `runner.py`: Use this when integrating the agent from another service or script instead of the CLI. Returns `list[FindingV1]` (findings that were or would be posted).
+
+### 7.7 Adding a New Context Source
+
+The context enrichment pipeline (`context/`) is designed for easy extension.
+
+1. **Add a `ReferenceType`** in `context/extractor.py` and extend `extract_references()` with the corresponding regex pattern(s).
+2. **Create a fetcher module** `context/my_source.py` that returns a human-readable string for a given identifier.
+3. **Wire into `ContextFetcher._fetch_reference()`** in `context/fetcher.py`.
+4. **Add credentials fields** to `ContextConfig` in `config.py` and document them in `.env.example`.
+5. **Add tests** under `tests/context/test_my_source.py` with mocked HTTP, following the pattern in `tests/context/test_jira.py`.
+
+For large-document sources where per-item content exceeds the token budget, consider a summarisation
+pre-pass or a RAG (Retrieval-Augmented Generation) approach inside `ContextFetcher.build_context()`.
+See [CONTEXT-AWARE-REVIEW.md §9](CONTEXT-AWARE-REVIEW.md#9-extension) for details.
 
 ---
 
