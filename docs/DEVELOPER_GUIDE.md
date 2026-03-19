@@ -420,9 +420,9 @@ The context enrichment pipeline (`context/`) is designed for easy extension.
 4. **Add credentials fields** to `ContextConfig` in `config.py` and document them in `.env.example`.
 5. **Add tests** under `tests/context/test_my_source.py` with mocked HTTP, following the pattern in `tests/context/test_jira.py`.
 
-For large-document sources where per-item content exceeds the token budget, consider a summarisation
-pre-pass or a RAG (Retrieval-Augmented Generation) approach inside `ContextFetcher.build_context()`.
-See [CONTEXT-AWARE-REVIEW.md §9](CONTEXT-AWARE-REVIEW.md#9-extension) for details.
+For a detailed discussion of when the current eager-inject approach is sufficient vs. when
+RAG or caching is appropriate, see
+[CONTEXT-AWARE-REVIEW.md §10](CONTEXT-AWARE-REVIEW.md#10-design-considerations-rag-vs-eager-fetch).
 
 ---
 

@@ -24,6 +24,7 @@ behaviour unless `CONTEXT_ENABLED=true` is set.
 7. [Token budget](#7-token-budget)
 8. [Architecture overview](#8-architecture-overview)
 9. [Extension — adding a new context source](#9-extension)
+10. [Design considerations: RAG vs. eager fetch](#10-design-considerations-rag-vs-eager-fetch)
 
 ---
 
@@ -213,6 +214,14 @@ If you find the context is being truncated too aggressively, increase
 `CONTEXT_MAX_CONTEXT_TOKENS` (e.g. `CONTEXT_MAX_CONTEXT_TOKENS=40000`) while ensuring it
 still leaves room for the diff and system prompt.
 
+> **When does truncation become a real problem?**  
+> For typical Jira tickets and GitHub issues (a few hundred to ~2 000 tokens each) the
+> default 20 000-token budget is generous and truncation rarely triggers. It becomes a
+> concern when PRs reference Confluence pages with tens of thousands of words, or when a
+> single PR references many issues. See
+> [§10 Design considerations: RAG vs. eager fetch](#10-design-considerations-rag-vs-eager-fetch)
+> for the planned path forward in those cases.
+
 ---
 
 ## 8. Architecture overview
@@ -332,19 +341,196 @@ Extend `ContextConfig` in `src/code_review/config.py` with the new credentials f
 Create `tests/context/test_linear.py` with mocked HTTP, following the pattern in
 `tests/context/test_jira.py` or `tests/context/test_github_issues.py`.
 
-### Handling large context (RAG)
+For guidance on handling very large documents from your new source, see
+[§10 Design considerations: RAG vs. eager fetch](#10-design-considerations-rag-vs-eager-fetch).
 
-The current implementation truncates to the configured token budget, which is sufficient for
-most issue-tracker entries. If your source can return very large documents (e.g. long
-Confluence pages, long Notion databases), consider one of these approaches before injecting
-into the prompt:
+---
 
-- **Per-item truncation** (already implemented): each item is truncated to the remaining
-  budget. Increase `CONTEXT_MAX_CONTEXT_TOKENS` and `LLM_CONTEXT_WINDOW` for large docs.
-- **Summarisation**: call an LLM pre-pass to summarise the fetched content to a fixed budget
-  before injecting it into the review prompt.
-- **RAG (Retrieval-Augmented Generation)**: embed the fetched content in a vector store,
-  then retrieve only the chunks most relevant to the changed files. This can be implemented
-  as a pre-processing step in `ContextFetcher.build_context()` before the items are joined.
-  The `httpx` dependency is already available; add a vector-store client (e.g. ChromaDB,
-  pgvector) as an optional dependency and gate it behind a config flag.
+## 10. Design considerations: RAG vs. eager fetch
+
+This section addresses two architectural questions that arise naturally as the
+context-enrichment feature grows:
+
+1. **Should we use RAG instead of injecting the full fetched content?**
+2. **Should we cache fetched content rather than re-fetching from Jira/GitHub on every run?**
+
+### 10.1 The current approach (eager fetch + inject)
+
+The implementation fetches each referenced document exactly once per review run and
+injects the combined text into the LLM prompt, capped by `CONTEXT_MAX_CONTEXT_TOKENS`.
+
+**This is the right default.** Here's why:
+
+- Jira tickets and GitHub issues are typically **small** — a few hundred to ~2 000 tokens
+  each. Even a PR that references 5 tickets will rarely exceed 10 000 tokens of context.
+- The 20 000-token default budget is larger than what most real-world PRs need, and modern
+  LLMs (Gemini 2.5, GPT-4o, Claude 3) have 128K–1M token context windows that can absorb
+  it without issue.
+- The approach is **stateless**: no vector store, no embeddings API, no infrastructure
+  beyond the existing SCM credentials. This matches the project's one-shot, no-long-running-
+  service design.
+- **Content relevance is already high**: because references are extracted from the PR itself
+  (title, description, commit messages), every fetched item was explicitly linked to this
+  change. Retrieval by semantic similarity rarely beats retrieval by explicit reference.
+
+### 10.2 When the current approach has real limitations
+
+The eager-inject model does have genuine failure modes worth knowing about:
+
+| Scenario | Problem | Severity |
+|----------|---------|---------|
+| Confluence design docs (10 000–100 000+ tokens each) | Content exceeds budget; later documents are truncated or dropped | Medium–High if design docs are long |
+| PRs referencing 20+ issues (e.g. a release summary PR) | Budget splits too thinly; each item is heavily truncated | Medium |
+| Multiple PRs reference the same popular issue/ticket | Same content is re-fetched and re-processed on every run | Low (latency/cost) |
+| Jira epics with 50+ comments | Comment thread exceeds per-item character limit | Low (already capped) |
+
+For teams where any of the first two scenarios is common, a smarter retrieval strategy is
+worth adding. For most teams starting with this feature, the default is fine.
+
+### 10.3 RAG: what it would look like here
+
+RAG for this use case means: instead of injecting the full text of referenced documents,
+break them into chunks, embed each chunk, and at review time retrieve only the chunks that
+are most semantically similar to the code changes.
+
+#### Data flow
+
+```
+Per referenced document (once per run, or cached from a previous run)
+│
+├── Split into chunks (e.g. 300–500 token paragraphs, with ~50-token overlap)
+│
+├── Embed each chunk  →  embedding API (OpenAI, Vertex AI, etc.)
+│
+└── Store in an in-memory vector store  (or persistent cache — see §10.4)
+          │
+          ▼  At query time
+Query = PR diff text (or per-file diff in file-by-file mode)
+          │
+          ▼
+          Similarity search (cosine / dot-product)  →  top-k chunks
+          │
+          ▼
+Inject only top-k chunks into the LLM prompt  (<context>…</context>)
+```
+
+#### What it changes architecturally
+
+| Component | Current | With RAG |
+|-----------|---------|----------|
+| `ContextFetcher.build_context()` | joins fetched text, truncates to budget | chunks text, embeds, retrieves top-k against diff |
+| Dependencies | `httpx` only | `httpx` + embedding client + vector-store library |
+| API calls per run | SCM/Jira/Confluence reads | same reads + N×embedding API calls |
+| Prompt size | up to `CONTEXT_MAX_CONTEXT_TOKENS` | k × chunk_size (bounded and predictable) |
+| Infrastructure | stateless | stateless (in-memory) or persistent (cache) |
+
+#### Implementation sketch
+
+```python
+# context/rag.py  (new optional module)
+
+class RAGContextBuilder:
+    """Build context via chunk-embed-retrieve instead of eager inject."""
+
+    def __init__(self, embedding_fn, top_k: int = 8, chunk_tokens: int = 400):
+        self._embed = embedding_fn
+        self._top_k = top_k
+        self._chunk_tokens = chunk_tokens
+        self._chunks: list[str] = []
+        self._embeddings: list[list[float]] = []
+
+    def add_document(self, text: str) -> None:
+        """Chunk a document and embed its chunks."""
+        for chunk in _split_into_chunks(text, self._chunk_tokens):
+            self._chunks.append(chunk)
+            self._embeddings.append(self._embed(chunk))
+
+    def retrieve(self, query: str) -> str:
+        """Return top-k chunks most relevant to query, joined."""
+        query_vec = self._embed(query)
+        scored = sorted(
+            zip(self._chunks, self._embeddings),
+            key=lambda t: _cosine(query_vec, t[1]),
+            reverse=True,
+        )
+        return "\n\n---\n\n".join(c for c, _ in scored[:self._top_k])
+```
+
+`ContextFetcher.build_context()` would call `rag_builder.add_document(fetched_text)` for
+each reference, then call `rag_builder.retrieve(diff_text)` to obtain the final injected
+context instead of the joined full text.
+
+#### Gating behind config
+
+Add a field to `ContextConfig`:
+
+```python
+rag_enabled: bool = False
+rag_embedding_model: str = "text-embedding-3-small"
+rag_top_k: int = 8
+```
+
+So the feature is entirely opt-in. The default remains the current eager-inject approach.
+
+### 10.4 Caching: avoiding re-fetches on every run
+
+The separate concern raised alongside RAG is that **the same Jira ticket or GitHub issue is
+re-fetched on every PR review run** — even if the ticket hasn't changed.
+
+This is purely a latency/rate-limit concern rather than a context-quality concern. A ticket
+is typically ~1–3 HTTP requests and <100 ms; for most teams this is negligible. It becomes
+meaningful when:
+
+- A high-volume monorepo has 50+ PRs a day, all referencing the same 5 core issues.
+- Jira has strict API rate limits or is accessed over a slow VPN.
+- Confluence pages are large and slow to download.
+
+#### Caching strategy
+
+The cleanest approach is an optional **in-process TTL cache** in `ContextFetcher`:
+
+```python
+# In ContextFetcher.__init__:
+self._cache: dict[str, tuple[str, float]] = {}   # key → (text, fetched_at)
+self._cache_ttl: float = 300.0                    # 5 minutes
+
+def _fetch_reference(self, ref: Reference) -> str:
+    now = time.monotonic()
+    if ref.key in self._cache:
+        text, fetched_at = self._cache[ref.key]
+        if now - fetched_at < self._cache_ttl:
+            return text
+    text = self._dispatch_fetch(ref)
+    self._cache[ref.key] = (text, now)
+    return text
+```
+
+This deduplicates re-fetches **within a single run** (already handled by the dedup logic
+in the extractor) and **across runs** when the `ContextFetcher` instance is reused (e.g.
+in a long-lived worker process).
+
+For the common CI/CD case where the runner is a one-shot container, per-run caching
+provides no benefit. A **persistent cache** (Redis, SQLite, or a local file) would help
+there, but introduces state. Given the project's stateless design, a persistent cache is
+a deployment concern: operators can already handle this by running the agent behind a
+reverse proxy or in a long-lived process that keeps the in-process cache warm.
+
+### 10.5 Recommended path forward
+
+| Situation | Recommendation |
+|-----------|---------------|
+| Typical team: PRs reference 1–5 small issues | Current eager-inject approach is sufficient. No changes needed. |
+| Long Confluence design docs | Increase `CONTEXT_MAX_CONTEXT_TOKENS` first. If documents are >20K tokens, add per-document summarisation (LLM pre-pass) before enabling RAG. |
+| 20+ issues per PR or large epics | Enable RAG (§10.3) once the optional module is implemented. |
+| High-volume CI with Jira rate limits | Add the in-process TTL cache in `ContextFetcher` (§10.4). No persistent storage required. |
+| Very high-volume or multi-tenant | Use a shared persistent cache (Redis/SQLite) keyed by `(source_type, identifier, content_hash)` with a configurable TTL. |
+
+The implementation order should be:
+
+1. **Summarisation pre-pass** — easiest to add, no new dependencies, handles large
+   individual documents without requiring an embedding API.
+2. **In-process TTL cache** — a small change to `ContextFetcher`, zero infrastructure.
+3. **RAG with in-memory vector store** — adds an embedding API dependency; appropriate
+   once teams hit context-quality limits that summarisation cannot solve.
+4. **Persistent vector store** — only if cross-run caching is needed and the team is
+   willing to maintain the additional infrastructure.
