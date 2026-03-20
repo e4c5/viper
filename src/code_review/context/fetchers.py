@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import httpx
 
-from code_review.context.errors import ContextAwareFatalError
+from code_review.context.errors import ContextAwareAuthError, ContextAwareFatalError
 from code_review.context.types import ContextReference, ReferenceType
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class FetchedDocument:
 def _raise_auth(method: str, url: str, status: int, body: str) -> None:
     if status in (401, 403):
         snippet = body[:200]
-        raise ContextAwareFatalError(
+        raise ContextAwareAuthError(
             f"Context fetch auth failed ({status}) for {method} {url}: {snippet}"
         )
 
@@ -54,7 +54,7 @@ def fetch_github_issue(
     repo: str,
     issue_number: str,
     timeout: float = 30.0,
-) -> FetchedDocument:
+) -> FetchedDocument | None:
     path = f"{api_base.rstrip('/')}/repos/{owner}/{repo}/issues/{issue_number}"
     headers = {
         "Accept": "application/vnd.github+json",
@@ -63,7 +63,8 @@ def fetch_github_issue(
     with httpx.Client(timeout=timeout) as client:
         r = client.get(path, headers=headers)
         if r.status_code == 404:
-            raise ContextAwareFatalError(f"GitHub issue not found: {owner}/{repo}#{issue_number}")
+            logger.warning("GitHub issue not found: %s/%s#%s", owner, repo, issue_number)
+            return None
         if r.status_code != 200:
             _raise_auth("GET", path, r.status_code, r.text)
             raise ContextAwareFatalError(f"GitHub issue fetch failed ({r.status_code}): {path}")
@@ -121,7 +122,7 @@ def fetch_gitlab_issue(
     project_path: str,
     issue_iid: str,
     timeout: float = 30.0,
-) -> FetchedDocument:
+) -> FetchedDocument | None:
     root = api_base.rstrip("/")
     proj = quote(project_path, safe="")
     path = f"{root}/projects/{proj}/issues/{issue_iid}"
@@ -129,7 +130,8 @@ def fetch_gitlab_issue(
     with httpx.Client(timeout=timeout) as client:
         r = client.get(path, headers=headers)
         if r.status_code == 404:
-            raise ContextAwareFatalError(f"GitLab issue not found: {project_path}#{issue_iid}")
+            logger.warning("GitLab issue not found: %s#%s", project_path, issue_iid)
+            return None
         if r.status_code != 200:
             _raise_auth("GET", path, r.status_code, r.text)
             raise ContextAwareFatalError(f"GitLab issue fetch failed ({r.status_code}): {path}")
@@ -159,14 +161,15 @@ def fetch_jira_issue(
     api_token: str,
     key: str,
     timeout: float = 30.0,
-) -> FetchedDocument:
+) -> FetchedDocument | None:
     root = base_url.rstrip("/")
     path = f"{root}/rest/api/3/issue/{key}"
     fields = "summary,description,issuetype,status,updated"
     with httpx.Client(timeout=timeout) as client:
         r = client.get(path, params={"fields": fields}, auth=(email, api_token))
         if r.status_code == 404:
-            raise ContextAwareFatalError(f"Jira issue not found: {key}")
+            logger.warning("Jira issue not found: %s", key)
+            return None
         if r.status_code != 200:
             _raise_auth("GET", path, r.status_code, r.text)
             raise ContextAwareFatalError(f"Jira fetch failed ({r.status_code}): {path}")
@@ -229,7 +232,7 @@ def fetch_confluence_page(
     api_token: str,
     page_id: str,
     timeout: float = 30.0,
-) -> FetchedDocument:
+) -> FetchedDocument | None:
     root = base_url.rstrip("/")
     # Cloud: https://tenant.atlassian.net → .../wiki/rest/api; already-/wiki base → .../rest/api
     api_root = f"{root}/rest/api" if root.rstrip("/").endswith("/wiki") else f"{root}/wiki/rest/api"
@@ -238,7 +241,8 @@ def fetch_confluence_page(
     with httpx.Client(timeout=timeout) as client:
         r = client.get(path, params=params, auth=(email, api_token))
         if r.status_code == 404:
-            raise ContextAwareFatalError(f"Confluence page not found: {page_id}")
+            logger.warning("Confluence page not found: %s", page_id)
+            return None
         if r.status_code != 200:
             _raise_auth("GET", path, r.status_code, r.text)
             raise ContextAwareFatalError(f"Confluence fetch failed ({r.status_code}): {path}")
@@ -294,10 +298,19 @@ def fetch_reference(
             return fetch_confluence_page(
                 confluence_base, confluence_email, confluence_token, ref.external_id
             )
-    except ContextAwareFatalError:
+    except ContextAwareAuthError:
+        # Auth/credential failures (401/403) are always fatal – re-raise so the runner
+        # surfaces a clear misconfiguration message to the operator.
         raise
+    except ContextAwareFatalError as e:
+        # Non-auth fatal errors (e.g. unexpected HTTP status) are downgraded to a
+        # warning so one unavailable external reference doesn't abort the whole review.
+        logger.warning("Skipping context reference %s: %s", ref.display, e)
+        return None
     except httpx.HTTPError as e:
-        raise ContextAwareFatalError(f"Context fetch HTTP error for {ref.display}: {e}") from e
+        logger.warning("Context fetch HTTP error for %s (skipping): %s", ref.display, e)
+        return None
     except Exception as e:
-        raise ContextAwareFatalError(f"Context fetch failed for {ref.display}: {e}") from e
+        logger.warning("Context fetch failed for %s (skipping): %s", ref.display, e)
+        return None
     return None

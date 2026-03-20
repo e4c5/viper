@@ -55,9 +55,10 @@ class ContextStore:
         ddl_sources = f"""
         CREATE TABLE IF NOT EXISTS {T_SOURCES} (
             id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-            name varchar(255) NOT NULL UNIQUE,
+            name varchar(255) NOT NULL,
             base_url text NOT NULL,
-            created_at timestamptz DEFAULT now()
+            created_at timestamptz DEFAULT now(),
+            UNIQUE (name, base_url)
         );
         """
         ddl_documents = f"""
@@ -87,6 +88,9 @@ class ContextStore:
         try:
             with conn.cursor() as cur:
                 cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                # pgcrypto provides gen_random_uuid() on PostgreSQL < 13;
+                # on PG 13+ it is built-in. Enabling it is harmless either way.
+                cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
                 cur.execute(ddl_sources)
                 cur.execute(ddl_documents)
                 cur.execute(ddl_chunks)
@@ -120,19 +124,24 @@ class ContextStore:
     def get_or_create_source(self, conn, name: str, base_url: str) -> uuid.UUID:
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT id FROM {T_SOURCES} WHERE name = %s",
-                (name,),
+                f"""
+                INSERT INTO {T_SOURCES} (name, base_url)
+                VALUES (%s, %s)
+                ON CONFLICT (name, base_url) DO NOTHING
+                RETURNING id
+                """,
+                (name, base_url),
             )
             row = cur.fetchone()
-            if row:
-                return row[0]
-            sid = uuid.uuid4()
-            cur.execute(
-                f"INSERT INTO {T_SOURCES} (id, name, base_url) VALUES (%s, %s, %s)",
-                (sid, name, base_url),
-            )
+            if row is None:
+                # Row already existed; fetch its id.
+                cur.execute(
+                    f"SELECT id FROM {T_SOURCES} WHERE name = %s AND base_url = %s",
+                    (name, base_url),
+                )
+                row = cur.fetchone()
         conn.commit()
-        return sid
+        return row[0]
 
     def load_document(
         self, conn, source_id: uuid.UUID, external_id: str

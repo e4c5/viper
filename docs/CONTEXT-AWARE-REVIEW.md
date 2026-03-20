@@ -24,7 +24,7 @@ behaviour unless `CONTEXT_AWARE_REVIEW_ENABLED=true` is set.
 7. [Context budget and Distillation](#7-context-budget-and-distillation)
 8. [RAG Implementation Details](#8-rag-implementation-details)
 9. [Architecture overview](#9-architecture-overview)
-10. [Extension — adding a new context source](#10-extension)
+10. [Extension — adding a new context source](#10-extension--adding-a-new-context-source)
 11. [Implementation roadmap](#11-implementation-roadmap)
 
 ---
@@ -227,7 +227,7 @@ This two-step process (Semantic Query -> RAG -> Distiller) ensures that the cont
 
 ## 9. Architecture overview
 
-```
+```text
 runner.py
 │
 ├── fetch PR metadata, files, diff, and commit messages
