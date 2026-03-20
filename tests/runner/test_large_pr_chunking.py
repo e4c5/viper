@@ -237,7 +237,9 @@ def test_single_shot_mode_creates_agent_with_no_tools(
 
     agents_created = []
 
-    def capture_create_review_agent(provider, standards="", findings_only=True, *, disable_tools=False):
+    def capture_create_review_agent(
+        provider, standards="", findings_only=True, *, disable_tools=False, context_brief_attached=False
+    ):
         agents_created.append({"disable_tools": disable_tools})
         mock_agent = MagicMock()
         mock_agent.name = "code_review_agent"
@@ -306,7 +308,9 @@ def test_file_by_file_mode_creates_agent_with_tools(
 
     agents_created = []
 
-    def capture_create_review_agent(provider, standards="", findings_only=True, *, disable_tools=False):
+    def capture_create_review_agent(
+        provider, standards="", findings_only=True, *, disable_tools=False, context_brief_attached=False
+    ):
         agents_created.append({"disable_tools": disable_tools})
         mock_agent = MagicMock()
         mock_agent.name = "code_review_agent"

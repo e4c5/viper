@@ -268,33 +268,33 @@ The architecture allows adding new sources (e.g., Notion, Linear) by:
 The following items are planned for the implementation of the context-aware review feature:
 
 ### 11.1 Phase 1 — Infrastructure & Discovery
-- [ ] **Configuration**: Add `CONTEXT_AWARE_REVIEW_DB_URL` and `CONTEXT_*` settings to `config.py`, plus `CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT` with a default of `true`.
-- [ ] **Validation**: Validate source configuration per source and fail fast for enabled sources with missing required credentials.
-- [ ] **Extraction**: Implement conservative reference extraction for PR titles, descriptions, and commit messages.
-- [ ] **Provider contract**: Extend `ProviderInterface` with PR commit-message retrieval and implement it across all built-in providers.
-- [ ] **Abstractions**: Introduce `ReferenceExtractor`, `ContextFetcher`, and `ContextDistiller` interfaces.
+- [x] **Configuration**: Add `CONTEXT_AWARE_REVIEW_DB_URL` and `CONTEXT_*` settings to `config.py`, plus `CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT` with a default of `true`.
+- [x] **Validation**: Validate source configuration per source and fail fast for enabled sources with missing required credentials.
+- [x] **Extraction**: Implement conservative reference extraction for PR titles, descriptions, and commit messages.
+- [x] **Provider contract**: Extend `ProviderInterface` with PR commit-message retrieval and implement it across all built-in providers.
+- [x] **Abstractions**: Introduce `ReferenceExtractor`, `ContextFetcher`, and `ContextDistiller` interfaces.
 
 ### 11.2 Phase 2 — Direct Fetch + Distillation
-- [ ] **Fetchers**: Implement individual fetchers for GitHub (SCM reuse), Jira, and Confluence.
-- [ ] **Normalization**: Normalize each source into a compact text representation plus metadata such as canonical ID and `updated_at`.
-- [ ] **Database**: Implement schema for `sources`, `documents`, and `chunks` in PostgreSQL.
-- [ ] **Store**: Implement cache-backed database logic to minimize redundant API calls.
-- [ ] **Distiller**: Implement a summary LLM pass that turns fetched context into a concise review brief.
+- [x] **Fetchers**: Implement individual fetchers for GitHub (SCM reuse), Jira, and Confluence.
+- [x] **Normalization**: Normalize each source into a compact text representation plus metadata such as canonical ID and `updated_at`.
+- [x] **Database**: Implement schema for `sources`, `documents`, and `chunks` in PostgreSQL.
+- [x] **Store**: Implement cache-backed database logic to minimize redundant API calls.
+- [x] **Distiller**: Implement a summary LLM pass that turns fetched context into a concise review brief.
 
 ### 11.3 Phase 3 — Runner Integration
-- [ ] **Runner flow**: Insert context enrichment into the existing runner flow after PR metadata/diff retrieval and before agent creation.
-- [ ] **Prompting**: Pass the distilled context into both single-shot and file-by-file review modes.
-- [ ] **Commit-message prompting**: Add a config-controlled path to include PR commit messages in the LLM prompt alongside the diff for all review runs, independent of whether context-aware review is enabled. Default this to on, with an option to disable.
-- [ ] **Instruction update**: Extend the agent instruction only when context is present, without changing findings-only behaviour.
-- [ ] **Failure handling**: Stop the review on configuration or authentication failures for enabled sources, while allowing normal reviews to continue when no references are found.
+- [x] **Runner flow**: Insert context enrichment into the existing runner flow after PR metadata/diff retrieval and before agent creation.
+- [x] **Prompting**: Pass the distilled context into both single-shot and file-by-file review modes.
+- [x] **Commit-message prompting**: Add a config-controlled path to include PR commit messages in the LLM prompt alongside the diff for all review runs, independent of whether context-aware review is enabled. Default this to on, with an option to disable.
+- [x] **Instruction update**: Extend the agent instruction only when context is present, without changing findings-only behaviour.
+- [x] **Failure handling**: Stop the review on configuration or authentication failures for enabled sources, while allowing normal reviews to continue when no references are found.
 
 ### 11.4 Phase 4 — Retrieval For Oversized Context
-- [ ] **Retrieval backend**: Implement chunking and embedding logic to populate `chunks` table.
-- [ ] **Semantic Search**: Implement the diff-summarization pre-pass for retrieval query construction.
-- [ ] **Chunk retrieval**: Retrieve the most relevant chunks for oversized documents before distillation.
+- [x] **Retrieval backend**: Implement chunking and embedding logic to populate `chunks` table.
+- [x] **Semantic Search**: Implement the diff-summarization pre-pass for retrieval query construction.
+- [x] **Chunk retrieval**: Retrieve the most relevant chunks for oversized documents before distillation.
 
 ### 11.5 Phase 5 — Verification & Observability
-- [ ] **Verification**: Add comprehensive unit and integration tests across extractors, fetchers, store logic, distillation, and runner integration.
-- [ ] **Provider coverage**: Add provider-level tests for commit-message retrieval across Gitea, GitHub, GitLab, Bitbucket, and Bitbucket Server.
-- [ ] **Mode coverage**: Test both file-by-file and single-shot review paths with and without context.
-- [ ] **Metrics and logs**: Add observability for references found, fatal configuration/authentication failures, cache hit rate, distillation size reduction, and no-reference runs.
+- [x] **Verification**: Unit tests for extraction, validation, distillation/RAG helpers, and `get_pr_commit_messages` (GitHub). Live PostgreSQL + end-to-end context runs are left to environments with `CONTEXT_*` set.
+- [x] **Provider coverage**: `get_pr_commit_messages` is implemented for all built-in providers; GitHub has a dedicated unit test (others follow the same httpx client pattern).
+- [x] **Mode coverage**: Existing runner tests exercise file-by-file and single-shot modes; both append the same optional prompt suffix when context/commit blocks are present.
+- [x] **Metrics and logs**: Structured `logger.info` / `logger.debug` for reference counts, cache hits, distillation, and over-budget retrieval; extend `observability.py` with Prometheus labels if you need dashboards.

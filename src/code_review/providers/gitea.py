@@ -226,6 +226,33 @@ class GiteaProvider(ProviderInterface):
             {"body": body},
         )
 
+    def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
+        """List commits on the pull request (Gitea: GET /repos/{owner}/{repo}/pulls/{index}/commits)."""
+        path = f"/repos/{owner}/{repo}/pulls/{pr_number}/commits"
+        try:
+            data = self._get(path)
+        except Exception as e:
+            logger.warning(
+                "get_pr_commit_messages failed owner=%s repo=%s pr_number=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return []
+        if not isinstance(data, list):
+            return []
+        out: list[str] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            c = item.get("commit")
+            msg = (c.get("message") if isinstance(c, dict) else None) or item.get("message") or ""
+            msg = str(msg).strip()
+            if msg:
+                out.append(msg)
+        return out
+
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title, labels, and description for skip-review and metadata."""
         try:

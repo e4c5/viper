@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from typing import Literal
 
 from code_review.context.types import ContextReference, ReferenceType
@@ -51,10 +52,10 @@ def _strip_markdown_code_fences(text: str) -> str:
 
 
 def extract_context_references(
-    *text_segments: str,
     scm_provider: Literal["gitea", "github", "gitlab", "bitbucket", "bitbucket_server"],
     owner: str,
     repo: str,
+    text_segments: Sequence[str],
     *,
     github_issue_same_repo: bool = True,
     extract_jira: bool = True,
@@ -62,7 +63,7 @@ def extract_context_references(
     extract_github: bool = True,
 ) -> list[ContextReference]:
     """
-    Parse PR title, description, and commit messages (pass as separate segments).
+    Parse PR title, description, and commit messages (``text_segments`` in order).
 
     ``#NNN`` is recognised only when ``scm_provider == \"github\"`` and
     ``github_issue_same_repo`` is True (assumed same repository).

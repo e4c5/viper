@@ -330,3 +330,12 @@ class ProviderInterface(ABC):
         Default: None (skip check not supported).
         """
         return None
+
+    def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
+        """
+        Return commit messages for commits in this PR/MR (oldest-first), one string per commit.
+
+        Used for reference extraction (context-aware review) and optional prompt enrichment.
+        Default: empty list (provider does not implement commit listing).
+        """
+        return []

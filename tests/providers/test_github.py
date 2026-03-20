@@ -41,6 +41,23 @@ def test_get_file_content(mock_client):
 
 
 @patch("code_review.providers.github.httpx.Client")
+def test_get_pr_commit_messages(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = [
+        {"commit": {"message": "first\n\nbody"}},
+        {"commit": {"message": "second line"}},
+    ]
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    msgs = p.get_pr_commit_messages("owner", "repo", 3)
+    assert msgs == ["first\n\nbody", "second line"]
+    call = mock_client.return_value.__enter__.return_value.get.call_args
+    assert "/pulls/3/commits" in call[0][0]
+
+
+@patch("code_review.providers.github.httpx.Client")
 def test_get_pr_files(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = [

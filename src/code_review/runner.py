@@ -15,14 +15,29 @@ from litellm import AuthenticationError
 import code_review
 from code_review import observability
 from code_review.agent import create_review_agent
-from code_review.config import get_llm_config, get_scm_config
+from code_review.config import (
+    get_code_review_app_config,
+    get_context_aware_config,
+    get_llm_config,
+    get_scm_config,
+)
+from code_review.context import (
+    ContextAwareFatalError,
+    build_context_brief_for_pr,
+    extract_context_references,
+    validate_context_aware_sources,
+)
 from code_review.diff.fingerprint import (
     build_fingerprint,
     format_comment_body_with_marker,
     parse_marker_from_comment_body,
     surrounding_content_hash,
 )
-from code_review.diff.parser import annotate_diff_with_line_numbers, iter_new_lines, parse_unified_diff
+from code_review.diff.parser import (
+    annotate_diff_with_line_numbers,
+    iter_new_lines,
+    parse_unified_diff,
+)
 from code_review.formatters.comment import finding_to_comment_body
 from code_review.models import get_context_window
 from code_review.providers import get_provider
@@ -46,6 +61,24 @@ except ValueError:
 def _estimate_tokens(text: str) -> int:
     """Rough token estimate (chars / 4) for diff and context budget checks."""
     return max(0, len(text) // 4)
+
+
+def _format_review_prompt_supplement(
+    *,
+    context_brief: str | None,
+    commit_messages: list[str],
+    include_commit_messages: bool,
+) -> str:
+    """Extra user-message blocks: commit summaries and distilled external context."""
+    parts: list[str] = []
+    if include_commit_messages and commit_messages:
+        lines = "\n".join(
+            f"- {(m.splitlines()[0] if m else '')[:500]}" for m in commit_messages[:100]
+        )
+        parts.append("### PR commit messages (subject / first line)\n" + lines)
+    if context_brief:
+        parts.append(context_brief)
+    return "\n\n".join(parts) if parts else ""
 
 
 def _normalize_path_for_anchor(file_path: str) -> str:
@@ -949,6 +982,7 @@ class ReviewOrchestrator:
         pr_number: int,
         *,
         use_file_by_file: bool = False,
+        context_brief_attached: bool = False,
     ):
         """
         Build the findings-only agent, session service, and ADK Runner.
@@ -979,6 +1013,7 @@ class ReviewOrchestrator:
             review_standards,
             findings_only=True,
             disable_tools=not use_file_by_file,
+            context_brief_attached=context_brief_attached,
         )
         session_id = f"{owner}/{repo}/pr-{pr_number}/{uuid.uuid4().hex[:12]}"
         session_service = InMemorySessionService()
@@ -1001,6 +1036,7 @@ class ReviewOrchestrator:
         paths: list[str],
         use_file_by_file: bool,
         full_diff: str = "",
+        prompt_suffix: str = "",
     ) -> list[FindingV1]:
         """
         Run the agent (file-by-file or single shot), parse response into FindingV1 list.
@@ -1019,6 +1055,7 @@ class ReviewOrchestrator:
                 pr_number,
                 head_sha,
                 paths,
+                prompt_suffix=prompt_suffix,
             )
         return self._run_single_shot_mode(
             runner,
@@ -1029,6 +1066,7 @@ class ReviewOrchestrator:
             pr_number,
             head_sha,
             full_diff,
+            prompt_suffix=prompt_suffix,
         )
 
     def _run_file_by_file_mode(
@@ -1040,6 +1078,8 @@ class ReviewOrchestrator:
         pr_number: int,
         head_sha: str,
         paths: list[str],
+        *,
+        prompt_suffix: str = "",
     ) -> list[FindingV1]:
         all_findings: list[FindingV1] = []
         for file_path in paths:
@@ -1065,6 +1105,8 @@ class ReviewOrchestrator:
                 + f' Then output a JSON array of findings for this file only. Use path "{file_path}" in every finding. '
                 "If there are no issues in this file, output exactly []."
             )
+            if prompt_suffix:
+                msg = msg + "\n\n" + prompt_suffix
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     "LLM request (file-by-file) session=%s file=%s prompt=%s",
@@ -1115,6 +1157,8 @@ class ReviewOrchestrator:
         pr_number: int,
         head_sha: str,
         full_diff: str,
+        *,
+        prompt_suffix: str = "",
     ) -> list[FindingV1]:
         # Single-shot mode: include the unified diff directly in the prompt so the
         # LLM can review the changes even if tool calls are unavailable or flaky.
@@ -1137,6 +1181,8 @@ class ReviewOrchestrator:
                 f"{annotated}\n"
                 "```"
             )
+        if prompt_suffix:
+            msg += "\n\n" + prompt_suffix
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "LLM request (single-shot) session=%s prompt=%s",
@@ -1460,6 +1506,15 @@ class ReviewOrchestrator:
             logger.info("Skipping run (idempotent: same head/config already reviewed)")
             return idempotency_result
 
+        ctx_cfg = get_context_aware_config()
+        app_cfg = get_code_review_app_config()
+        if ctx_cfg.enabled:
+            try:
+                validate_context_aware_sources(ctx_cfg, cfg)
+            except ContextAwareFatalError as e:
+                logger.error("Context-aware review configuration error: %s", e)
+                raise
+
         pr_info_for_metadata = provider.get_pr_info(owner, repo, pr_number)
 
         _, paths, full_diff = self._fetch_pr_files_and_diffs(provider, owner, repo, pr_number)
@@ -1487,6 +1542,44 @@ class ReviewOrchestrator:
             )
         _, review_standards = self._detect_languages_for_files(paths)
 
+        need_commits = app_cfg.include_commit_messages_in_prompt or ctx_cfg.enabled
+        _raw_commits = (
+            provider.get_pr_commit_messages(owner, repo, pr_number) if need_commits else []
+        )
+        # Tests and stubs may return a non-list (e.g. MagicMock); coerce defensively.
+        commit_messages = _raw_commits if isinstance(_raw_commits, list) else []
+        pr_title = (pr_info_for_metadata.title if pr_info_for_metadata else "") or ""
+        pr_desc = (pr_info_for_metadata.description if pr_info_for_metadata else "") or ""
+        refs = (
+            extract_context_references(
+                cfg.provider,
+                owner,
+                repo,
+                [pr_title, pr_desc, *commit_messages],
+                extract_github=ctx_cfg.github_issues_enabled,
+                extract_jira=ctx_cfg.jira_enabled,
+                extract_confluence=ctx_cfg.confluence_enabled,
+            )
+            if ctx_cfg.enabled
+            else []
+        )
+        context_brief: str | None = None
+        if ctx_cfg.enabled and refs:
+            try:
+                context_brief = build_context_brief_for_pr(ctx_cfg, cfg, refs, full_diff)
+            except ContextAwareFatalError:
+                logger.exception("Context-aware fetch or distillation failed")
+                raise
+        prompt_suffix = _format_review_prompt_supplement(
+            context_brief=context_brief,
+            commit_messages=commit_messages,
+            include_commit_messages=app_cfg.include_commit_messages_in_prompt,
+        )
+        if refs:
+            logger.info("context_aware: extracted %d reference(s) from PR text", len(refs))
+        if context_brief:
+            logger.info("context_aware: distilled context attached to review prompt")
+
         diff_budget = int(get_context_window() * DIFF_TOKEN_BUDGET_RATIO)
         use_file_by_file = _estimate_tokens(full_diff) > diff_budget
         if use_file_by_file:
@@ -1495,8 +1588,13 @@ class ReviewOrchestrator:
             logger.info("Running agent (single shot)")
 
         session_id, session_service, runner = self._create_agent_and_runner(
-            provider, review_standards, owner, repo, pr_number,
-            use_file_by_file=use_file_by_file
+            provider,
+            review_standards,
+            owner,
+            repo,
+            pr_number,
+            use_file_by_file=use_file_by_file,
+            context_brief_attached=bool(context_brief),
         )
 
         all_findings = self._run_agent_and_collect_findings(
@@ -1510,6 +1608,7 @@ class ReviewOrchestrator:
             paths,
             use_file_by_file,
             full_diff=full_diff,
+            prompt_suffix=prompt_suffix,
         )
 
         all_findings = self._filter_findings_by_diff_scope(all_findings, paths, full_diff)

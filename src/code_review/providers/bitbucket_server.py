@@ -411,6 +411,39 @@ class BitbucketServerProvider(ProviderInterface):
         path = self._path(owner, repo, "pull-requests", str(pr_number), "comments")
         self._post(path, {"text": body})
 
+    def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
+        """List commits on the pull request (paginated REST)."""
+        path = self._path(owner, repo, "pull-requests", str(pr_number), "commits")
+        out: list[str] = []
+        start = 0
+        for _ in range(500):
+            try:
+                data = self._get(path, params={"start": start, "limit": 50})
+            except Exception as e:
+                logger.warning(
+                    "get_pr_commit_messages failed owner=%s repo=%s pr_number=%s: %s",
+                    owner,
+                    repo,
+                    pr_number,
+                    e,
+                )
+                return out
+            if not isinstance(data, dict):
+                break
+            for item in data.get("values") or []:
+                if not isinstance(item, dict):
+                    continue
+                msg = str(item.get("message") or "").strip()
+                if msg:
+                    out.append(msg)
+            if data.get("isLastPage", True):
+                break
+            nxt = data.get("nextPageStart")
+            if nxt is None:
+                break
+            start = int(nxt)
+        return out
+
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title and description for skip-review. Labels from Server may vary."""
         try:

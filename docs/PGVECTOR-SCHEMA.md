@@ -2,6 +2,8 @@
 
 This document defines the normalized PostgreSQL schema with `pgvector` for storing and retrieving context (GitHub Issues, Jira tickets, Confluence pages) used in code reviews.
 
+**Implementation note:** The agent uses tables named `review_context_sources`, `review_context_documents`, and `review_context_chunks` (same columns and relationships as below) to avoid collisions in shared databases.
+
 ## Extensions
 The following extensions must be enabled in the PostgreSQL database:
 

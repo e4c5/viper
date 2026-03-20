@@ -218,6 +218,38 @@ class BitbucketProvider(ProviderInterface):
         path = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
         self._post(path, {"content": {"raw": body}})
 
+    def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
+        """List commits on the PR (paginated)."""
+        url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "commits")
+        out: list[str] = []
+        while url:
+            try:
+                data = self._get(url)
+            except Exception as e:
+                logger.warning(
+                    "get_pr_commit_messages failed owner=%s repo=%s pr_number=%s: %s",
+                    owner,
+                    repo,
+                    pr_number,
+                    e,
+                )
+                return out
+            if not isinstance(data, dict):
+                break
+            for item in data.get("values") or []:
+                if not isinstance(item, dict):
+                    continue
+                raw_m = item.get("message")
+                if isinstance(raw_m, dict):
+                    msg = (raw_m.get("raw") or "").strip()
+                else:
+                    msg = str(raw_m or "").strip()
+                if msg:
+                    out.append(msg)
+            nxt = data.get("next")
+            url = nxt.strip() if isinstance(nxt, str) and nxt.strip() else None
+        return out
+
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title, labels, and description for skip-review and metadata.
         Bitbucket Cloud REST API v2.0 does not support PR labels; labels will always be empty.

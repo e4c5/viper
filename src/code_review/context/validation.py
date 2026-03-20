@@ -21,10 +21,11 @@ def validate_context_aware_sources(
             "CONTEXT_AWARE_REVIEW_ENABLED is true but CONTEXT_AWARE_REVIEW_DB_URL is missing."
         )
     if ctx.github_issues_enabled:
-        if scm.provider != "github" and not (ctx.github_token and ctx.github_token.get_secret_value()):
+        has_gh_token = ctx.github_token and ctx.github_token.get_secret_value()
+        if scm.provider != "github" and not has_gh_token:
             raise ContextAwareFatalError(
-                "CONTEXT_GITHUB_ISSUES_ENABLED requires SCM_PROVIDER=github with SCM_TOKEN, "
-                "or CONTEXT_GITHUB_TOKEN (and CONTEXT_GITHUB_API_URL if not using api.github.com)."
+                "CONTEXT_GITHUB_ISSUES_ENABLED requires SCM_PROVIDER=github with SCM_TOKEN, or "
+                "CONTEXT_GITHUB_TOKEN (and CONTEXT_GITHUB_API_URL if not using api.github.com)."
             )
     if ctx.jira_enabled:
         if not ctx.jira_url:
@@ -35,7 +36,9 @@ def validate_context_aware_sources(
             raise ContextAwareFatalError("CONTEXT_JIRA_ENABLED requires CONTEXT_JIRA_TOKEN.")
     if ctx.confluence_enabled:
         if not ctx.confluence_url:
-            raise ContextAwareFatalError("CONTEXT_CONFLUENCE_ENABLED requires CONTEXT_CONFLUENCE_URL.")
+            raise ContextAwareFatalError(
+                "CONTEXT_CONFLUENCE_ENABLED requires CONTEXT_CONFLUENCE_URL."
+            )
         if not ctx.confluence_email.strip():
             raise ContextAwareFatalError(
                 "CONTEXT_CONFLUENCE_ENABLED requires CONTEXT_CONFLUENCE_EMAIL."

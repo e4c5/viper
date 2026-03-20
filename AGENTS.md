@@ -16,7 +16,7 @@ This file helps AI coding assistants (e.g. Cursor, Codex) work effectively on th
 |------|----------|--------|
 | **Entry point** | `src/code_review/__main__.py` | CLI: `code-review` → `run_review()` |
 | **Orchestration** | `src/code_review/runner.py` | Config, provider, skip/idempotency, agent run, filter, post |
-| **ADK agent** | `src/code_review/agent/agent.py` | `create_review_agent(provider, review_standards, findings_only)` |
+| **ADK agent** | `src/code_review/agent/agent.py` | `create_review_agent(..., context_brief_attached=...)` |
 | **Tools** | `src/code_review/agent/tools/gitea_tools.py` | Tools wrap `ProviderInterface`; used by ADK agent |
 | **SCM** | `src/code_review/providers/` | `base.py` = interface; `gitea.py`, `github.py`, `gitlab.py`, `bitbucket.py`, `bitbucket_server.py`; `get_provider()` in `__init__.py` |
 | **Config** | `src/code_review/config.py` | `SCMConfig`, `LLMConfig` (Pydantic Settings, `SCM_*`, `LLM_*` env) |
@@ -27,6 +27,7 @@ This file helps AI coding assistants (e.g. Cursor, Codex) work effectively on th
 | **Standards** | `src/code_review/standards/` | Language/framework detection; `prompts/` contains review prompt fragments |
 | **Formatters** | `src/code_review/formatters/comment.py` | `finding_to_comment_body()` |
 | **Observability** | `src/code_review/observability.py` | Optional Prometheus/OTel; used only in runner |
+| **Context-aware review** | `src/code_review/context/` | Optional linked-issue/Jira/Confluence enrichment; see `docs/CONTEXT-AWARE-REVIEW.md` |
 
 Tests mirror `src/`: `tests/test_runner.py`, `tests/providers/`, `tests/runner/`, `tests/cli/`, etc.
 
@@ -34,7 +35,7 @@ Tests mirror `src/`: `tests/test_runner.py`, `tests/providers/`, `tests/runner/`
 
 ## Conventions
 
-- **Configuration**: All env-based; no `.env` loading by default (matches `config.py`). SCM: `SCM_PROVIDER` (gitea, github, gitlab, bitbucket, bitbucket_server), `SCM_URL`, `SCM_TOKEN`, … LLM: `LLM_PROVIDER` (gemini, openai, anthropic, ollama, vertex, openrouter), `LLM_MODEL`, `LLM_API_KEY` (single key for the chosen provider). See `config.py` and `.env.example`.
+- **Configuration**: All env-based; no `.env` loading by default (matches `config.py`). SCM: `SCM_PROVIDER` (gitea, github, gitlab, bitbucket, bitbucket_server), `SCM_URL`, `SCM_TOKEN`, … LLM: `LLM_PROVIDER` (gemini, openai, anthropic, ollama, vertex, openrouter), `LLM_MODEL`, `LLM_API_KEY` (single key for the chosen provider). Optional context: `CONTEXT_*`, `CONTEXT_AWARE_REVIEW_*`, `CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT` — see `docs/CONTEXT-AWARE-REVIEW.md` and `.env.example`.
 - **New SCM**: Implement `ProviderInterface` in `providers/<name>.py`, register in `get_provider()` in `providers/__init__.py`, add tests under `tests/providers/test_<name>.py` with mocked HTTP.
 - **Agent behavior**: Instruction and tools are in `agent/agent.py` and `agent/tools/`. Findings-only mode: agent has no post/get_existing tools; runner does filtering and posting. For large diffs, the runner uses **single-shot mode** (tool-free) to reduce token usage.
 - **Testing**: Use `MockProvider` or `MagicMock` for the provider; **patch `google.adk.runners.Runner`** so `run()` yields a final event with JSON findings (no real LLM). Run: `pytest` (exclude `tests/e2e` unless `RUN_E2E=1`).
