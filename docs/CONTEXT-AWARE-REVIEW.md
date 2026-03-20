@@ -46,6 +46,9 @@ behaviour unless `CONTEXT_AWARE_REVIEW_ENABLED=true` is set.
    into a concise brief.
 6. **Prompt inclusion** — The distilled brief is wrapped in `<context>…</context>` tags
    and added to the review prompt by the runner.
+   Separately, PR commit messages can also be included alongside the diff to help the model
+   understand the author's stated intent. This is independent of context-aware review,
+   controlled by its own configuration flag, and enabled by default.
 7. **LLM instruction** — When context is present, the agent instruction is extended with
    guidance to cross-check code against the stated requirements and flag mismatches.
 
@@ -108,6 +111,12 @@ CONTEXT_JIRA_TOKEN=your_jira_api_token
 | `CONTEXT_CONFLUENCE_TOKEN` | — | Confluence API token (treated as a secret). |
 | `CONTEXT_MAX_BYTES` | `20000` | Threshold in bytes. Above this, RAG is used before distillation. |
 | `CONTEXT_DISTILLED_MAX_TOKENS` | `4000` | Maximum token budget for the distilled brief added to the review prompt. |
+
+### Additional review-prompt configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT` | `true` | Include PR commit messages alongside the diff in the review prompt for any review run, even when context-aware review is disabled. Set to `false` to disable. |
 
 ---
 
@@ -221,10 +230,11 @@ This two-step process (Semantic Query -> RAG -> Distiller) ensures that the cont
 ```
 runner.py
 │
-├── fetch PR metadata, files, and diff
+├── fetch PR metadata, files, diff, and commit messages
 ├── extract_context_references()
 │     ├── parse title / description / commit messages
 │     └── dedupe canonical references
+├── optionally include commit messages in the review prompt
 │
 ├── resolve_context()
 │     ├── Check ContextStore (cache hit?)
@@ -258,9 +268,10 @@ The architecture allows adding new sources (e.g., Notion, Linear) by:
 The following items are planned for the implementation of the context-aware review feature:
 
 ### 11.1 Phase 1 — Infrastructure & Discovery
-- [ ] **Configuration**: Add `CONTEXT_*` settings to `config.py`, including source-specific credentials and strict-mode controls.
+- [ ] **Configuration**: Add `CONTEXT_*` settings to `config.py`, plus `CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT` with a default of `true`.
 - [ ] **Validation**: Validate source configuration per source and fail fast for enabled sources with missing required credentials.
 - [ ] **Extraction**: Implement conservative reference extraction for PR titles, descriptions, and commit messages.
+- [ ] **Provider contract**: Extend `ProviderInterface` with PR commit-message retrieval and implement it across all built-in providers.
 - [ ] **Abstractions**: Introduce `ReferenceExtractor`, `ContextFetcher`, `ContextStore`, and `ContextDistiller` interfaces.
 
 ### 11.2 Phase 2 — Direct Fetch + Distillation
@@ -272,6 +283,7 @@ The following items are planned for the implementation of the context-aware revi
 ### 11.3 Phase 3 — Runner Integration
 - [ ] **Runner flow**: Insert context enrichment into the existing runner flow after PR metadata/diff retrieval and before agent creation.
 - [ ] **Prompting**: Pass the distilled context into both single-shot and file-by-file review modes.
+- [ ] **Commit-message prompting**: Add a config-controlled path to include PR commit messages in the LLM prompt alongside the diff for all review runs, independent of whether context-aware review is enabled. Default this to on, with an option to disable.
 - [ ] **Instruction update**: Extend the agent instruction only when context is present, without changing findings-only behaviour.
 - [ ] **Failure handling**: Stop the review on configuration or authentication failures for enabled sources, while allowing normal reviews to continue when no references are found.
 
@@ -282,5 +294,6 @@ The following items are planned for the implementation of the context-aware revi
 
 ### 11.5 Phase 5 — Verification & Observability
 - [ ] **Verification**: Add comprehensive unit and integration tests across extractors, fetchers, store logic, distillation, and runner integration.
+- [ ] **Provider coverage**: Add provider-level tests for commit-message retrieval across Gitea, GitHub, GitLab, Bitbucket, and Bitbucket Server.
 - [ ] **Mode coverage**: Test both file-by-file and single-shot review paths with and without context.
-- [ ] **Metrics and logs**: Add observability for references found, fetch failures, cache hit rate, distillation size reduction, and fallback-to-no-context events.
+- [ ] **Metrics and logs**: Add observability for references found, fatal configuration/authentication failures, cache hit rate, distillation size reduction, and no-reference runs.
