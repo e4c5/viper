@@ -8,6 +8,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SCM_CONFIG: "SCMConfig | None" = None
 _LLM_CONFIG: "LLMConfig | None" = None
+_CONTEXT_AWARE_CONFIG: "ContextAwareReviewConfig | None" = None
+_CODE_REVIEW_APP_CONFIG: "CodeReviewAppConfig | None" = None
 
 
 class SCMConfig(BaseSettings):
@@ -115,6 +117,79 @@ class LLMConfig(BaseSettings):
         return SecretStr(normalized)
 
 
+class ContextAwareReviewConfig(BaseSettings):
+    """Optional context enrichment (issues, Jira, Confluence). Env vars per docs/CONTEXT-AWARE-REVIEW.md."""
+
+    model_config = SettingsConfigDict(extra="ignore", case_sensitive=False)
+
+    enabled: bool = Field(default=False, validation_alias="CONTEXT_AWARE_REVIEW_ENABLED")
+    db_url: str | None = Field(default=None, validation_alias="CONTEXT_AWARE_REVIEW_DB_URL")
+    github_issues_enabled: bool = Field(
+        default=True, validation_alias="CONTEXT_GITHUB_ISSUES_ENABLED"
+    )
+    jira_enabled: bool = Field(default=False, validation_alias="CONTEXT_JIRA_ENABLED")
+    jira_url: str = Field(default="", validation_alias="CONTEXT_JIRA_URL")
+    jira_email: str = Field(default="", validation_alias="CONTEXT_JIRA_EMAIL")
+    jira_token: SecretStr | None = Field(default=None, validation_alias="CONTEXT_JIRA_TOKEN")
+    confluence_enabled: bool = Field(default=False, validation_alias="CONTEXT_CONFLUENCE_ENABLED")
+    confluence_url: str = Field(default="", validation_alias="CONTEXT_CONFLUENCE_URL")
+    confluence_email: str = Field(default="", validation_alias="CONTEXT_CONFLUENCE_EMAIL")
+    confluence_token: SecretStr | None = Field(
+        default=None, validation_alias="CONTEXT_CONFLUENCE_TOKEN"
+    )
+    max_bytes: int = Field(default=20_000, ge=1024, validation_alias="CONTEXT_MAX_BYTES")
+    distilled_max_tokens: int = Field(
+        default=4000, ge=256, validation_alias="CONTEXT_DISTILLED_MAX_TOKENS"
+    )
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        validation_alias="CONTEXT_EMBEDDING_MODEL",
+    )
+    embedding_dimensions: int = Field(
+        default=1536,
+        ge=256,
+        le=8192,
+        validation_alias="CONTEXT_EMBEDDING_DIMENSIONS",
+    )
+    github_api_url: str = Field(
+        default="",
+        validation_alias="CONTEXT_GITHUB_API_URL",
+        description="Override GitHub API base when SCM is not github (e.g. Enterprise API root).",
+    )
+    github_token: SecretStr | None = Field(
+        default=None,
+        validation_alias="CONTEXT_GITHUB_TOKEN",
+        description="Token for GitHub Issues API when SCM_PROVIDER is not github.",
+    )
+
+    @field_validator("jira_token", "confluence_token", "github_token", mode="before")
+    @classmethod
+    def _normalize_optional_secrets(cls, v: str | SecretStr | None) -> SecretStr | None:
+        if v is None:
+            return None
+        raw = v.get_secret_value() if isinstance(v, SecretStr) else str(v)
+        normalized = raw.strip()
+        if not normalized:
+            return None
+        return SecretStr(normalized)
+
+    @field_validator("jira_url", "confluence_url", mode="after")
+    @classmethod
+    def _strip_urls(cls, v: str) -> str:
+        return (v or "").strip().rstrip("/")
+
+
+class CodeReviewAppConfig(BaseSettings):
+    """Runner-level options not tied to SCM/LLM prefixes."""
+
+    model_config = SettingsConfigDict(extra="ignore", case_sensitive=False)
+
+    include_commit_messages_in_prompt: bool = Field(
+        default=True,
+        validation_alias="CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT",
+    )
+
+
 def get_scm_config() -> SCMConfig:
     """Return cached SCM config instance."""
     global _SCM_CONFIG
@@ -131,8 +206,26 @@ def get_llm_config() -> LLMConfig:
     return _LLM_CONFIG
 
 
+def get_context_aware_config() -> ContextAwareReviewConfig:
+    """Return cached context-aware review config."""
+    global _CONTEXT_AWARE_CONFIG
+    if _CONTEXT_AWARE_CONFIG is None:
+        _CONTEXT_AWARE_CONFIG = ContextAwareReviewConfig()
+    return _CONTEXT_AWARE_CONFIG
+
+
+def get_code_review_app_config() -> CodeReviewAppConfig:
+    """Return cached app-level review config (prompt toggles, etc.)."""
+    global _CODE_REVIEW_APP_CONFIG
+    if _CODE_REVIEW_APP_CONFIG is None:
+        _CODE_REVIEW_APP_CONFIG = CodeReviewAppConfig()
+    return _CODE_REVIEW_APP_CONFIG
+
+
 def reset_config_cache() -> None:
     """Reset cached config instances. Intended for use in tests."""
-    global _SCM_CONFIG, _LLM_CONFIG
+    global _SCM_CONFIG, _LLM_CONFIG, _CONTEXT_AWARE_CONFIG, _CODE_REVIEW_APP_CONFIG
     _SCM_CONFIG = None
     _LLM_CONFIG = None
+    _CONTEXT_AWARE_CONFIG = None
+    _CODE_REVIEW_APP_CONFIG = None
