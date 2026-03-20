@@ -235,7 +235,7 @@ class GiteaProvider(ProviderInterface):
         page = 1
         limit = 50
         max_pages = 500
-                for _ in range(max_pages):
+        for _ in range(max_pages):
             try:
                 data = self._get(path, params={"limit": limit, "page": page})
             except Exception as e:

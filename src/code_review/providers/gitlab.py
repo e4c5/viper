@@ -264,12 +264,12 @@ class GitLabProvider(ProviderInterface):
                 break
             if not isinstance(data, list):
                 break
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                msg = (item.get("message") or item.get("title") or "").strip()
-                if msg:
-                    out.append(msg)
+            out.extend(
+                msg for item in data
+                if isinstance(item, dict)
+                for msg in [(item.get("message") or item.get("title") or "").strip()]
+                if msg
+            )
             if len(data) < per_page:
                 break
             page += 1
