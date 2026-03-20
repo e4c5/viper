@@ -9,7 +9,6 @@ The following extensions must be enabled in the PostgreSQL database:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 ```
 
 ## Schema Diagrams
@@ -29,17 +28,20 @@ Stores configuration and metadata for different context providers.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | `uuid` | `PRIMARY KEY, DEFAULT uuid_generate_v4()` | Unique identifier for the source. |
-| `name` | `varchar(255)` | `NOT NULL, UNIQUE` | Name of the source (e.g., 'github', 'jira', 'confluence'). |
+| `id` | `uuid` | `PRIMARY KEY, DEFAULT gen_random_uuid()` | Unique identifier for the source. |
+| `name` | `varchar(255)` | `NOT NULL` | Name of the source (e.g., 'github', 'jira', 'confluence'). |
 | `base_url` | `text` | `NOT NULL` | The base URL for the source API/web interface. |
 | `created_at` | `timestamp with time zone` | `DEFAULT now()` | Record creation timestamp. |
+
+**Indexes:**
+- `UNIQUE (name, base_url)`: Prevents cross-instance cache collisions when multiple GitHub/Jira/Confluence roots share the same database.
 
 ### 2. `documents`
 Stores the normalized content of a fetched reference.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | `uuid` | `PRIMARY KEY, DEFAULT uuid_generate_v4()` | Unique identifier for the document. |
+| `id` | `uuid` | `PRIMARY KEY, DEFAULT gen_random_uuid()` | Unique identifier for the document. |
 | `source_id` | `uuid` | `REFERENCES sources(id) ON DELETE CASCADE` | Link to the source. |
 | `external_id` | `varchar(1024)` | `NOT NULL` | The ID in the remote system (e.g., 'PROJ-123', 'issue#42'). |
 | `content` | `text` | `NOT NULL` | The full normalized text/markdown content. |
@@ -56,7 +58,7 @@ Segments of a document used for vector similarity search.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | `uuid` | `PRIMARY KEY, DEFAULT uuid_generate_v4()` | Unique identifier for the chunk. |
+| `id` | `uuid` | `PRIMARY KEY, DEFAULT gen_random_uuid()` | Unique identifier for the chunk. |
 | `document_id` | `uuid` | `REFERENCES documents(id) ON DELETE CASCADE` | Link to the parent document. |
 | `chunk_index` | `integer` | `NOT NULL` | The order of the chunk within the document. |
 | `content` | `text` | `NOT NULL` | The text content of this specific chunk. |
@@ -68,7 +70,7 @@ Segments of a document used for vector similarity search.
 - `embedding`: HNSW or IVFFlat index for fast similarity search.
 
 ```sql
-CREATE INDEX ON chunks USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON review_context_chunks USING hnsw (embedding vector_cosine_ops);
 ```
 
 ---

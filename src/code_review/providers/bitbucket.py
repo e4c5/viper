@@ -222,7 +222,14 @@ class BitbucketProvider(ProviderInterface):
         """List commits on the PR (paginated)."""
         url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "commits")
         out: list[str] = []
+        visited: set[str] = set()
         while url:
+            if url in visited:
+                logger.warning(
+                    "Bitbucket pagination loop detected (same next URL returned twice): %s", url
+                )
+                break
+            visited.add(url)
             data = self._safe_get_commit_page(url, owner, repo, pr_number)
             if data is None:
                 return out

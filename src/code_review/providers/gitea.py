@@ -231,12 +231,21 @@ class GiteaProvider(ProviderInterface):
     def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
         """List commits on the pull request (Gitea: GET /repos/{owner}/{repo}/pulls/{index}/commits)."""
         path = f"/repos/{owner}/{repo}/pulls/{pr_number}/commits"
-        try:
-            data = self._get(path)
-        except Exception as e:
-            _log_pr_commit_messages_warning(logger, owner, repo, pr_number, e)
-            return []
-        return commit_messages_from_commit_list(data)
+        out: list[str] = []
+        page = 1
+        limit = 50
+        while True:
+            try:
+                data = self._get(path, params={"limit": limit, "page": page})
+            except Exception as e:
+                _log_pr_commit_messages_warning(logger, owner, repo, pr_number, e)
+                break
+            batch = commit_messages_from_commit_list(data)
+            out.extend(batch)
+            if not isinstance(data, list) or len(data) < limit:
+                break
+            page += 1
+        return out
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title, labels, and description for skip-review and metadata."""

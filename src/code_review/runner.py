@@ -1564,6 +1564,16 @@ class ReviewOrchestrator:
                 validate_context_aware_sources(ctx_cfg, cfg)
             except ContextAwareFatalError as e:
                 logger.error("Context-aware review configuration error: %s", e)
+                observability.finish_run(
+                    run_handle,
+                    owner,
+                    repo,
+                    pr_number,
+                    files_count=0,
+                    findings_count=0,
+                    posts_count=0,
+                    duration_seconds=(time.perf_counter() - start_time),
+                )
                 raise
 
         pr_info_for_metadata = provider.get_pr_info(owner, repo, pr_number)

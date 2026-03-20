@@ -36,11 +36,11 @@ def build_semantic_query_from_diff(diff_text: str, max_diff_chars: int = 14_000)
             max_tokens=256,
             temperature=llm.temperature,
         )
-        choice = (resp.get("choices") or [{}])[0]
-        msg = choice.get("message") or {}
-        text = msg.get("content")
-        if isinstance(text, str) and text.strip():
-            return text.strip()
+        choices = getattr(resp, "choices", None) or []
+        if choices:
+            text = getattr(getattr(choices[0], "message", None), "content", None)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
     except Exception as e:
         logger.warning("Semantic query LLM pass failed, falling back to heuristics: %s", e)
     paths = set(re.findall(r"^[+-]{3} [ab]/(.+)$", snippet, re.MULTILINE))
@@ -50,6 +50,14 @@ def build_semantic_query_from_diff(diff_text: str, max_diff_chars: int = 14_000)
 
 def chunk_plain_text(text: str, max_chunk_chars: int = 1800, overlap: int = 200) -> list[str]:
     """Split long text into overlapping segments for embedding."""
+    if max_chunk_chars <= 0:
+        raise ValueError(f"max_chunk_chars must be positive, got {max_chunk_chars}")
+    if overlap < 0:
+        raise ValueError(f"overlap must be non-negative, got {overlap}")
+    if overlap >= max_chunk_chars:
+        raise ValueError(
+            f"overlap ({overlap}) must be less than max_chunk_chars ({max_chunk_chars})"
+        )
     text = text.strip()
     if len(text) <= max_chunk_chars:
         return [text] if text else []

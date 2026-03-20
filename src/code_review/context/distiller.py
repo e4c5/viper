@@ -84,9 +84,10 @@ def distill_context_text(
     except Exception as e:
         logger.warning("Context distillation LLM call failed: %s", e)
         return raw_context[:8000] + ("\n…" if len(raw_context) > 8000 else "")
-    choice = (resp.get("choices") or [{}])[0]
-    msg = choice.get("message") or {}
-    content = msg.get("content")
+    choices = getattr(resp, "choices", None) or []
+    if not choices:
+        return raw_context[:8000] + ("\n…" if len(raw_context) > 8000 else "")
+    content = getattr(getattr(choices[0], "message", None), "content", None)
     distilled = _distilled_text_from_content(content)
     if distilled:
         return distilled

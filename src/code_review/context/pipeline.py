@@ -94,8 +94,8 @@ def _load_context_documents(
     docs_for_distill: list[tuple[str, str]] = []
     doc_ids_for_rag: list[tuple[str, object]] = []
     conn = store.connect()
-    store.ensure_schema(conn)
     try:
+        store.ensure_schema(conn)
         for ref in applicable:
             src_name, base = _source_name_and_base(ref, ctx, scm)
             if not base and ref.ref_type != ReferenceType.GITHUB_ISSUE:
@@ -120,6 +120,7 @@ def _load_context_documents(
                     confluence_email=conf_email,
                     confluence_token=conf_tok,
                     ctx_github_enabled=ctx.github_issues_enabled,
+                    ctx_gitlab_enabled=ctx.gitlab_issues_enabled,
                     ctx_jira_enabled=ctx.jira_enabled,
                     ctx_confluence_enabled=ctx.confluence_enabled,
                 )
