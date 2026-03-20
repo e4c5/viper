@@ -33,6 +33,9 @@ class MockProvider:
     def get_pr_info(self, owner, repo, pr_number):
         return None
 
+    def get_pr_commit_messages(self, owner, repo, pr_number):
+        return []
+
     def capabilities(self):
         return ProviderCapabilities(
             resolvable_comments=False,

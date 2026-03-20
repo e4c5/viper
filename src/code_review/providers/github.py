@@ -13,7 +13,9 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    _log_pr_commit_messages_warning,
     _log_pr_info_warning,
+    commit_messages_from_commit_list,
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
@@ -152,6 +154,16 @@ class GitHubProvider(ProviderInterface):
     def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
         """Post PR-level comment (GitHub: issues comments endpoint for PRs)."""
         self._post(f"/repos/{owner}/{repo}/issues/{pr_number}/comments", {"body": body})
+
+    def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
+        """List commits on the PR (GitHub: GET /pulls/{id}/commits)."""
+        path = f"/repos/{owner}/{repo}/pulls/{pr_number}/commits"
+        try:
+            data = self._get(path, params={"per_page": 100})
+        except Exception as e:
+            _log_pr_commit_messages_warning(logger, owner, repo, pr_number, e)
+            return []
+        return commit_messages_from_commit_list(data)
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title, labels, and description for skip-review and metadata."""

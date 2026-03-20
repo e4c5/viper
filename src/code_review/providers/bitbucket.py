@@ -218,6 +218,65 @@ class BitbucketProvider(ProviderInterface):
         path = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
         self._post(path, {"content": {"raw": body}})
 
+    def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
+        """List commits on the PR (paginated)."""
+        url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "commits")
+        out: list[str] = []
+        visited: set[str] = set()
+        while url:
+            if url in visited:
+                logger.warning(
+                    "Bitbucket pagination loop detected (same next URL returned twice): %s", url
+                )
+                break
+            visited.add(url)
+            data = self._safe_get_commit_page(url, owner, repo, pr_number)
+            if data is None:
+                return out
+            out.extend(self._messages_from_commit_page(data))
+            url = self._next_page_url(data)
+        return out
+
+    def _safe_get_commit_page(
+        self,
+        url: str,
+        owner: str,
+        repo: str,
+        pr_number: int,
+    ) -> dict[str, Any] | None:
+        try:
+            data = self._get(url)
+        except Exception as e:
+            logger.warning(
+                "get_pr_commit_messages failed owner=%s repo=%s pr_number=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
+        if not isinstance(data, dict):
+            return None
+        return data
+
+    @staticmethod
+    def _messages_from_commit_page(data: dict[str, Any]) -> list[str]:
+        out: list[str] = []
+        for item in data.get("values") or []:
+            if not isinstance(item, dict):
+                continue
+            raw_m = item.get("message")
+            msg = (raw_m.get("raw") if isinstance(raw_m, dict) else raw_m) or ""
+            msg = str(msg).strip()
+            if msg:
+                out.append(msg)
+        return out
+
+    @staticmethod
+    def _next_page_url(data: dict[str, Any]) -> str | None:
+        nxt = data.get("next")
+        return nxt.strip() if isinstance(nxt, str) and nxt.strip() else None
+
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title, labels, and description for skip-review and metadata.
         Bitbucket Cloud REST API v2.0 does not support PR labels; labels will always be empty.

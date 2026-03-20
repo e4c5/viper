@@ -15,7 +15,9 @@ from code_review.providers.base import (
     ProviderInterface,
     RateLimitError,
     ReviewComment,
+    _log_pr_commit_messages_warning,
     _log_pr_info_warning,
+    commit_messages_from_commit_list,
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
@@ -225,6 +227,26 @@ class GiteaProvider(ProviderInterface):
             f"/repos/{owner}/{repo}/issues/{pr_number}/comments",
             {"body": body},
         )
+
+    def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
+        """List commits on the pull request (Gitea: GET /repos/{owner}/{repo}/pulls/{index}/commits)."""
+        path = f"/repos/{owner}/{repo}/pulls/{pr_number}/commits"
+        out: list[str] = []
+        page = 1
+        limit = 50
+        max_pages = 500
+        for _ in range(max_pages):
+            try:
+                data = self._get(path, params={"limit": limit, "page": page})
+            except Exception as e:
+                _log_pr_commit_messages_warning(logger, owner, repo, pr_number, e)
+                break
+            batch = commit_messages_from_commit_list(data)
+            out.extend(batch)
+            if not isinstance(data, list) or len(data) < limit:
+                break
+            page += 1
+        return out
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title, labels, and description for skip-review and metadata."""

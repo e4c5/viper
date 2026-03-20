@@ -15,14 +15,29 @@ from litellm import AuthenticationError
 import code_review
 from code_review import observability
 from code_review.agent import create_review_agent
-from code_review.config import get_llm_config, get_scm_config
+from code_review.config import (
+    get_code_review_app_config,
+    get_context_aware_config,
+    get_llm_config,
+    get_scm_config,
+)
+from code_review.context import (
+    ContextAwareFatalError,
+    build_context_brief_for_pr,
+    extract_context_references,
+    validate_context_aware_sources,
+)
 from code_review.diff.fingerprint import (
     build_fingerprint,
     format_comment_body_with_marker,
     parse_marker_from_comment_body,
     surrounding_content_hash,
 )
-from code_review.diff.parser import annotate_diff_with_line_numbers, iter_new_lines, parse_unified_diff
+from code_review.diff.parser import (
+    annotate_diff_with_line_numbers,
+    iter_new_lines,
+    parse_unified_diff,
+)
 from code_review.formatters.comment import finding_to_comment_body
 from code_review.models import get_context_window
 from code_review.providers import get_provider
@@ -48,8 +63,89 @@ def _estimate_tokens(text: str) -> int:
     return max(0, len(text) // 4)
 
 
+def _format_review_prompt_supplement(
+    *,
+    context_brief: str | None,
+    commit_messages: list[str],
+    include_commit_messages: bool,
+    remaining_tokens: int | None = None,
+) -> str:
+    """Extra user-message blocks: commit summaries and distilled external context."""
+    max_chars = _supplement_char_budget(remaining_tokens)
+    if max_chars == 0:
+        return ""
+
+    parts: list[str] = []
+    used_chars = 0
+    if include_commit_messages and commit_messages:
+        commit_block = _build_commit_messages_block(
+            commit_messages=commit_messages,
+            max_chars=max_chars,
+            already_used_chars=used_chars,
+        )
+        if commit_block:
+            parts.append(commit_block)
+            used_chars += len(commit_block)
+    if context_brief:
+        separator_chars = 2 if parts else 0
+        remaining_for_context = _remaining_chars(max_chars, used_chars + separator_chars)
+        trimmed_context = _trim_context_brief(context_brief, remaining_for_context)
+        if trimmed_context:
+            parts.append(trimmed_context)
+    return "\n\n".join(parts) if parts else ""
+
+
+def _supplement_char_budget(remaining_tokens: int | None) -> int | None:
+    # Keep the same rough conversion used by _estimate_tokens.
+    if remaining_tokens is None:
+        return None
+    return max(0, remaining_tokens * 4)
+
+
+def _remaining_chars(max_chars: int | None, used_chars: int) -> int | None:
+    if max_chars is None:
+        return None
+    return max_chars - used_chars
+
+
+def _build_commit_messages_block(
+    *,
+    commit_messages: list[str],
+    max_chars: int | None,
+    already_used_chars: int,
+) -> str:
+    header = "### PR commit messages (subject / first line)\n"
+    lines: list[str] = []
+    local_used = len(header)
+    for msg in commit_messages[:100]:
+        remaining_for_line = _remaining_chars(max_chars, already_used_chars + local_used)
+        if remaining_for_line is not None and remaining_for_line <= 6:
+            break
+        subject = (msg.splitlines()[0] if msg else "").strip()
+        subject_cap = min(500, max(40, (remaining_for_line or 500) - 4))
+        line = f"- {subject[:subject_cap]}"
+        lines.append(line)
+        local_used += len(line) + 1
+    return header + "\n".join(lines) if lines else ""
+
+
+def _trim_context_brief(context_brief: str, remaining_chars: int | None) -> str:
+    if remaining_chars is None:
+        return context_brief
+    if remaining_chars <= 0:
+        return ""
+    if len(context_brief) <= remaining_chars:
+        return context_brief
+    if remaining_chars <= 1:
+        return ""
+    return context_brief[: remaining_chars - 1] + "…"
+
+
 def _normalize_path_for_anchor(file_path: str) -> str:
-    """Normalize path like Bitbucket provider (strip dst://, src://, a/, b/) for diff line matching."""
+    """Normalize path like Bitbucket provider for diff line matching.
+
+    Strips ``dst://``, ``src://``, ``a/``, and ``b/`` prefixes.
+    """
     p = (file_path or "").strip()
     for prefix in ("dst://", "src://"):
         if p.lower().startswith(prefix):
@@ -949,6 +1045,7 @@ class ReviewOrchestrator:
         pr_number: int,
         *,
         use_file_by_file: bool = False,
+        context_brief_attached: bool = False,
     ):
         """
         Build the findings-only agent, session service, and ADK Runner.
@@ -979,6 +1076,7 @@ class ReviewOrchestrator:
             review_standards,
             findings_only=True,
             disable_tools=not use_file_by_file,
+            context_brief_attached=context_brief_attached,
         )
         session_id = f"{owner}/{repo}/pr-{pr_number}/{uuid.uuid4().hex[:12]}"
         session_service = InMemorySessionService()
@@ -1001,6 +1099,7 @@ class ReviewOrchestrator:
         paths: list[str],
         use_file_by_file: bool,
         full_diff: str = "",
+        prompt_suffix: str = "",
     ) -> list[FindingV1]:
         """
         Run the agent (file-by-file or single shot), parse response into FindingV1 list.
@@ -1019,6 +1118,7 @@ class ReviewOrchestrator:
                 pr_number,
                 head_sha,
                 paths,
+                prompt_suffix=prompt_suffix,
             )
         return self._run_single_shot_mode(
             runner,
@@ -1029,6 +1129,7 @@ class ReviewOrchestrator:
             pr_number,
             head_sha,
             full_diff,
+            prompt_suffix=prompt_suffix,
         )
 
     def _run_file_by_file_mode(
@@ -1040,13 +1141,16 @@ class ReviewOrchestrator:
         pr_number: int,
         head_sha: str,
         paths: list[str],
+        *,
+        prompt_suffix: str = "",
     ) -> list[FindingV1]:
         all_findings: list[FindingV1] = []
         for file_path in paths:
             file_session_id = f"{owner}/{repo}/pr-{pr_number}/file/{uuid.uuid4().hex[:12]}"
             head_sha_clause = f" head_sha={head_sha}." if head_sha else ""
             ref_guidance = (
-                f' When calling get_file_lines for surrounding context, use ref="{head_sha}" as the ref parameter.'
+                f' When calling get_file_lines for surrounding context, use ref="{head_sha}"'
+                " as the ref parameter."
                 if head_sha
                 else ""
             )
@@ -1057,14 +1161,19 @@ class ReviewOrchestrator:
                 " Do NOT compute line numbers from hunk headers."
             )
             msg = (
-                f"Review exactly one file from this PR. owner={owner}, repo={repo}, pr_number={pr_number}."
+                "Review exactly one file from this PR. "
+                f"owner={owner}, repo={repo}, pr_number={pr_number}."
                 + head_sha_clause
-                + f' Call get_pr_diff_for_file(owner, repo, pr_number, "{file_path}") to get the diff for this file.'
+                + " Call get_pr_diff_for_file(owner, repo, pr_number, "
+                + f'"{file_path}") to get the diff for this file.'
                 + annotation_guidance
                 + ref_guidance
-                + f' Then output a JSON array of findings for this file only. Use path "{file_path}" in every finding. '
+                + " Then output a JSON array of findings for this file only. "
+                + f'Use path "{file_path}" in every finding. '
                 "If there are no issues in this file, output exactly []."
             )
+            if prompt_suffix:
+                msg = msg + "\n\n" + prompt_suffix
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     "LLM request (file-by-file) session=%s file=%s prompt=%s",
@@ -1115,6 +1224,8 @@ class ReviewOrchestrator:
         pr_number: int,
         head_sha: str,
         full_diff: str,
+        *,
+        prompt_suffix: str = "",
     ) -> list[FindingV1]:
         # Single-shot mode: include the unified diff directly in the prompt so the
         # LLM can review the changes even if tool calls are unavailable or flaky.
@@ -1137,6 +1248,8 @@ class ReviewOrchestrator:
                 f"{annotated}\n"
                 "```"
             )
+        if prompt_suffix:
+            msg += "\n\n" + prompt_suffix
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "LLM request (single-shot) session=%s prompt=%s",
@@ -1206,7 +1319,8 @@ class ReviewOrchestrator:
         """
         Auto-resolve stale comments (if supported), then post inline comments.
         Returns successful_post_count.
-        full_diff: used to set line_type (ADDED vs CONTEXT) so Bitbucket Server anchors comments correctly.
+        full_diff: used to set line_type (ADDED vs CONTEXT) so Bitbucket
+        Server anchors comments correctly.
         """
         _resolve_stale_comments_if_supported(
             provider, owner, repo, pr_number, existing, to_post, head_sha, dry_run
@@ -1221,7 +1335,15 @@ class ReviewOrchestrator:
                     "Provide head_sha or use --dry-run to skip posting."
                 )
             count = _post_inline_comments(
-                provider, owner, repo, pr_number, head_sha, to_post, cfg, llm_cfg, full_diff=full_diff
+                provider,
+                owner,
+                repo,
+                pr_number,
+                head_sha,
+                to_post,
+                cfg,
+                llm_cfg,
+                full_diff=full_diff,
             )
         # For providers that omit the fingerprint marker from inline comment bodies
         # (e.g. Bitbucket Server), there is no run_id persisted when inline posting
@@ -1289,7 +1411,11 @@ class ReviewOrchestrator:
             print(f"Code Review Findings ({len(to_post)} total)")
             print("=" * 60)
             for f, _ in to_post:
-                line_info = f"{f.line}" if not f.end_line or f.end_line == f.line else f"{f.line}-{f.end_line}"
+                line_info = (
+                    f"{f.line}"
+                    if not f.end_line or f.end_line == f.line
+                    else f"{f.line}-{f.end_line}"
+                )
                 print(f"[{f.severity.upper()}] {f.path}:{line_info}")
                 print(f"Message: {f.get_body()}")
                 if f.suggested_patch:
@@ -1388,6 +1514,72 @@ class ReviewOrchestrator:
         # wrong code.  Stripping it degrades gracefully to a plain inline comment.
         return _validate_suggested_patches(line_filtered, full_diff)
 
+    @staticmethod
+    def _build_pr_url(cfg, owner: str, repo: str, pr_number: int) -> str:
+        base_url = cfg.url.rstrip("/")
+        if cfg.provider == "github":
+            return f"{base_url}/{owner}/{repo}/pull/{pr_number}"
+        if cfg.provider == "gitlab":
+            return f"{base_url}/{owner}/{repo}/-/merge_requests/{pr_number}"
+        if cfg.provider == "bitbucket":
+            return f"https://bitbucket.org/{owner}/{repo}/pull-requests/{pr_number}"
+        if cfg.provider == "bitbucket_server":
+            return f"{base_url}/projects/{owner}/repos/{repo}/pull-requests/{pr_number}"
+        return f"{base_url}/{owner}/{repo}/pulls/{pr_number}"
+
+    @staticmethod
+    def _load_commit_messages(
+        provider, owner: str, repo: str, pr_number: int, need_commits: bool
+    ) -> list[str]:
+        raw = provider.get_pr_commit_messages(owner, repo, pr_number) if need_commits else []
+        return raw if isinstance(raw, list) else []
+
+    def _build_prompt_suffix(
+        self,
+        provider,
+        cfg,
+        ctx_cfg,
+        app_cfg,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        pr_info_for_metadata,
+        full_diff: str,
+        remaining_tokens: int,
+    ) -> tuple[list[object], str | None, str]:
+        need_commits = app_cfg.include_commit_messages_in_prompt or ctx_cfg.enabled
+        commit_messages = self._load_commit_messages(provider, owner, repo, pr_number, need_commits)
+        pr_title = (pr_info_for_metadata.title if pr_info_for_metadata else "") or ""
+        pr_desc = (pr_info_for_metadata.description if pr_info_for_metadata else "") or ""
+        refs = (
+            extract_context_references(
+                cfg.provider,
+                owner,
+                repo,
+                [pr_title, pr_desc, *commit_messages],
+                extract_github=ctx_cfg.github_issues_enabled,
+                extract_gitlab=ctx_cfg.gitlab_issues_enabled,
+                extract_jira=ctx_cfg.jira_enabled,
+                extract_confluence=ctx_cfg.confluence_enabled,
+            )
+            if ctx_cfg.enabled
+            else []
+        )
+        context_brief: str | None = None
+        if ctx_cfg.enabled and refs:
+            try:
+                context_brief = build_context_brief_for_pr(ctx_cfg, cfg, refs, full_diff)
+            except ContextAwareFatalError:
+                logger.exception("Context-aware fetch or distillation failed")
+                raise
+        prompt_suffix = _format_review_prompt_supplement(
+            context_brief=context_brief,
+            commit_messages=commit_messages,
+            include_commit_messages=app_cfg.include_commit_messages_in_prompt,
+            remaining_tokens=remaining_tokens,
+        )
+        return refs, context_brief, prompt_suffix
+
     def run(self) -> list[FindingV1]:
         """
         Execute the full review flow. Returns list of findings that were posted
@@ -1406,19 +1598,8 @@ class ReviewOrchestrator:
         run_handle = observability.start_run(trace_id)
 
         cfg, llm_cfg, provider = self._load_config_and_provider()
-        
-        base_url = cfg.url.rstrip("/")
-        if cfg.provider == "github":
-            pr_url = f"{base_url}/{owner}/{repo}/pull/{pr_number}"
-        elif cfg.provider == "gitlab":
-            pr_url = f"{base_url}/{owner}/{repo}/-/merge_requests/{pr_number}"
-        elif cfg.provider == "bitbucket":
-            pr_url = f"https://bitbucket.org/{owner}/{repo}/pull-requests/{pr_number}"
-        elif cfg.provider == "bitbucket_server":
-            pr_url = f"{base_url}/projects/{owner}/repos/{repo}/pull-requests/{pr_number}"
-        else:
-            pr_url = f"{base_url}/{owner}/{repo}/pulls/{pr_number}"
-            
+        pr_url = self._build_pr_url(cfg, owner, repo, pr_number)
+
         logger.info(
             "Reviewing %s/%s PR %s (provider=%s) URL: %s",
             owner,
@@ -1460,6 +1641,25 @@ class ReviewOrchestrator:
             logger.info("Skipping run (idempotent: same head/config already reviewed)")
             return idempotency_result
 
+        ctx_cfg = get_context_aware_config()
+        app_cfg = get_code_review_app_config()
+        if ctx_cfg.enabled:
+            try:
+                validate_context_aware_sources(ctx_cfg, cfg)
+            except ContextAwareFatalError as e:
+                logger.error("Context-aware review configuration error: %s", e)
+                observability.finish_run(
+                    run_handle,
+                    owner,
+                    repo,
+                    pr_number,
+                    files_count=0,
+                    findings_count=0,
+                    posts_count=0,
+                    duration_seconds=(time.perf_counter() - start_time),
+                )
+                raise
+
         pr_info_for_metadata = provider.get_pr_info(owner, repo, pr_number)
 
         _, paths, full_diff = self._fetch_pr_files_and_diffs(provider, owner, repo, pr_number)
@@ -1487,7 +1687,28 @@ class ReviewOrchestrator:
             )
         _, review_standards = self._detect_languages_for_files(paths)
 
-        diff_budget = int(get_context_window() * DIFF_TOKEN_BUDGET_RATIO)
+        context_window = get_context_window()
+        diff_budget = int(context_window * DIFF_TOKEN_BUDGET_RATIO)
+        # Reserve room for diff/tool output and keep supplement bounded for both modes.
+        remaining_prompt_tokens = max(0, context_window - diff_budget)
+
+        refs, context_brief, prompt_suffix = self._build_prompt_suffix(
+            provider,
+            cfg,
+            ctx_cfg,
+            app_cfg,
+            owner,
+            repo,
+            pr_number,
+            pr_info_for_metadata,
+            full_diff,
+            remaining_prompt_tokens,
+        )
+        if refs:
+            logger.info("context_aware: extracted %d reference(s) from PR text", len(refs))
+        if context_brief:
+            logger.info("context_aware: distilled context attached to review prompt")
+
         use_file_by_file = _estimate_tokens(full_diff) > diff_budget
         if use_file_by_file:
             logger.info("Running agent on %d file(s) (file-by-file)", len(paths))
@@ -1495,8 +1716,13 @@ class ReviewOrchestrator:
             logger.info("Running agent (single shot)")
 
         session_id, session_service, runner = self._create_agent_and_runner(
-            provider, review_standards, owner, repo, pr_number,
-            use_file_by_file=use_file_by_file
+            provider,
+            review_standards,
+            owner,
+            repo,
+            pr_number,
+            use_file_by_file=use_file_by_file,
+            context_brief_attached=bool(context_brief),
         )
 
         all_findings = self._run_agent_and_collect_findings(
@@ -1510,6 +1736,7 @@ class ReviewOrchestrator:
             paths,
             use_file_by_file,
             full_diff=full_diff,
+            prompt_suffix=prompt_suffix,
         )
 
         all_findings = self._filter_findings_by_diff_scope(all_findings, paths, full_diff)

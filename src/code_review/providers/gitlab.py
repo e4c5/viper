@@ -243,6 +243,38 @@ class GitLabProvider(ProviderInterface):
             {"body": body},
         )
 
+    def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
+        """List MR commits (GitLab: GET .../merge_requests/:iid/commits), paginated."""
+        base_path = self._path(owner, repo, "merge_requests", str(pr_number), "commits")
+        out: list[str] = []
+        page = 1
+        per_page = 100
+        while True:
+            path = f"{base_path}?per_page={per_page}&page={page}"
+            try:
+                data = self._get(path)
+            except Exception as e:
+                logger.warning(
+                    "get_pr_commit_messages failed owner=%s repo=%s pr_number=%s: %s",
+                    owner,
+                    repo,
+                    pr_number,
+                    e,
+                )
+                break
+            if not isinstance(data, list):
+                break
+            out.extend(
+                msg for item in data
+                if isinstance(item, dict)
+                for msg in [(item.get("message") or item.get("title") or "").strip()]
+                if msg
+            )
+            if len(data) < per_page:
+                break
+            page += 1
+        return out
+
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return MR title, labels, and description for skip-review and metadata."""
         try:

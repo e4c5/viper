@@ -13,7 +13,9 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    _log_pr_commit_messages_warning,
     _log_pr_info_warning,
+    commit_messages_from_commit_list,
     normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
@@ -410,6 +412,50 @@ class BitbucketServerProvider(ProviderInterface):
         """Post PR-level comment (no anchor)."""
         path = self._path(owner, repo, "pull-requests", str(pr_number), "comments")
         self._post(path, {"text": body})
+
+    def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
+        """List commits on the pull request (paginated REST)."""
+        path = self._path(owner, repo, "pull-requests", str(pr_number), "commits")
+        out: list[str] = []
+        start = 0
+        for _ in range(500):
+            data = self._safe_get_commit_page(path, start, owner, repo, pr_number)
+            if data is None:
+                return out
+            out.extend(commit_messages_from_commit_list(data.get("values")))
+            start = self._next_commit_page_start(data, current_start=start)
+            if start is None:
+                break
+        return out
+
+    def _safe_get_commit_page(
+        self,
+        path: str,
+        start: int,
+        owner: str,
+        repo: str,
+        pr_number: int,
+    ) -> dict[str, Any] | None:
+        try:
+            data = self._get(path, params={"start": start, "limit": 50})
+        except Exception as e:
+            _log_pr_commit_messages_warning(logger, owner, repo, pr_number, e)
+            return None
+        if not isinstance(data, dict):
+            return None
+        return data
+
+    @staticmethod
+    def _next_commit_page_start(data: dict[str, Any], current_start: int) -> int | None:
+        if bool(data.get("isLastPage", True)):
+            return None
+        nxt = data.get("nextPageStart")
+        if nxt is None:
+            return None
+        next_start = int(nxt)
+        if next_start == current_start:
+            return None
+        return next_start
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title and description for skip-review. Labels from Server may vary."""

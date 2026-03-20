@@ -28,6 +28,47 @@ def _log_pr_info_warning(
     )
 
 
+def _log_pr_commit_messages_warning(
+    logger: logging.Logger,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    exc: Exception,
+) -> None:
+    """Emit a standardised warning when get_pr_commit_messages fails."""
+    logger.warning(
+        "get_pr_commit_messages failed owner=%s repo=%s pr_number=%s: %s",
+        owner,
+        repo,
+        pr_number,
+        exc,
+    )
+
+
+def commit_messages_from_commit_list(data: object) -> list[str]:
+    """
+    Extract commit messages from provider commit-list payloads.
+
+    Supports entries shaped like:
+    - {"commit": {"message": "..."}}
+    - {"message": "..."}
+    """
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        commit_obj = item.get("commit")
+        raw_msg = (
+            commit_obj.get("message") if isinstance(commit_obj, dict) else None
+        ) or item.get("message")
+        msg = str(raw_msg or "").strip()
+        if msg:
+            out.append(msg)
+    return out
+
+
 class RateLimitError(Exception):
     """Raised when the SCM API returns a 429 Too Many Requests response.
 
@@ -330,3 +371,12 @@ class ProviderInterface(ABC):
         Default: None (skip check not supported).
         """
         return None
+
+    def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
+        """
+        Return commit messages for commits in this PR/MR (oldest-first), one string per commit.
+
+        Used for reference extraction (context-aware review) and optional prompt enrichment.
+        Default: empty list (provider does not implement commit listing).
+        """
+        return []
