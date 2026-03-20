@@ -36,9 +36,12 @@ def build_semantic_query_from_diff(diff_text: str, max_diff_chars: int = 14_000)
             max_tokens=256,
             temperature=llm.temperature,
         )
-        choices = getattr(resp, "choices", None) or []
+        choices = (resp["choices"] if isinstance(resp, dict) else getattr(resp, "choices", None)) or []
         if choices:
-            text = getattr(getattr(choices[0], "message", None), "content", None)
+            msg = choices[0]["message"] if isinstance(choices[0], dict) else getattr(choices[0], "message", None)
+            text = (msg["content"] if isinstance(msg, dict) else getattr(msg, "content", None))
+            if isinstance(text, list):
+                text = " ".join(b["text"] for b in text if isinstance(b, dict) and b.get("type") == "text")
             if isinstance(text, str) and text.strip():
                 return text.strip()
     except Exception as e:
