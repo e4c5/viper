@@ -2,6 +2,7 @@
 
 import logging
 from abc import ABC, abstractmethod
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -93,6 +94,8 @@ class ProviderCapabilities(BaseModel):
     - omit_fingerprint_marker_in_body: when True, do not add the HTML comment marker to
       the comment body at all (avoids stray XML in UIs that display it). Dedup still uses
       body_hash; fingerprint cannot be read back from existing comments.
+    - supports_review_decisions: provider supports PR-level review decisions
+      (APPROVE / REQUEST_CHANGES).
     """
 
     resolvable_comments: bool = False
@@ -101,6 +104,10 @@ class ProviderCapabilities(BaseModel):
     markup_hides_html_comment: bool = True
     markup_supports_collapsible: bool = True
     omit_fingerprint_marker_in_body: bool = False
+    supports_review_decisions: bool = False
+
+
+ReviewDecision = Literal["APPROVE", "REQUEST_CHANGES"]
 
 
 class FileInfo(BaseModel):
@@ -295,6 +302,19 @@ class ProviderInterface(ABC):
         Accepts internal InlineComment; provider converts to SCM API payload.
         """
         ...
+
+    def submit_review_decision(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        decision: ReviewDecision,
+        *,
+        body: str = "",
+        head_sha: str = "",
+    ) -> None:
+        """Submit a PR-level review decision (e.g. APPROVE or REQUEST_CHANGES)."""
+        raise NotImplementedError("submit_review_decision not implemented for this provider")
 
     def post_review_comment(
         self,

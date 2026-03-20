@@ -30,6 +30,8 @@ In **CI/Jenkins**, the pipeline supplies these via credentials and job or global
 
 **Context-aware review (optional)** — The runner can pull linked GitHub Issues, Jira tickets, or Confluence pages, distill them into a short brief, and attach that (plus optional PR commit messages) to the review prompt. Off by default; requires PostgreSQL with pgvector when enabled. See [Context-aware code review](docs/CONTEXT-AWARE-REVIEW.md).
 
+**Auto review decision (optional)** — You can enable automatic PR review decisions on SCMs that support them. Set `SCM_REVIEW_DECISION_ENABLED=true` to submit `REQUEST_CHANGES` when open findings meet thresholds (`SCM_REVIEW_DECISION_HIGH_THRESHOLD`, `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD`), otherwise submit `APPROVE` (for example when only low/nit findings remain open).
+
 ---
 
 ## Running the agent
@@ -42,6 +44,9 @@ In **CI/Jenkins**, the pipeline supplies these via credentials and job or global
   Install with `pip install -e .` (or from wheel/PyPI), then:  
   `code-review --owner <owner> --repo <repo> --pr <n> --head-sha <sha>`  
   Same env vars; see [Jenkins without Docker](docs/JENKINS-NO-DOCKER.md) for Jenkins inline usage.
+  Decision thresholds can also be overridden per run with
+  `--review-decision-enabled`, `--review-decision-high-threshold`, and
+  `--review-decision-medium-threshold`.
 
 **Log level**  
 By default the CLI is quiet. To see progress (files fetched, agent run, comments posted), set the log level before running:

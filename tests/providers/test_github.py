@@ -168,6 +168,29 @@ def test_post_pr_summary_comment(mock_client):
 
 
 @patch("code_review.providers.github.httpx.Client")
+def test_submit_review_decision(mock_client):
+    mock_post = MagicMock()
+    mock_post.raise_for_status = MagicMock()
+    mock_post.content = b""
+    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    p.submit_review_decision(
+        "owner",
+        "repo",
+        1,
+        "REQUEST_CHANGES",
+        body="Automated threshold decision",
+        head_sha="abc123",
+    )
+    call_args = mock_client.return_value.__enter__.return_value.post.call_args
+    assert "/repos/owner/repo/pulls/1/reviews" in call_args[0][0]
+    assert call_args[1]["json"]["event"] == "REQUEST_CHANGES"
+    assert call_args[1]["json"]["body"] == "Automated threshold decision"
+    assert call_args[1]["json"]["commit_id"] == "abc123"
+
+
+@patch("code_review.providers.github.httpx.Client")
 def test_get_pr_info(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
@@ -182,3 +205,9 @@ def test_get_pr_info(mock_client):
     assert info is not None
     assert info.title == "Fix bug"
     assert "skip-review" in info.labels
+
+
+def test_capabilities_support_review_decisions():
+    p = GitHubProvider("https://api.github.com", "tok")
+    caps = p.capabilities()
+    assert caps.supports_review_decisions is True

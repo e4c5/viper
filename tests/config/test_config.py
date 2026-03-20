@@ -99,3 +99,21 @@ def test_reset_config_cache_clears_both():
     assert scm1 is not scm2
     assert llm1 is not llm2
     reset_config_cache()
+
+
+def test_scm_review_decision_settings_from_env():
+    with patch.dict(
+        os.environ,
+        {
+            "SCM_URL": "https://gitea.example.com",
+            "SCM_TOKEN": "secret",
+            "SCM_REVIEW_DECISION_ENABLED": "true",
+            "SCM_REVIEW_DECISION_HIGH_THRESHOLD": "2",
+            "SCM_REVIEW_DECISION_MEDIUM_THRESHOLD": "5",
+        },
+        clear=False,
+    ):
+        cfg = SCMConfig()
+        assert cfg.review_decision_enabled is True
+        assert cfg.review_decision_high_threshold == 2
+        assert cfg.review_decision_medium_threshold == 5

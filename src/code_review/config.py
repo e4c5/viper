@@ -38,6 +38,23 @@ class SCMConfig(BaseSettings):
         default="[skip-review]",
         description="If PR title contains this substring, skip review (empty to disable)",
     )
+    review_decision_enabled: bool = Field(
+        default=False,
+        description=(
+            "Automatically submit a PR review decision based on open findings "
+            "(requires provider support)."
+        ),
+    )
+    review_decision_high_threshold: int = Field(
+        default=1,
+        ge=0,
+        description="Request changes when open high-severity findings >= this threshold.",
+    )
+    review_decision_medium_threshold: int = Field(
+        default=3,
+        ge=0,
+        description="Request changes when open medium-severity findings >= this threshold.",
+    )
     allowed_hosts: str | None = Field(
         default=None,
         description=(

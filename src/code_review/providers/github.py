@@ -12,6 +12,7 @@ from code_review.providers.base import (
     PRInfo,
     ProviderCapabilities,
     ProviderInterface,
+    ReviewDecision,
     ReviewComment,
     _log_pr_commit_messages_warning,
     _log_pr_info_warning,
@@ -151,6 +152,25 @@ class GitHubProvider(ProviderInterface):
             )
         return result
 
+    def submit_review_decision(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        decision: ReviewDecision,
+        *,
+        body: str = "",
+        head_sha: str = "",
+    ) -> None:
+        """Submit a PR-level review decision on GitHub."""
+        payload: dict[str, Any] = {
+            "event": decision,
+            "body": body or "Automated review decision by Viper.",
+        }
+        if head_sha:
+            payload["commit_id"] = head_sha
+        self._post(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews", payload)
+
     def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
         """Post PR-level comment (GitHub: issues comments endpoint for PRs)."""
         self._post(f"/repos/{owner}/{repo}/issues/{pr_number}/comments", {"body": body})
@@ -189,4 +209,5 @@ class GitHubProvider(ProviderInterface):
             resolvable_comments=False, 
             supports_suggestions=True,
             supports_multiline_suggestions=True,
+            supports_review_decisions=True,
         )

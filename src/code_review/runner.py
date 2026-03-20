@@ -719,6 +719,70 @@ def _post_run_marker_comment(
         )
 
 
+def _compute_review_decision(
+    to_post: list[tuple[FindingV1, str]],
+    *,
+    high_threshold: int,
+    medium_threshold: int,
+) -> str:
+    """Return REQUEST_CHANGES or APPROVE from open finding severities."""
+    high_count = sum(1 for finding, _ in to_post if finding.severity == "high")
+    medium_count = sum(1 for finding, _ in to_post if finding.severity == "medium")
+    if high_count >= high_threshold or medium_count >= medium_threshold:
+        return "REQUEST_CHANGES"
+    return "APPROVE"
+
+
+def _maybe_submit_review_decision(
+    provider,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+    dry_run: bool,
+    to_post: list[tuple[FindingV1, str]],
+    cfg,
+) -> None:
+    """Submit or log PR-level review decision when configured and supported."""
+    if not bool(getattr(cfg, "review_decision_enabled", False)):
+        return
+
+    high_threshold = int(getattr(cfg, "review_decision_high_threshold", 1))
+    medium_threshold = int(getattr(cfg, "review_decision_medium_threshold", 3))
+    decision = _compute_review_decision(
+        to_post,
+        high_threshold=high_threshold,
+        medium_threshold=medium_threshold,
+    )
+    reason = (
+        f"Auto decision by Viper: open high>= {high_threshold} or open medium>= "
+        f"{medium_threshold} => REQUEST_CHANGES; otherwise APPROVE."
+    )
+
+    caps = provider.capabilities()
+    if not caps.supports_review_decisions:
+        logger.info(
+            "Skipping review decision submission: provider does not support review decisions "
+            "(would submit %s).",
+            decision,
+        )
+        return
+
+    if dry_run:
+        logger.info("Dry run: would submit PR review decision=%s", decision)
+        return
+
+    provider.submit_review_decision(
+        owner,
+        repo,
+        pr_number,
+        decision,
+        body=reason,
+        head_sha=head_sha,
+    )
+    logger.info("Submitted PR review decision=%s", decision)
+
+
 def _fingerprint_for_finding(
     f: FindingV1,
     file_lines_by_path: dict[str, list[str]],
@@ -1359,6 +1423,16 @@ class ReviewOrchestrator:
             and provider.capabilities().omit_fingerprint_marker_in_body
         ):
             _post_run_marker_comment(provider, owner, repo, pr_number, cfg, llm_cfg, head_sha)
+        _maybe_submit_review_decision(
+            provider,
+            owner,
+            repo,
+            pr_number,
+            head_sha,
+            dry_run,
+            to_post,
+            cfg,
+        )
         return count
 
     def _record_observability_and_build_result(

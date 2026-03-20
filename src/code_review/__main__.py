@@ -3,6 +3,7 @@
 import os
 
 import typer
+from typer.models import OptionInfo
 
 from code_review.logging_config import configure_logging
 from code_review.runner import run_review
@@ -58,8 +59,32 @@ def review(
         "--fail-on-critical",
         help="Exit with non-zero status if any finding is high severity",
     ),
+    review_decision_enabled: bool | None = typer.Option(
+        None,
+        "--review-decision-enabled/--no-review-decision-enabled",
+        help="Enable/disable automatic PR review decision submission.",
+    ),
+    review_decision_high_threshold: int | None = typer.Option(
+        None,
+        "--review-decision-high-threshold",
+        min=0,
+        help="Request changes when open high findings reach this threshold.",
+    ),
+    review_decision_medium_threshold: int | None = typer.Option(
+        None,
+        "--review-decision-medium-threshold",
+        min=0,
+        help="Request changes when open medium findings reach this threshold.",
+    ),
 ) -> None:
     """Run the code review agent on a pull request."""
+    if isinstance(review_decision_enabled, OptionInfo):
+        review_decision_enabled = None
+    if isinstance(review_decision_high_threshold, OptionInfo):
+        review_decision_high_threshold = None
+    if isinstance(review_decision_medium_threshold, OptionInfo):
+        review_decision_medium_threshold = None
+
     owner = owner or os.environ.get("SCM_OWNER", "")
     repo = repo or os.environ.get("SCM_REPO", "")
     pr_num = pr if pr is not None else _parse_int(os.environ.get("SCM_PR_NUM", ""))
@@ -87,6 +112,19 @@ def review(
             err=True,
         )
         raise typer.Exit(1)
+
+    if review_decision_enabled is not None:
+        os.environ["SCM_REVIEW_DECISION_ENABLED"] = (
+            "true" if review_decision_enabled else "false"
+        )
+    if review_decision_high_threshold is not None:
+        os.environ["SCM_REVIEW_DECISION_HIGH_THRESHOLD"] = str(
+            review_decision_high_threshold
+        )
+    if review_decision_medium_threshold is not None:
+        os.environ["SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"] = str(
+            review_decision_medium_threshold
+        )
 
     _ensure_logging()
     findings = run_review(

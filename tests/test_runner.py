@@ -323,3 +323,157 @@ def test_run_review_uses_file_by_file_mode_when_diff_exceeds_budget(
     assert len(result) == 1
     # Runner.run_async called once per file
     assert mock_runner_instance.run_async.call_count == 2
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_submits_request_changes_when_threshold_met(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    from code_review.runner import run_review
+
+    mock_get_scm_config.return_value = MagicMock(
+        provider="gitea",
+        url="https://x.com",
+        token="x",
+        skip_label="",
+        skip_title_pattern="",
+        review_decision_enabled=True,
+        review_decision_high_threshold=1,
+        review_decision_medium_threshold=3,
+    )
+    provider = MagicMock()
+    provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
+    provider.get_pr_diff.return_value = "diff"
+    provider.get_file_content.return_value = "content"
+    provider.get_existing_review_comments.return_value = []
+    provider.post_review_comments = MagicMock()
+    provider.submit_review_decision = MagicMock()
+    provider.post_pr_summary_comment = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        resolvable_comments=False,
+        supports_suggestions=False,
+        supports_review_decisions=True,
+    )
+    mock_get_provider.return_value = provider
+    mock_get_context_window.return_value = 1_000_000
+
+    findings_json = (
+        '[{"path":"foo.py","line":1,"severity":"high","code":"x",'
+        '"message":"Must fix."}]'
+    )
+    mock_event = MagicMock()
+    mock_event.is_final_response.return_value = True
+    mock_event.content = MagicMock()
+    mock_event.content.parts = [MagicMock(text=findings_json)]
+    mock_runner_instance = MagicMock()
+    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
+
+    with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
+        run_review("o", "r", 1, head_sha="abc123", dry_run=False)
+
+    provider.submit_review_decision.assert_called_once()
+    assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_submits_approve_when_only_low_nit_open(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    from code_review.runner import run_review
+
+    mock_get_scm_config.return_value = MagicMock(
+        provider="gitea",
+        url="https://x.com",
+        token="x",
+        skip_label="",
+        skip_title_pattern="",
+        review_decision_enabled=True,
+        review_decision_high_threshold=1,
+        review_decision_medium_threshold=3,
+    )
+    provider = MagicMock()
+    provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
+    provider.get_pr_diff.return_value = "diff"
+    provider.get_file_content.return_value = "content"
+    provider.get_existing_review_comments.return_value = []
+    provider.post_review_comments = MagicMock()
+    provider.submit_review_decision = MagicMock()
+    provider.post_pr_summary_comment = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        resolvable_comments=False,
+        supports_suggestions=False,
+        supports_review_decisions=True,
+    )
+    mock_get_provider.return_value = provider
+    mock_get_context_window.return_value = 1_000_000
+
+    findings_json = """[
+        {"path":"foo.py","line":1,"severity":"low","code":"x","message":"Optional"},
+        {"path":"foo.py","line":2,"severity":"nit","code":"y","message":"Style"}
+    ]"""
+    mock_event = MagicMock()
+    mock_event.is_final_response.return_value = True
+    mock_event.content = MagicMock()
+    mock_event.content.parts = [MagicMock(text=findings_json)]
+    mock_runner_instance = MagicMock()
+    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
+
+    with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
+        run_review("o", "r", 1, head_sha="abc123", dry_run=False)
+
+    provider.submit_review_decision.assert_called_once()
+    assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_dry_run_does_not_submit_review_decision(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    from code_review.runner import run_review
+
+    mock_get_scm_config.return_value = MagicMock(
+        provider="gitea",
+        url="https://x.com",
+        token="x",
+        skip_label="",
+        skip_title_pattern="",
+        review_decision_enabled=True,
+        review_decision_high_threshold=1,
+        review_decision_medium_threshold=3,
+    )
+    provider = MagicMock()
+    provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
+    provider.get_pr_diff.return_value = "diff"
+    provider.get_file_content.return_value = "content"
+    provider.get_existing_review_comments.return_value = []
+    provider.submit_review_decision = MagicMock()
+    provider.post_pr_summary_comment = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        resolvable_comments=False,
+        supports_suggestions=False,
+        supports_review_decisions=True,
+    )
+    mock_get_provider.return_value = provider
+    mock_get_context_window.return_value = 1_000_000
+
+    findings_json = (
+        '[{"path":"foo.py","line":1,"severity":"high","code":"x",'
+        '"message":"Must fix."}]'
+    )
+    mock_event = MagicMock()
+    mock_event.is_final_response.return_value = True
+    mock_event.content = MagicMock()
+    mock_event.content.parts = [MagicMock(text=findings_json)]
+    mock_runner_instance = MagicMock()
+    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
+
+    with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
+        run_review("o", "r", 1, head_sha="abc123", dry_run=True)
+
+    provider.submit_review_decision.assert_not_called()

@@ -218,6 +218,31 @@ def test_get_existing_review_comments(mock_client):
 
 
 @patch("code_review.providers.gitea.httpx.Client")
+def test_submit_review_decision(mock_client):
+    mock_post = MagicMock()
+    mock_post.raise_for_status = MagicMock()
+    mock_post.content = b""
+    mock_client.return_value.__enter__.return_value.request.return_value = mock_post
+
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    p.submit_review_decision(
+        "owner",
+        "repo",
+        1,
+        "APPROVE",
+        body="Automated threshold decision",
+        head_sha="abc123",
+    )
+    call_args = mock_client.return_value.__enter__.return_value.request.call_args
+    assert call_args[0][0] == "POST"
+    assert call_args[0][1].endswith("/repos/owner/repo/pulls/1/reviews")
+    payload = call_args[1]["json"]
+    assert payload["event"] == "APPROVE"
+    assert payload["body"] == "Automated threshold decision"
+    assert payload["commit_id"] == "abc123"
+
+
+@patch("code_review.providers.gitea.httpx.Client")
 def test_get_pr_diff_for_file(mock_client):
     full_diff = (
         "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py\n"
@@ -306,3 +331,4 @@ def test_capabilities():
     caps = p.capabilities()
     assert caps.resolvable_comments is False
     assert caps.supports_suggestions is True
+    assert caps.supports_review_decisions is True
