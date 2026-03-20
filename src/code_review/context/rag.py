@@ -8,6 +8,7 @@ import re
 import litellm
 
 from code_review.config import get_llm_config
+from code_review.context.distiller import _litellm_model_name
 from code_review.models import get_configured_model
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ def build_semantic_query_from_diff(diff_text: str, max_diff_chars: int = 14_000)
     if not snippet.strip():
         return "pull request code changes"
     llm = get_llm_config()
-    model = get_configured_model()
+    model = _litellm_model_name(get_configured_model(), llm.model)
     system = (
         "You write a single short paragraph (max 120 words) describing what the pull request "
         "changes and why, including key file paths and symbols if obvious. "

@@ -195,6 +195,14 @@ class ContextAwareReviewConfig(BaseSettings):
             return None
         return SecretStr(normalized)
 
+    @field_validator("db_url", mode="before")
+    @classmethod
+    def _normalize_optional_db_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = str(v).strip()
+        return normalized or None
+
     @field_validator("jira_url", "confluence_url", "gitlab_api_url", mode="after")
     @classmethod
     def _strip_urls(cls, v: str) -> str:

@@ -80,4 +80,4 @@ CREATE INDEX ON review_context_chunks USING hnsw (embedding vector_cosine_ops);
 1. **Normalization**: Content is stored once in `documents`, while `chunks` only store segments required for RAG.
 2. **Freshness**: Use `external_updated_at` and `last_fetched_at` to determine if a document needs re-fetching.
 3. **Cascading Deletes**: Deleting a source or document automatically cleans up associated documents and chunks.
-4. **Vector Model**: The `vector(N)` size should be adjusted based on the specific embedding model configured in `LLM_MODEL` or a dedicated embedding setting.
+4. **Vector Model**: Set `vector(N)` to match `CONTEXT_EMBEDDING_DIMENSIONS`, and keep it aligned with the embedding model configured by `CONTEXT_EMBEDDING_MODEL` so the stored vector size matches the runtime embedding output.
