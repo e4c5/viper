@@ -417,32 +417,61 @@ class BitbucketServerProvider(ProviderInterface):
         out: list[str] = []
         start = 0
         for _ in range(500):
-            try:
-                data = self._get(path, params={"start": start, "limit": 50})
-            except Exception as e:
-                logger.warning(
-                    "get_pr_commit_messages failed owner=%s repo=%s pr_number=%s: %s",
-                    owner,
-                    repo,
-                    pr_number,
-                    e,
-                )
+            data = self._safe_get_commit_page(path, start, owner, repo, pr_number)
+            if data is None:
                 return out
-            if not isinstance(data, dict):
+            out.extend(self._messages_from_commit_page(data))
+            if self._is_last_commit_page(data):
                 break
-            for item in data.get("values") or []:
-                if not isinstance(item, dict):
-                    continue
-                msg = str(item.get("message") or "").strip()
-                if msg:
-                    out.append(msg)
-            if data.get("isLastPage", True):
+            start = self._next_commit_page_start(data)
+            if start is None:
                 break
-            nxt = data.get("nextPageStart")
-            if nxt is None:
-                break
-            start = int(nxt)
         return out
+
+    def _safe_get_commit_page(
+        self,
+        path: str,
+        start: int,
+        owner: str,
+        repo: str,
+        pr_number: int,
+    ) -> dict[str, Any] | None:
+        try:
+            data = self._get(path, params={"start": start, "limit": 50})
+        except Exception as e:
+            logger.warning(
+                "get_pr_commit_messages failed owner=%s repo=%s pr_number=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
+        if not isinstance(data, dict):
+            return None
+        return data
+
+    @staticmethod
+    def _messages_from_commit_page(data: dict[str, Any]) -> list[str]:
+        out: list[str] = []
+        for item in data.get("values") or []:
+            if not isinstance(item, dict):
+                continue
+            msg = str(item.get("message") or "").strip()
+            if msg:
+                out.append(msg)
+        return out
+
+    @staticmethod
+    def _is_last_commit_page(data: dict[str, Any]) -> bool:
+        return bool(data.get("isLastPage", True))
+
+    @staticmethod
+    def _next_commit_page_start(data: dict[str, Any]) -> int | None:
+        nxt = data.get("nextPageStart")
+        if nxt is None:
+            return None
+        return int(nxt)
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title and description for skip-review. Labels from Server may vary."""

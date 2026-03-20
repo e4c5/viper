@@ -95,7 +95,7 @@ def test_validate_requires_db_when_enabled(monkeypatch):
 def test_validate_github_issues_non_github_without_token(monkeypatch):
     _clear_context_env(monkeypatch)
     monkeypatch.setenv("CONTEXT_AWARE_REVIEW_ENABLED", "true")
-    monkeypatch.setenv("CONTEXT_AWARE_REVIEW_DB_URL", "postgresql://u@h/db")
+    monkeypatch.setenv("CONTEXT_AWARE_REVIEW_DB_URL", "postgresql://u:a@h/db")
     monkeypatch.setenv("CONTEXT_GITHUB_ISSUES_ENABLED", "true")
     monkeypatch.delenv("CONTEXT_GITHUB_TOKEN", raising=False)
     reset_config_cache()

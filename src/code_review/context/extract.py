@@ -51,6 +51,45 @@ def _strip_markdown_code_fences(text: str) -> str:
     return "".join(out)
 
 
+def _append_github_refs(
+    add_ref,
+    scanned: str,
+    owner: str,
+    repo: str,
+    *,
+    allow_hash_issue: bool,
+) -> None:
+    for m in _GH_ISSUE_URL.finditer(scanned):
+        org, rname, num = m.group(1), m.group(2), m.group(3)
+        ref = f"{org}/{rname}#{num}"
+        add_ref(ReferenceType.GITHUB_ISSUE, ref, ref)
+    for m in _GH_PREFIX.finditer(scanned):
+        num = m.group(1)
+        ref = f"{owner}/{repo}#{num}"
+        add_ref(ReferenceType.GITHUB_ISSUE, ref, ref)
+    if not allow_hash_issue:
+        return
+    for m in _HASH_ISSUE.finditer(scanned):
+        num = m.group(1)
+        ref = f"{owner}/{repo}#{num}"
+        add_ref(ReferenceType.GITHUB_ISSUE, ref, ref)
+
+
+def _append_jira_refs(add_ref, scanned: str) -> None:
+    for m in _JIRA_BROWSE_URL.finditer(scanned):
+        key = m.group(1).upper()
+        add_ref(ReferenceType.JIRA, key, key)
+    for m in _JIRA_KEY.finditer(scanned):
+        key = m.group(1).upper()
+        add_ref(ReferenceType.JIRA, key, key)
+
+
+def _append_confluence_refs(add_ref, scanned: str) -> None:
+    for m in _CONFLUENCE_PAGE_URL.finditer(scanned):
+        pid = m.group(1)
+        add_ref(ReferenceType.CONFLUENCE, pid, f"confluence-page:{pid}")
+
+
 def extract_context_references(
     scm_provider: Literal["gitea", "github", "gitlab", "bitbucket", "bitbucket_server"],
     owner: str,
@@ -82,39 +121,18 @@ def extract_context_references(
         out.append(ContextReference(ref_type=ref_type, external_id=external_id, display=display))
 
     if extract_github:
-        for m in _GH_ISSUE_URL.finditer(scanned):
-            org, rname, num = m.group(1), m.group(2), m.group(3)
-            add(
-                ReferenceType.GITHUB_ISSUE,
-                f"{org}/{rname}#{num}",
-                f"{org}/{rname}#{num}",
-            )
-        for m in _GH_PREFIX.finditer(scanned):
-            num = m.group(1)
-            add(
-                ReferenceType.GITHUB_ISSUE,
-                f"{owner}/{repo}#{num}",
-                f"{owner}/{repo}#{num}",
-            )
-        if scm_provider == "github" and github_issue_same_repo and owner and repo:
-            for m in _HASH_ISSUE.finditer(scanned):
-                num = m.group(1)
-                add(
-                    ReferenceType.GITHUB_ISSUE,
-                    f"{owner}/{repo}#{num}",
-                    f"{owner}/{repo}#{num}",
-                )
-
+        _append_github_refs(
+            add,
+            scanned,
+            owner,
+            repo,
+            allow_hash_issue=(
+                scm_provider == "github" and github_issue_same_repo and bool(owner) and bool(repo)
+            ),
+        )
     if extract_jira:
-        for m in _JIRA_BROWSE_URL.finditer(scanned):
-            add(ReferenceType.JIRA, m.group(1).upper(), m.group(1).upper())
-        for m in _JIRA_KEY.finditer(scanned):
-            key = m.group(1).upper()
-            add(ReferenceType.JIRA, key, key)
-
+        _append_jira_refs(add, scanned)
     if extract_confluence:
-        for m in _CONFLUENCE_PAGE_URL.finditer(scanned):
-            pid = m.group(1)
-            add(ReferenceType.CONFLUENCE, pid, f"confluence-page:{pid}")
+        _append_confluence_refs(add, scanned)
 
     return out

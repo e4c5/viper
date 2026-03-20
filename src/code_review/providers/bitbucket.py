@@ -223,32 +223,52 @@ class BitbucketProvider(ProviderInterface):
         url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "commits")
         out: list[str] = []
         while url:
-            try:
-                data = self._get(url)
-            except Exception as e:
-                logger.warning(
-                    "get_pr_commit_messages failed owner=%s repo=%s pr_number=%s: %s",
-                    owner,
-                    repo,
-                    pr_number,
-                    e,
-                )
+            data = self._safe_get_commit_page(url, owner, repo, pr_number)
+            if data is None:
                 return out
-            if not isinstance(data, dict):
-                break
-            for item in data.get("values") or []:
-                if not isinstance(item, dict):
-                    continue
-                raw_m = item.get("message")
-                if isinstance(raw_m, dict):
-                    msg = (raw_m.get("raw") or "").strip()
-                else:
-                    msg = str(raw_m or "").strip()
-                if msg:
-                    out.append(msg)
-            nxt = data.get("next")
-            url = nxt.strip() if isinstance(nxt, str) and nxt.strip() else None
+            out.extend(self._messages_from_commit_page(data))
+            url = self._next_page_url(data)
         return out
+
+    def _safe_get_commit_page(
+        self,
+        url: str,
+        owner: str,
+        repo: str,
+        pr_number: int,
+    ) -> dict[str, Any] | None:
+        try:
+            data = self._get(url)
+        except Exception as e:
+            logger.warning(
+                "get_pr_commit_messages failed owner=%s repo=%s pr_number=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
+        if not isinstance(data, dict):
+            return None
+        return data
+
+    @staticmethod
+    def _messages_from_commit_page(data: dict[str, Any]) -> list[str]:
+        out: list[str] = []
+        for item in data.get("values") or []:
+            if not isinstance(item, dict):
+                continue
+            raw_m = item.get("message")
+            msg = (raw_m.get("raw") if isinstance(raw_m, dict) else raw_m) or ""
+            msg = str(msg).strip()
+            if msg:
+                out.append(msg)
+        return out
+
+    @staticmethod
+    def _next_page_url(data: dict[str, Any]) -> str | None:
+        nxt = data.get("next")
+        return nxt.strip() if isinstance(nxt, str) and nxt.strip() else None
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title, labels, and description for skip-review and metadata.
