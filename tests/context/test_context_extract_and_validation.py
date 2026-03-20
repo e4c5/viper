@@ -89,6 +89,47 @@ def test_extract_jira_key():
     assert refs[0].ref_type == ReferenceType.JIRA
 
 
+def test_extract_confluence_page_url():
+    refs = extract_context_references(
+        "github",
+        "o",
+        "r",
+        ["See https://example.atlassian.net/wiki/spaces/ENG/pages/12345/Page+Title for details"],
+        extract_github=False,
+        extract_jira=False,
+    )
+    assert any(r.ref_type == ReferenceType.CONFLUENCE and r.external_id == "12345" for r in refs)
+
+
+def test_extract_confluence_viewpage_action_url():
+    refs = extract_context_references(
+        "github",
+        "o",
+        "r",
+        ["See https://wiki.example.com/pages/viewpage.action?pageId=99887 for context"],
+        extract_github=False,
+        extract_jira=False,
+    )
+    assert any(r.ref_type == ReferenceType.CONFLUENCE and r.external_id == "99887" for r in refs)
+
+
+def test_extract_confluence_deduplicates_same_page_id():
+    refs = extract_context_references(
+        "github",
+        "o",
+        "r",
+        [
+            "https://wiki.example.com/spaces/ENG/pages/42/Spec",
+            "https://wiki.example.com/pages/viewpage.action?pageId=42",
+        ],
+        extract_github=False,
+        extract_jira=False,
+    )
+    confluence_refs = [r for r in refs if r.ref_type == ReferenceType.CONFLUENCE]
+    assert len(confluence_refs) == 1
+    assert confluence_refs[0].external_id == "42"
+
+
 def test_extract_skips_fenced_code():
     refs = extract_context_references(
         "github",

@@ -26,6 +26,11 @@ _CONFLUENCE_PAGE_URL = re.compile(
     r"https?://[^/\s]+/(?:wiki/)?(?:spaces/[^/\s]+/)?pages/(\d+)(?:/|\?|#|\b)",
     re.IGNORECASE,
 )
+# Confluence Server/DC older action URL: .../pages/viewpage.action?pageId=<id>
+_CONFLUENCE_ACTION_URL = re.compile(
+    r"https?://[^/\s]+/pages/viewpage\.action[^/\s]*[?&]pageId=(\d+)\b",
+    re.IGNORECASE,
+)
 
 # Optional Jira browse URL
 _JIRA_BROWSE_URL = re.compile(
@@ -105,6 +110,9 @@ def _append_gitlab_refs(add_ref, scanned: str, *, scm_provider: str) -> None:
 
 def _append_confluence_refs(add_ref, scanned: str) -> None:
     for m in _CONFLUENCE_PAGE_URL.finditer(scanned):
+        pid = m.group(1)
+        add_ref(ReferenceType.CONFLUENCE, pid, f"confluence-page:{pid}")
+    for m in _CONFLUENCE_ACTION_URL.finditer(scanned):
         pid = m.group(1)
         add_ref(ReferenceType.CONFLUENCE, pid, f"confluence-page:{pid}")
 

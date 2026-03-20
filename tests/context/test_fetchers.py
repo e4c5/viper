@@ -237,7 +237,7 @@ def test_fetch_confluence_page_403_raises_auth_error():
 
 
 def test_fetch_confluence_page_wiki_base_url():
-    """When base_url already ends with /wiki, avoid double /wiki."""
+    """When base_url already ends with /wiki, do not insert an extra /wiki segment."""
     resp_data = _confluence_response("Page", "<p>content</p>")
     client_mock = MagicMock()
     client_mock.__enter__ = MagicMock(return_value=client_mock)
@@ -245,7 +245,9 @@ def test_fetch_confluence_page_wiki_base_url():
     client_mock.get.return_value = _mock_httpx_response(200, resp_data)
 
     with patch("httpx.Client", return_value=client_mock):
-        fetch_confluence_page("https://wiki.example.com/wiki", "u", "t", "42")
+        fetch_confluence_page("https://example.atlassian.net/wiki", "u", "t", "42")
 
     called_url = client_mock.get.call_args[0][0]
-    assert called_url.count("/wiki") == 1
+    # Should be /wiki/rest/api/..., not /wiki/wiki/rest/api/...
+    assert "/wiki/wiki/" not in called_url
+    assert "/rest/api/content/42" in called_url

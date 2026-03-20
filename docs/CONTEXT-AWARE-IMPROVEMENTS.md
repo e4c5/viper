@@ -7,7 +7,7 @@ Identified during validation of the context-aware code review implementation aga
 
 ## High Priority
 
-- [ ] **`search_chunks` not scoped to the current PR's documents**
+- [x] **`search_chunks` not scoped to the current PR's documents**
   `store.py:search_chunks` runs without a `WHERE document_id = ANY(...)` filter,
   so in a shared database it will pull semantically similar chunks from *any* historical
   document, not just those fetched for the current PR. The `doc_ids_for_rag` list is
@@ -18,24 +18,24 @@ Identified during validation of the context-aware code review implementation aga
 
 ## Medium Priority
 
-- [ ] **Missing unit tests for `rag.py`**
+- [x] **Missing unit tests for `rag.py`**
   `chunk_plain_text`, `build_semantic_query_from_diff`, and the embedding helpers have
   no tests. Add a `tests/context/test_rag.py` covering at least: chunking with overlap,
   edge cases (empty text, text shorter than chunk size), and the heuristic fallback path
   in `build_semantic_query_from_diff`.
 
-- [ ] **Missing unit tests for `fetchers.py`**
+- [x] **Missing unit tests for `fetchers.py`**
   `fetch_jira_issue`, `fetch_confluence_page`, and `fetch_gitlab_issue` are untested.
   Add mocked-HTTP tests (following the pattern in `tests/providers/test_github.py`) for
   the happy path, 404 handling, and 401/403 raising `ContextAwareAuthError`.
 
-- [ ] **Missing unit tests for `pipeline.py`**
+- [x] **Missing unit tests for `pipeline.py`**
   No integration-level test exercises the full
   extract → fetch → cache → budget-decision → distill flow with mocked store and
   fetchers. Add at least one test for the under-budget direct path and one for the
   over-budget RAG path.
 
-- [ ] **Confluence display-name URLs not extracted**
+- [x] **Confluence display-name URLs not extracted** (added `viewpage.action?pageId=` pattern; pure display-name title URLs require a separate API lookup and remain out of scope)
   `extract.py:_CONFLUENCE_PAGE_URL` only matches numeric page IDs (`/pages/(\d+)`).
   URLs of the form `https://wiki.example.com/display/SPACE/Page+Title` are silently
   ignored, even though the spec says "Recognises space-based or display-based URLs."
