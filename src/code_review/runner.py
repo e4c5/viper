@@ -68,21 +68,56 @@ def _format_review_prompt_supplement(
     context_brief: str | None,
     commit_messages: list[str],
     include_commit_messages: bool,
+    remaining_tokens: int | None = None,
 ) -> str:
     """Extra user-message blocks: commit summaries and distilled external context."""
+    if remaining_tokens is not None and remaining_tokens <= 0:
+        return ""
+
+    # Keep the same rough conversion used by _estimate_tokens.
+    max_chars = remaining_tokens * 4 if remaining_tokens is not None else None
     parts: list[str] = []
+    used_chars = 0
     if include_commit_messages and commit_messages:
-        lines = "\n".join(
-            f"- {(m.splitlines()[0] if m else '')[:500]}" for m in commit_messages[:100]
-        )
-        parts.append("### PR commit messages (subject / first line)\n" + lines)
+        header = "### PR commit messages (subject / first line)\n"
+        lines: list[str] = []
+        local_used = len(header)
+        for msg in commit_messages[:100]:
+            if max_chars is not None and used_chars + local_used >= max_chars:
+                break
+            remaining_for_line = (
+                max_chars - (used_chars + local_used) if max_chars is not None else 500
+            )
+            if remaining_for_line <= 6:
+                break
+            subject = (msg.splitlines()[0] if msg else "").strip()
+            subject_cap = min(500, max(40, remaining_for_line - 4))
+            line = f"- {subject[:subject_cap]}"
+            lines.append(line)
+            local_used += len(line) + 1
+        if lines:
+            commit_block = header + "\n".join(lines)
+            parts.append(commit_block)
+            used_chars += len(commit_block)
     if context_brief:
-        parts.append(context_brief)
+        remaining_for_context = (
+            max_chars - used_chars - (2 if parts else 0) if max_chars is not None else None
+        )
+        if remaining_for_context is None:
+            parts.append(context_brief)
+        elif remaining_for_context > 0:
+            if len(context_brief) <= remaining_for_context:
+                parts.append(context_brief)
+            elif remaining_for_context > 1:
+                parts.append(context_brief[: remaining_for_context - 1] + "…")
     return "\n\n".join(parts) if parts else ""
 
 
 def _normalize_path_for_anchor(file_path: str) -> str:
-    """Normalize path like Bitbucket provider (strip dst://, src://, a/, b/) for diff line matching."""
+    """Normalize path like Bitbucket provider for diff line matching.
+
+    Strips ``dst://``, ``src://``, ``a/``, and ``b/`` prefixes.
+    """
     p = (file_path or "").strip()
     for prefix in ("dst://", "src://"):
         if p.lower().startswith(prefix):
@@ -1086,7 +1121,8 @@ class ReviewOrchestrator:
             file_session_id = f"{owner}/{repo}/pr-{pr_number}/file/{uuid.uuid4().hex[:12]}"
             head_sha_clause = f" head_sha={head_sha}." if head_sha else ""
             ref_guidance = (
-                f' When calling get_file_lines for surrounding context, use ref="{head_sha}" as the ref parameter.'
+                f' When calling get_file_lines for surrounding context, use ref="{head_sha}"'
+                " as the ref parameter."
                 if head_sha
                 else ""
             )
@@ -1097,12 +1133,15 @@ class ReviewOrchestrator:
                 " Do NOT compute line numbers from hunk headers."
             )
             msg = (
-                f"Review exactly one file from this PR. owner={owner}, repo={repo}, pr_number={pr_number}."
+                "Review exactly one file from this PR. "
+                f"owner={owner}, repo={repo}, pr_number={pr_number}."
                 + head_sha_clause
-                + f' Call get_pr_diff_for_file(owner, repo, pr_number, "{file_path}") to get the diff for this file.'
+                + " Call get_pr_diff_for_file(owner, repo, pr_number, "
+                + f'"{file_path}") to get the diff for this file.'
                 + annotation_guidance
                 + ref_guidance
-                + f' Then output a JSON array of findings for this file only. Use path "{file_path}" in every finding. '
+                + " Then output a JSON array of findings for this file only. "
+                + f'Use path "{file_path}" in every finding. '
                 "If there are no issues in this file, output exactly []."
             )
             if prompt_suffix:
@@ -1252,7 +1291,8 @@ class ReviewOrchestrator:
         """
         Auto-resolve stale comments (if supported), then post inline comments.
         Returns successful_post_count.
-        full_diff: used to set line_type (ADDED vs CONTEXT) so Bitbucket Server anchors comments correctly.
+        full_diff: used to set line_type (ADDED vs CONTEXT) so Bitbucket
+        Server anchors comments correctly.
         """
         _resolve_stale_comments_if_supported(
             provider, owner, repo, pr_number, existing, to_post, head_sha, dry_run
@@ -1267,7 +1307,15 @@ class ReviewOrchestrator:
                     "Provide head_sha or use --dry-run to skip posting."
                 )
             count = _post_inline_comments(
-                provider, owner, repo, pr_number, head_sha, to_post, cfg, llm_cfg, full_diff=full_diff
+                provider,
+                owner,
+                repo,
+                pr_number,
+                head_sha,
+                to_post,
+                cfg,
+                llm_cfg,
+                full_diff=full_diff,
             )
         # For providers that omit the fingerprint marker from inline comment bodies
         # (e.g. Bitbucket Server), there is no run_id persisted when inline posting
@@ -1335,7 +1383,11 @@ class ReviewOrchestrator:
             print(f"Code Review Findings ({len(to_post)} total)")
             print("=" * 60)
             for f, _ in to_post:
-                line_info = f"{f.line}" if not f.end_line or f.end_line == f.line else f"{f.line}-{f.end_line}"
+                line_info = (
+                    f"{f.line}"
+                    if not f.end_line or f.end_line == f.line
+                    else f"{f.line}-{f.end_line}"
+                )
                 print(f"[{f.severity.upper()}] {f.path}:{line_info}")
                 print(f"Message: {f.get_body()}")
                 if f.suggested_patch:
@@ -1448,7 +1500,9 @@ class ReviewOrchestrator:
         return f"{base_url}/{owner}/{repo}/pulls/{pr_number}"
 
     @staticmethod
-    def _load_commit_messages(provider, owner: str, repo: str, pr_number: int, need_commits: bool) -> list[str]:
+    def _load_commit_messages(
+        provider, owner: str, repo: str, pr_number: int, need_commits: bool
+    ) -> list[str]:
         raw = provider.get_pr_commit_messages(owner, repo, pr_number) if need_commits else []
         return raw if isinstance(raw, list) else []
 
@@ -1463,6 +1517,7 @@ class ReviewOrchestrator:
         pr_number: int,
         pr_info_for_metadata,
         full_diff: str,
+        remaining_tokens: int,
     ) -> tuple[list[object], str | None, str]:
         need_commits = app_cfg.include_commit_messages_in_prompt or ctx_cfg.enabled
         commit_messages = self._load_commit_messages(provider, owner, repo, pr_number, need_commits)
@@ -1493,6 +1548,7 @@ class ReviewOrchestrator:
             context_brief=context_brief,
             commit_messages=commit_messages,
             include_commit_messages=app_cfg.include_commit_messages_in_prompt,
+            remaining_tokens=remaining_tokens,
         )
         return refs, context_brief, prompt_suffix
 
@@ -1603,6 +1659,11 @@ class ReviewOrchestrator:
             )
         _, review_standards = self._detect_languages_for_files(paths)
 
+        context_window = get_context_window()
+        diff_budget = int(context_window * DIFF_TOKEN_BUDGET_RATIO)
+        # Reserve room for diff/tool output and keep supplement bounded for both modes.
+        remaining_prompt_tokens = max(0, context_window - diff_budget)
+
         refs, context_brief, prompt_suffix = self._build_prompt_suffix(
             provider,
             cfg,
@@ -1613,13 +1674,13 @@ class ReviewOrchestrator:
             pr_number,
             pr_info_for_metadata,
             full_diff,
+            remaining_prompt_tokens,
         )
         if refs:
             logger.info("context_aware: extracted %d reference(s) from PR text", len(refs))
         if context_brief:
             logger.info("context_aware: distilled context attached to review prompt")
 
-        diff_budget = int(get_context_window() * DIFF_TOKEN_BUDGET_RATIO)
         use_file_by_file = _estimate_tokens(full_diff) > diff_budget
         if use_file_by_file:
             logger.info("Running agent on %d file(s) (file-by-file)", len(paths))

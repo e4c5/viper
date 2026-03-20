@@ -29,7 +29,7 @@ Stores configuration and metadata for different context providers.
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
 | `id` | `uuid` | `PRIMARY KEY, DEFAULT gen_random_uuid()` | Unique identifier for the source. |
-| `name` | `varchar(255)` | `NOT NULL` | Name of the source (e.g., 'github', 'jira', 'confluence'). |
+| `name` | `varchar(255)` | `NOT NULL` | Name of the source (e.g., 'GitHub', 'jira', 'confluence'). |
 | `base_url` | `text` | `NOT NULL` | The base URL for the source API/web interface. |
 | `created_at` | `timestamp with time zone` | `DEFAULT now()` | Record creation timestamp. |
 
