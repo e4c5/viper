@@ -34,7 +34,7 @@ behaviour unless `CONTEXT_AWARE_REVIEW_ENABLED=true` is set.
 1. **Extraction** — The **runner** scans the PR title, PR description, and all commit messages
    included in the PR for known reference patterns (GitHub issue numbers, Jira ticket keys,
    Confluence page URLs).
-2. **Lookup & Fetch** — For each unique reference, the **runner** checks a context store.
+2. **Lookup & Fetch** — For each unique reference, the **runner** checks the context database.
    If the content is missing or stale, it is fetched via the relevant API (GitHub, Jira, or
    Confluence) and cached.
 3. **Budget Check** — The runner evaluates the total size of the relevant context.
@@ -70,9 +70,9 @@ to enable.
 > - Authentication or authorization failure for an enabled source is fatal.
 > - If no references are found, the review continues normally without added context.
 
-### Context Store
+### Database Schema
 
-All fetched context is preserved in a vector store (e.g., PGVector) to avoid redundant API calls and enable efficient RAG even for large documents.
+All fetched context is preserved in a normalized database with `pgvector` to avoid redundant API calls and enable efficient RAG even for large documents. See [PGVECTOR-SCHEMA.md](PGVECTOR-SCHEMA.md) for details.
 
 ### Minimal — GitHub Issues only (no extra credentials)
 
@@ -202,7 +202,7 @@ The agent prioritizes efficiency and token conservation:
 ## 8. RAG Implementation Details
 
 When the total fetched context exceeds the configured budget, the runner can use a
-retrieval-backed pipeline to manage the volume of data effectively.
+retrieval-backed pipeline using the [PGVector schema](PGVECTOR-SCHEMA.md) to manage the volume of data effectively.
 
 ### 8.1 PR Diff as a Query
 
@@ -237,7 +237,7 @@ runner.py
 ├── optionally include commit messages in the review prompt
 │
 ├── resolve_context()
-│     ├── Check ContextStore (cache hit?)
+│     ├── Check database (cache hit?)
 │     └── fetch_content() on cache miss or stale entry
 │
 ├── budget_context()
@@ -260,7 +260,7 @@ The architecture allows adding new sources (e.g., Notion, Linear) by:
 1. Adding a new `ReferenceType` in the extractor.
 2. Implementing a fetcher for the new source.
 3. Defining canonical IDs, freshness rules, and content normalization for that source.
-4. Reusing the same `ContextStore` and distillation pipeline.
+4. Reusing the same database schema and distillation pipeline.
 ---
 
 ## 11. Implementation roadmap
@@ -268,16 +268,17 @@ The architecture allows adding new sources (e.g., Notion, Linear) by:
 The following items are planned for the implementation of the context-aware review feature:
 
 ### 11.1 Phase 1 — Infrastructure & Discovery
-- [ ] **Configuration**: Add `CONTEXT_*` settings to `config.py`, plus `CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT` with a default of `true`.
+- [ ] **Configuration**: Add `CONTEXT_AWARE_REVIEW_DB_URL` and `CONTEXT_*` settings to `config.py`, plus `CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT` with a default of `true`.
 - [ ] **Validation**: Validate source configuration per source and fail fast for enabled sources with missing required credentials.
 - [ ] **Extraction**: Implement conservative reference extraction for PR titles, descriptions, and commit messages.
 - [ ] **Provider contract**: Extend `ProviderInterface` with PR commit-message retrieval and implement it across all built-in providers.
-- [ ] **Abstractions**: Introduce `ReferenceExtractor`, `ContextFetcher`, `ContextStore`, and `ContextDistiller` interfaces.
+- [ ] **Abstractions**: Introduce `ReferenceExtractor`, `ContextFetcher`, and `ContextDistiller` interfaces.
 
 ### 11.2 Phase 2 — Direct Fetch + Distillation
 - [ ] **Fetchers**: Implement individual fetchers for GitHub (SCM reuse), Jira, and Confluence.
 - [ ] **Normalization**: Normalize each source into a compact text representation plus metadata such as canonical ID and `updated_at`.
-- [ ] **Store**: Implement a simple cache-backed `ContextStore` to minimize redundant API calls.
+- [ ] **Database**: Implement schema for `sources`, `documents`, and `chunks` in PostgreSQL.
+- [ ] **Store**: Implement cache-backed database logic to minimize redundant API calls.
 - [ ] **Distiller**: Implement a summary LLM pass that turns fetched context into a concise review brief.
 
 ### 11.3 Phase 3 — Runner Integration
@@ -288,7 +289,7 @@ The following items are planned for the implementation of the context-aware revi
 - [ ] **Failure handling**: Stop the review on configuration or authentication failures for enabled sources, while allowing normal reviews to continue when no references are found.
 
 ### 11.4 Phase 4 — Retrieval For Oversized Context
-- [ ] **Retrieval backend**: Add an optional retrieval-capable store such as PGVector behind the `ContextStore` abstraction.
+- [ ] **Retrieval backend**: Implement chunking and embedding logic to populate `chunks` table.
 - [ ] **Semantic Search**: Implement the diff-summarization pre-pass for retrieval query construction.
 - [ ] **Chunk retrieval**: Retrieve the most relevant chunks for oversized documents before distillation.
 
