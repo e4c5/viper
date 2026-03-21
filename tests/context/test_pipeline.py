@@ -68,6 +68,7 @@ def _make_ctx(
     ctx.confluence_token = None
     ctx.github_api_url = None
     ctx.gitlab_api_url = None
+    ctx.jira_extra_fields = ""
     return ctx
 
 

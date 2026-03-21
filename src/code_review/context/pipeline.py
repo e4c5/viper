@@ -179,9 +179,11 @@ def _build_retrieved_context_text(
         store.replace_chunks(conn, did, payload)
     doc_ids = [did for _, did in doc_ids_for_rag]
     retrieved = store.search_chunks(conn, q_emb, limit=16, document_ids=doc_ids)
-    if not retrieved:
-        return combined[: ctx.max_bytes] + "\n…(truncated)"
-    return "\n\n".join(retrieved)
+    text = "\n\n".join(retrieved) if retrieved else combined
+    encoded = text.encode("utf-8")
+    if len(encoded) > ctx.max_bytes:
+        return encoded[: ctx.max_bytes].decode("utf-8", errors="ignore") + "\n…(truncated)"
+    return text
 
 
 def build_context_brief_for_pr(

@@ -120,13 +120,15 @@ def test_semantic_query_falls_back_to_heuristic_on_llm_failure(mock_completion, 
     assert "foo.py" in result
 
 
-def test_semantic_query_heuristic_no_paths():
-    # A diff with no +++ / --- header lines should use the generic fallback.
+@patch("code_review.context.rag.get_llm_config")
+@patch("code_review.context.rag.get_configured_model")
+@patch("code_review.context.rag.litellm.completion", side_effect=Exception("no creds"))
+def test_semantic_query_heuristic_no_paths(mock_completion, mock_model, mock_llm):
+    # Diff has no +++ / --- header lines, so the heuristic produces the generic fallback.
+    mock_llm.return_value = MagicMock(model="gpt-4o-mini", temperature=0.0)
+    mock_model.return_value = "openai/gpt-4o-mini"
     result = build_semantic_query_from_diff("no file headers here")
-    # Heuristic returns generic when no paths found; this goes through the LLM path
-    # but we're testing the heuristic helper indirectly by checking the fallback string.
-    # In pure unit testing without mocking, we just confirm it returns a non-empty string.
-    assert isinstance(result, str) and result
+    assert result == "pull request code changes"
 
 
 # ---------------------------------------------------------------------------

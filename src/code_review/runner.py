@@ -1907,7 +1907,7 @@ class ReviewOrchestrator:
             repo,
             pr_number,
             use_file_by_file=use_file_by_file,
-            context_brief_attached=bool(context_brief),
+            context_brief_attached=bool(context_brief and "<context>" in prompt_suffix),
         )
 
         all_findings = self._run_agent_and_collect_findings(
@@ -1970,7 +1970,7 @@ class ReviewOrchestrator:
             all_findings,
             successful_post_count,
             to_post,
-            context_brief_attached=bool(context_brief),
+            context_brief_attached=bool(context_brief and "<context>" in prompt_suffix),
         )
 
 
