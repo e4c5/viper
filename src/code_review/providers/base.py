@@ -2,6 +2,7 @@
 
 import logging
 from abc import ABC, abstractmethod
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -93,6 +94,8 @@ class ProviderCapabilities(BaseModel):
     - omit_fingerprint_marker_in_body: when True, do not add the HTML comment marker to
       the comment body at all (avoids stray XML in UIs that display it). Dedup still uses
       body_hash; fingerprint cannot be read back from existing comments.
+    - supports_review_decisions: provider supports PR-level review decisions
+      (APPROVE / REQUEST_CHANGES).
     """
 
     resolvable_comments: bool = False
@@ -101,6 +104,10 @@ class ProviderCapabilities(BaseModel):
     markup_hides_html_comment: bool = True
     markup_supports_collapsible: bool = True
     omit_fingerprint_marker_in_body: bool = False
+    supports_review_decisions: bool = False
+
+
+ReviewDecision = Literal["APPROVE", "REQUEST_CHANGES"]
 
 
 class FileInfo(BaseModel):
@@ -173,6 +180,54 @@ class ReviewComment(BaseModel):
     line: int
     body: str
     resolved: bool = False
+
+
+ReviewItemKind = Literal["inline_comment", "discussion_thread", "task"]
+
+
+class UnresolvedReviewItem(BaseModel):
+    """Normalized unresolved review signal for PR quality-gate decisioning.
+
+    Providers map SCM-specific threads, tasks, or inline comments into this shape.
+    ``inferred_severity`` is parsed from comment text when possible (e.g. ``[High]``).
+    """
+
+    stable_id: str = Field(..., description="Unique id for this item within one provider response")
+    thread_id: str | None = None
+    kind: ReviewItemKind = "inline_comment"
+    path: str = ""
+    line: int = 0
+    body: str = ""
+    inferred_severity: Literal["high", "medium", "low", "nit", "unknown"] = "unknown"
+
+
+def default_unresolved_review_items_from_comments(
+    comments: list[ReviewComment],
+) -> list[UnresolvedReviewItem]:
+    """Build unresolved items from inline comments with resolved=False (shared default)."""
+    from code_review.formatters.comment import infer_severity_from_comment_body
+
+    out: list[UnresolvedReviewItem] = []
+    for c in comments:
+        if c.resolved:
+            continue
+        body = (c.body or "").strip()
+        if not body:
+            continue
+        cid = (c.id or "").strip()
+        stable = f"comment:{cid}" if cid else f"path:{c.path}:{c.line}"
+        out.append(
+            UnresolvedReviewItem(
+                stable_id=stable,
+                thread_id=None,
+                kind="inline_comment",
+                path=c.path or "",
+                line=int(c.line or 0),
+                body=body,
+                inferred_severity=infer_severity_from_comment_body(body),
+            )
+        )
+    return out
 
 
 class InlineComment(BaseModel):
@@ -296,6 +351,19 @@ class ProviderInterface(ABC):
         """
         ...
 
+    def submit_review_decision(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        decision: ReviewDecision,
+        *,
+        body: str = "",
+        head_sha: str = "",
+    ) -> None:
+        """Submit a PR-level review decision (e.g. APPROVE or REQUEST_CHANGES)."""
+        raise NotImplementedError("submit_review_decision not implemented for this provider")
+
     def post_review_comment(
         self,
         owner: str,
@@ -331,6 +399,18 @@ class ProviderInterface(ABC):
     ) -> list[ReviewComment]:
         """Return existing review comments (include resolved status for ignore list)."""
         ...
+
+    def get_unresolved_review_items_for_quality_gate(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[UnresolvedReviewItem]:
+        """Return unresolved review threads/tasks/comments for approve/request-changes gating.
+
+        Default uses ``get_existing_review_comments`` and treats ``resolved=False`` as open.
+        Providers with thread- or task-level resolution should override.
+        """
+        return default_unresolved_review_items_from_comments(
+            self.get_existing_review_comments(owner, repo, pr_number)
+        )
 
     def resolve_comment(self, owner: str, repo: str, comment_id: str) -> None:  # noqa: B027
         """Mark a comment as resolved. Default no-op if provider lacks support."""

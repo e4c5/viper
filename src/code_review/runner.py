@@ -41,7 +41,11 @@ from code_review.diff.parser import (
 from code_review.formatters.comment import finding_to_comment_body
 from code_review.models import get_context_window
 from code_review.providers import get_provider
-from code_review.providers.base import InlineComment, RateLimitError
+from code_review.providers.base import (
+    InlineComment,
+    RateLimitError,
+    UnresolvedReviewItem,
+)
 from code_review.schemas.findings import FindingV1
 from code_review.standards import detect_from_paths, get_review_standards
 
@@ -719,6 +723,156 @@ def _post_run_marker_comment(
         )
 
 
+def _quality_gate_dedupe_key_for_item(item: UnresolvedReviewItem) -> str:
+    """Stable key so the same issue is not double-counted (marker fingerprint preferred)."""
+    parsed = parse_marker_from_comment_body(item.body)
+    fp = parsed.get("fingerprint")
+    if fp:
+        return f"fp:{fp}"
+    if item.thread_id:
+        return f"thread:{item.thread_id}"
+    return f"id:{item.stable_id}"
+
+
+def _quality_gate_dedupe_key_for_new_finding(finding: FindingV1, fp: str) -> str:
+    if fp:
+        return f"fp:{fp}"
+    return f"new:{finding.path}:{finding.line}:{finding.code}"
+
+
+def _quality_gate_high_medium_counts(
+    provider,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    to_post: list[tuple[FindingV1, str]],
+) -> tuple[int, int]:
+    """Count distinct open high/medium signals: existing unresolved items plus net-new findings."""
+    try:
+        items = provider.get_unresolved_review_items_for_quality_gate(owner, repo, pr_number)
+    except Exception as e:
+        logger.warning(
+            "get_unresolved_review_items_for_quality_gate failed owner=%s repo=%s pr_number=%s: %s",
+            owner,
+            repo,
+            pr_number,
+            e,
+        )
+        items = []
+    if not isinstance(items, list):
+        items = []
+
+    seen_keys: set[str] = set()
+    high_count = 0
+    medium_count = 0
+
+    def _bump(key: str, severity: str) -> None:
+        nonlocal high_count, medium_count
+        if key in seen_keys:
+            return
+        seen_keys.add(key)
+        if severity == "high":
+            high_count += 1
+        elif severity == "medium":
+            medium_count += 1
+
+    for raw in items:
+        if not isinstance(raw, UnresolvedReviewItem):
+            continue
+        sev = raw.inferred_severity
+        if sev not in ("high", "medium"):
+            continue
+        _bump(_quality_gate_dedupe_key_for_item(raw), sev)
+
+    for finding, fp in to_post:
+        sev = finding.severity
+        if sev not in ("high", "medium"):
+            continue
+        _bump(_quality_gate_dedupe_key_for_new_finding(finding, fp), sev)
+
+    return high_count, medium_count
+
+
+def _compute_review_decision_from_counts(
+    high_count: int,
+    medium_count: int,
+    *,
+    high_threshold: int,
+    medium_threshold: int,
+) -> str:
+    """Return REQUEST_CHANGES or APPROVE from aggregated open high/medium counts."""
+    if high_count >= high_threshold or medium_count >= medium_threshold:
+        return "REQUEST_CHANGES"
+    return "APPROVE"
+
+
+def _maybe_submit_review_decision(
+    provider,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+    dry_run: bool,
+    to_post: list[tuple[FindingV1, str]],
+    cfg,
+) -> None:
+    """Submit or log PR-level review decision when configured and supported."""
+    if not bool(getattr(cfg, "review_decision_enabled", False)):
+        return
+
+    high_threshold = int(getattr(cfg, "review_decision_high_threshold", 1))
+    medium_threshold = int(getattr(cfg, "review_decision_medium_threshold", 3))
+    high_count, medium_count = _quality_gate_high_medium_counts(
+        provider, owner, repo, pr_number, to_post
+    )
+    decision = _compute_review_decision_from_counts(
+        high_count,
+        medium_count,
+        high_threshold=high_threshold,
+        medium_threshold=medium_threshold,
+    )
+    reason = (
+        f"Auto decision by Viper: aggregated open high={high_count} (threshold {high_threshold}), "
+        f"open medium={medium_count} (threshold {medium_threshold}) "
+        f"=> {decision}."
+    )
+
+    caps = provider.capabilities()
+    if not caps.supports_review_decisions:
+        logger.info(
+            "Skipping review decision submission: provider does not support review decisions "
+            "(would submit %s).",
+            decision,
+        )
+        return
+
+    if dry_run:
+        logger.info("Dry run: would submit PR review decision=%s", decision)
+        return
+
+    try:
+        provider.submit_review_decision(
+            owner,
+            repo,
+            pr_number,
+            decision,
+            body=reason,
+            head_sha=head_sha,
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to submit PR review decision=%s owner=%s repo=%s pr=%s: %s",
+            decision,
+            owner,
+            repo,
+            pr_number,
+            e,
+            exc_info=logger.isEnabledFor(logging.DEBUG),
+        )
+        return
+    logger.info("Submitted PR review decision=%s", decision)
+
+
 def _fingerprint_for_finding(
     f: FindingV1,
     file_lines_by_path: dict[str, list[str]],
@@ -884,6 +1038,9 @@ class ReviewOrchestrator:
         *,
         dry_run: bool = False,
         print_findings: bool = False,
+        review_decision_enabled: bool | None = None,
+        review_decision_high_threshold: int | None = None,
+        review_decision_medium_threshold: int | None = None,
     ):
         self.owner = owner
         self.repo = repo
@@ -891,6 +1048,9 @@ class ReviewOrchestrator:
         self.head_sha = head_sha
         self.dry_run = dry_run
         self.print_findings = print_findings
+        self._review_decision_enabled_override = review_decision_enabled
+        self._review_decision_high_threshold_override = review_decision_high_threshold
+        self._review_decision_medium_threshold_override = review_decision_medium_threshold
 
     def _load_config_and_provider(self):
         """Load SCM/LLM config and create the provider instance.
@@ -898,6 +1058,19 @@ class ReviewOrchestrator:
         Returns (cfg, llm_cfg, provider).
         """
         cfg = get_scm_config()
+        overrides: dict[str, bool | int] = {}
+        if self._review_decision_enabled_override is not None:
+            overrides["review_decision_enabled"] = self._review_decision_enabled_override
+        if self._review_decision_high_threshold_override is not None:
+            overrides["review_decision_high_threshold"] = (
+                self._review_decision_high_threshold_override
+            )
+        if self._review_decision_medium_threshold_override is not None:
+            overrides["review_decision_medium_threshold"] = (
+                self._review_decision_medium_threshold_override
+            )
+        if overrides:
+            cfg = cfg.model_copy(update=overrides)
         llm_cfg = get_llm_config()
         token_val = (
             cfg.token.get_secret_value() if hasattr(cfg.token, "get_secret_value") else cfg.token
@@ -1359,6 +1532,16 @@ class ReviewOrchestrator:
             and provider.capabilities().omit_fingerprint_marker_in_body
         ):
             _post_run_marker_comment(provider, owner, repo, pr_number, cfg, llm_cfg, head_sha)
+        _maybe_submit_review_decision(
+            provider,
+            owner,
+            repo,
+            pr_number,
+            head_sha,
+            dry_run,
+            to_post,
+            cfg,
+        )
         return count
 
     def _record_observability_and_build_result(
@@ -1796,13 +1979,27 @@ def run_review(
     *,
     dry_run: bool = False,
     print_findings: bool = False,
+    review_decision_enabled: bool | None = None,
+    review_decision_high_threshold: int | None = None,
+    review_decision_medium_threshold: int | None = None,
 ) -> list[FindingV1]:
     """
     Run the code review agent (findings-only mode). Fetches existing comments,
     runs agent, parses findings, filters by ignore list, and posts via provider.
     Returns list of findings that were posted (or would be posted if dry_run).
+
+    Optional review-decision kwargs apply only to this run (they do not mutate
+    the process-global cached :func:`~code_review.config.get_scm_config` instance).
     """
     orchestrator = ReviewOrchestrator(
-        owner, repo, pr_number, head_sha, dry_run=dry_run, print_findings=print_findings
+        owner,
+        repo,
+        pr_number,
+        head_sha,
+        dry_run=dry_run,
+        print_findings=print_findings,
+        review_decision_enabled=review_decision_enabled,
+        review_decision_high_threshold=review_decision_high_threshold,
+        review_decision_medium_threshold=review_decision_medium_threshold,
     )
     return orchestrator.run()

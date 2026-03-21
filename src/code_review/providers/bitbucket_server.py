@@ -13,13 +13,15 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    UnresolvedReviewItem,
     _log_pr_commit_messages_warning,
     _log_pr_info_warning,
     commit_messages_from_commit_list,
+    default_unresolved_review_items_from_comments,
     normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
-from code_review.formatters.comment import render_suggestion_block
+from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.safety import truncate_repo_content
 
 logger = logging.getLogger("code_review")
@@ -407,6 +409,85 @@ class BitbucketServerProvider(ProviderInterface):
                 break
             start = next_start
         return result
+
+    @staticmethod
+    def _bbs_append_open_task_for_quality_gate(
+        t: Any, items: list[UnresolvedReviewItem]
+    ) -> None:
+        if not isinstance(t, dict):
+            return
+        state = (str(t.get("state") or "")).strip().upper()
+        if state in ("RESOLVED", "DECLINED"):
+            return
+        text = str(t.get("text") or "").strip()
+        if not text:
+            return
+        tid = str(t.get("id", "") or "")
+        items.append(
+            UnresolvedReviewItem(
+                stable_id=f"bbs:task:{tid}" if tid else f"bbs:task:{len(items)}",
+                thread_id=tid or None,
+                kind="task",
+                path="",
+                line=0,
+                body=text,
+                inferred_severity=infer_severity_from_comment_body(text),
+            )
+        )
+
+    def _bbs_paginate_open_pr_tasks(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        items: list[UnresolvedReviewItem],
+    ) -> None:
+        path = self._path(owner, repo, "pull-requests", str(pr_number), "tasks")
+        start = 0
+        for _ in range(500):
+            try:
+                data = self._get(path, params={"start": start, "limit": 50})
+            except Exception as e:
+                logger.warning(
+                    "Bitbucket Server PR tasks failed owner=%s repo=%s pr=%s: %s",
+                    owner,
+                    repo,
+                    pr_number,
+                    e,
+                )
+                return
+            if not isinstance(data, dict):
+                return
+            for t in data.get("values") or []:
+                self._bbs_append_open_task_for_quality_gate(t, items)
+            if bool(data.get("isLastPage", True)):
+                return
+            nxt = data.get("nextPageStart")
+            if nxt is None:
+                return
+            next_start = int(nxt)
+            if next_start == start:
+                return
+            start = next_start
+
+    def get_unresolved_review_items_for_quality_gate(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[UnresolvedReviewItem]:
+        """Unresolved inline comments (non-RESOLVED) plus open PR tasks."""
+        try:
+            existing = self.get_existing_review_comments(owner, repo, pr_number)
+        except Exception as e:
+            logger.warning(
+                "Bitbucket Server PR activities fetch failed for quality gate owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            existing = []
+        items = list(default_unresolved_review_items_from_comments(existing))
+        self._bbs_paginate_open_pr_tasks(owner, repo, pr_number, items)
+        return items
 
     def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
         """Post PR-level comment (no anchor)."""

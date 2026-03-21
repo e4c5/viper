@@ -330,6 +330,81 @@ def test_get_existing_review_comments_uses_activities_endpoint(mock_client):
     assert comments[0].line == 5
 
 
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_unresolved_review_items_merges_comments_and_open_tasks(mock_client):
+    """Quality gate includes non-RESOLVED activity comments plus OPEN PR tasks."""
+
+    def _get_side_effect(url: str, params=None, **kwargs):
+        mock_r = MagicMock()
+        mock_r.headers = {"content-type": "application/json"}
+        mock_r.raise_for_status = MagicMock()
+        u = str(url)
+        if "/activities" in u:
+            mock_r.json.return_value = {
+                "isLastPage": True,
+                "values": [
+                    {
+                        "action": "COMMENTED",
+                        "comment": {
+                            "id": 1,
+                            "text": "[Low] note",
+                            "state": "OPEN",
+                            "anchor": {"path": "f.java", "line": 2},
+                        },
+                    }
+                ],
+            }
+        elif "/tasks" in u:
+            mock_r.json.return_value = {
+                "isLastPage": True,
+                "values": [{"id": 9, "state": "OPEN", "text": "[Medium] task body"}],
+            }
+        else:
+            mock_r.json.return_value = {}
+        return mock_r
+
+    mock_client.return_value.__enter__.return_value.get.side_effect = _get_side_effect
+
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    items = p.get_unresolved_review_items_for_quality_gate("PROJ", "my-repo", 42)
+    kinds = {i.kind for i in items}
+    assert "inline_comment" in kinds
+    assert "task" in kinds
+    assert any(i.inferred_severity == "medium" for i in items)
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_unresolved_review_items_continues_when_activities_fails(mock_client):
+    """Comment/activities fetch must not skip task-based quality gate signals."""
+
+    def _get_side_effect(url: str, params=None, **kwargs):
+        mock_r = MagicMock()
+        mock_r.headers = {"content-type": "application/json"}
+        u = str(url)
+        if "/activities" in u:
+            mock_r.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "503", request=MagicMock(), response=MagicMock()
+            )
+        elif "/tasks" in u:
+            mock_r.raise_for_status = MagicMock()
+            mock_r.json.return_value = {
+                "isLastPage": True,
+                "values": [{"id": 9, "state": "OPEN", "text": "[High] fix me"}],
+            }
+        else:
+            mock_r.raise_for_status = MagicMock()
+            mock_r.json.return_value = {}
+        return mock_r
+
+    mock_client.return_value.__enter__.return_value.get.side_effect = _get_side_effect
+
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    items = p.get_unresolved_review_items_for_quality_gate("PROJ", "my-repo", 42)
+    assert len(items) == 1
+    assert items[0].kind == "task"
+    assert items[0].inferred_severity == "high"
+
+
 def test_extract_commit_id_string_latestcommit():
     """Bitbucket Server commonly returns latestCommit as a plain string hash."""
     ref = {

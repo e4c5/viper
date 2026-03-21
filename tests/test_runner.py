@@ -1,12 +1,13 @@
 """Tests for runner and agent (mocked provider)."""
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tests.conftest import runner_run_async_returning
 from code_review.agent import create_review_agent
-from code_review.providers.base import FileInfo, PRInfo, ProviderCapabilities
+from code_review.providers.base import FileInfo, PRInfo, ProviderCapabilities, UnresolvedReviewItem
 
 
 class MockProvider:
@@ -40,8 +41,91 @@ class MockProvider:
         return ProviderCapabilities(
             resolvable_comments=False,
             supports_suggestions=False,
-            supports_multiline_suggestions=False
+            supports_multiline_suggestions=False,
         )
+
+
+def _scm_config(**overrides):
+    m = MagicMock()
+    for k, v in {
+        "provider": "gitea",
+        "url": "https://x.com",
+        "token": "x",
+        "skip_label": "",
+        "skip_title_pattern": "",
+        **overrides,
+    }.items():
+        setattr(m, k, v)
+    return m
+
+
+def _llm_config(**overrides):
+    m = MagicMock()
+    for k, v in {"provider": "gemini", "model": "model-x", **overrides}.items():
+        setattr(m, k, v)
+    return m
+
+
+def _base_review_provider(
+    *,
+    capabilities: ProviderCapabilities | None = None,
+) -> MagicMock:
+    """Provider mock for tests that run the agent against a single modified file."""
+    p = MagicMock()
+    p.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
+    p.get_pr_diff.return_value = "diff"
+    p.get_file_content.return_value = "content"
+    p.get_existing_review_comments.return_value = []
+    p.post_review_comments = MagicMock()
+    p.post_pr_summary_comment = MagicMock()
+    p.capabilities.return_value = capabilities or ProviderCapabilities(
+        resolvable_comments=False,
+        supports_suggestions=False,
+    )
+    return p
+
+
+def _final_adk_event(findings_json: str) -> MagicMock:
+    ev = MagicMock()
+    ev.is_final_response.return_value = True
+    ev.content = MagicMock()
+    ev.content.parts = [MagicMock(text=findings_json)]
+    return ev
+
+
+def _adk_runner_single_event(findings_json: str) -> MagicMock:
+    mock_event = _final_adk_event(findings_json)
+    inst = MagicMock()
+    inst.run_async = runner_run_async_returning([mock_event])
+    return inst
+
+
+def _adk_runner_n_per_file_calls(findings_json: str, n: int) -> MagicMock:
+    mock_event = _final_adk_event(findings_json)
+    inst = MagicMock()
+    wrapper = runner_run_async_returning([mock_event])
+    inst.run_async.side_effect = [wrapper() for _ in range(n)]
+    return inst
+
+
+@contextmanager
+def _patch_adk_runner(mock_runner_instance: MagicMock):
+    with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
+        yield
+
+
+def _wire_standard_runner_mocks(
+    mock_get_scm_config,
+    mock_get_provider,
+    mock_get_context_window,
+    *,
+    scm=None,
+    provider=None,
+    context_window: int = 1_000_000,
+):
+    mock_get_scm_config.return_value = scm if scm is not None else _scm_config()
+    mock_get_provider.return_value = provider if provider is not None else _base_review_provider()
+    mock_get_context_window.return_value = context_window
 
 
 def test_create_review_agent():
@@ -60,21 +144,7 @@ def test_run_review_ignore_list_and_posts_net_new(
     """Runner builds ignore set from existing comments, filters findings, posts only net-new."""
     from code_review.runner import run_review
 
-    mock_get_scm_config.return_value = MagicMock(
-        provider="gitea",
-        url="https://x.com",
-        token="x",
-        skip_label="",
-        skip_title_pattern="",
-    )
-    provider = MagicMock()
-    provider.get_pr_files.return_value = [
-        FileInfo(path="foo.py", status="modified"),
-    ]
-    provider.get_pr_diff.return_value = "diff"
-    provider.get_file_content.return_value = "content"
-    # Existing comment body matches the fully formatted body the runner will
-    # generate for the duplicate finding, including severity prefix.
+    provider = _base_review_provider()
     existing_body = "[High] Duplicate finding."
     provider.get_existing_review_comments.return_value = [
         MagicMock(
@@ -83,30 +153,18 @@ def test_run_review_ignore_list_and_posts_net_new(
             model_dump=lambda: {"path": "foo.py", "body": existing_body},
         ),
     ]
-    provider.post_review_comments = MagicMock()
-    provider.capabilities.return_value = ProviderCapabilities(
-        resolvable_comments=False, supports_suggestions=False
+    _wire_standard_runner_mocks(
+        mock_get_scm_config, mock_get_provider, mock_get_context_window, provider=provider
     )
-    provider.post_pr_summary_comment = MagicMock()
-    mock_get_provider.return_value = provider
-    mock_get_context_window.return_value = 1_000_000
 
-    # Mock Runner.run_async to yield one final response with JSON findings (one duplicate, one net-new)
     findings_json = """[
         {"path":"foo.py","line":1,"severity":"high","code":"x","message":"Duplicate finding."},
         {"path":"foo.py","line":2,"severity":"medium","code":"y","message":"Net new finding."}
     ]"""
-    mock_event = MagicMock()
-    mock_event.is_final_response.return_value = True
-    mock_event.content = MagicMock()
-    mock_event.content.parts = [MagicMock(text=findings_json)]
-    mock_runner_instance = MagicMock()
-    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
-    with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
+    with _patch_adk_runner(_adk_runner_single_event(findings_json)):
         to_post = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
 
-    # Duplicate (matches existing comment body hash) filtered out; only net-new
     assert len(to_post) == 1
     assert to_post[0].message == "Net new finding."
     provider.post_review_comments.assert_called_once()
@@ -128,37 +186,17 @@ def test_run_review_raises_when_posting_without_head_sha(
     """Posting comments without head_sha (dry_run=False) raises ValueError."""
     from code_review.runner import run_review
 
-    mock_get_scm_config.return_value = MagicMock(
-        provider="gitea",
-        url="https://x.com",
-        token="x",
-        skip_label="",
-        skip_title_pattern="",
+    provider = _base_review_provider()
+    _wire_standard_runner_mocks(
+        mock_get_scm_config, mock_get_provider, mock_get_context_window, provider=provider
     )
-    provider = MagicMock()
-    provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    provider.get_pr_diff.return_value = "diff"
-    provider.get_file_content.return_value = "content"
-    provider.get_existing_review_comments.return_value = []
-    provider.post_review_comments = MagicMock()
-    provider.capabilities.return_value = ProviderCapabilities(
-        resolvable_comments=False, supports_suggestions=False
-    )
-    mock_get_provider.return_value = provider
-    mock_get_context_window.return_value = 1_000_000
 
     findings_json = (
         '[{"path":"foo.py","line":1,"severity":"medium","code":"x",'
         '"message":"Fix."}]'
     )
-    mock_event = MagicMock()
-    mock_event.is_final_response.return_value = True
-    mock_event.content = MagicMock()
-    mock_event.content.parts = [MagicMock(text=findings_json)]
-    mock_runner_instance = MagicMock()
-    mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
-    with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
+    with _patch_adk_runner(_adk_runner_single_event(findings_json)):
         with pytest.raises(ValueError, match="head_sha is required when posting"):
             run_review("o", "r", 1, head_sha="", dry_run=False)
     provider.post_review_comments.assert_not_called()
@@ -176,10 +214,7 @@ def test_run_review_skips_when_pr_has_skip_label(
     """
     from code_review.runner import run_review
 
-    mock_get_scm_config.return_value = MagicMock(
-        provider="gitea",
-        url="https://x.com",
-        token="x",
+    mock_get_scm_config.return_value = _scm_config(
         skip_label="skip-review",
         skip_title_pattern="[skip-review]",
     )
@@ -212,17 +247,8 @@ def test_run_review_skips_when_idempotency_marker_present(
     """When an existing marker has the same run id, run_review returns [] and does not post."""
     from code_review.runner import _build_idempotency_key, run_review
 
-    scm_cfg = MagicMock(
-        provider="gitea",
-        url="https://x.com",
-        token="x",
-        skip_label="",
-        skip_title_pattern="",
-    )
-    llm_cfg = MagicMock(
-        provider="gemini",
-        model="model-x",
-    )
+    scm_cfg = _scm_config()
+    llm_cfg = _llm_config()
     mock_get_scm_config.return_value = scm_cfg
     mock_get_llm_config.return_value = llm_cfg
 
@@ -265,16 +291,8 @@ def test_run_review_uses_file_by_file_mode_when_diff_exceeds_budget(
     """When diff size exceeds budget, runner reviews files one-by-one with separate sessions."""
     from code_review.runner import run_review
 
-    scm_cfg = MagicMock(
-        provider="gitea",
-        url="https://x.com",
-        token="x",
-        skip_label="",
-        skip_title_pattern="",
-    )
-    llm_cfg = MagicMock(
-        provider="gemini",
-        model="model-x",
+    scm_cfg = _scm_config()
+    llm_cfg = _llm_config(
         temperature=0.0,
         max_output_tokens=1024,
         disable_tool_calls=False,
@@ -282,44 +300,206 @@ def test_run_review_uses_file_by_file_mode_when_diff_exceeds_budget(
     mock_get_scm_config.return_value = scm_cfg
     mock_get_llm_config.return_value = llm_cfg
 
-    provider = MagicMock()
+    provider = _base_review_provider()
     provider.get_pr_files.return_value = [
         FileInfo(path="foo.py", status="modified"),
         FileInfo(path="bar.py", status="modified"),
     ]
-    # Large diff text to exceed token budget
     provider.get_pr_diff.return_value = "x" * 10_000
-    provider.get_file_content.return_value = "content"
-    provider.get_existing_review_comments.return_value = []
-    provider.post_review_comments = MagicMock()
-    provider.capabilities.return_value = ProviderCapabilities(
-        resolvable_comments=False, supports_suggestions=False
-    )
-    provider.post_pr_summary_comment = MagicMock()
     mock_get_provider.return_value = provider
-    # Small context window so diff_token_budget is tiny and file-by-file path is used
     mock_get_context_window.return_value = 16
 
     findings_json = (
         '[{"path":"foo.py","line":1,"severity":"medium","code":"x",'
         '"message":"Fix."}]'
     )
-    mock_event = MagicMock()
-    mock_event.is_final_response.return_value = True
-    mock_event.content = MagicMock()
-    mock_event.content.parts = [MagicMock(text=findings_json)]
+    mock_runner = _adk_runner_n_per_file_calls(findings_json, 2)
 
-    mock_runner_instance = MagicMock()
-    # One run_async call per file (two files -> two async generators)
-    mock_runner_instance.run_async.side_effect = [
-        runner_run_async_returning([mock_event])(),
-        runner_run_async_returning([mock_event])(),
-    ]
-
-    with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
+    with _patch_adk_runner(mock_runner):
         result = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
 
-    # We should get findings for each file (filtered down to postings)
     assert len(result) == 1
-    # Runner.run_async called once per file
-    assert mock_runner_instance.run_async.call_count == 2
+    assert mock_runner.run_async.call_count == 2
+
+
+def _review_decision_scm_config(**extra):
+    return _scm_config(
+        review_decision_enabled=True,
+        review_decision_high_threshold=1,
+        review_decision_medium_threshold=3,
+        **extra,
+    )
+
+
+def _provider_with_review_decisions(
+    *,
+    capabilities: ProviderCapabilities | None = None,
+) -> MagicMock:
+    caps = capabilities or ProviderCapabilities(
+        resolvable_comments=False,
+        supports_suggestions=False,
+        supports_review_decisions=True,
+    )
+    p = _base_review_provider(capabilities=caps)
+    p.submit_review_decision = MagicMock()
+    p.get_unresolved_review_items_for_quality_gate = MagicMock(return_value=[])
+    return p
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_submits_request_changes_when_threshold_met(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    from code_review.runner import run_review
+
+    provider = _provider_with_review_decisions()
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    findings_json = (
+        '[{"path":"foo.py","line":1,"severity":"high","code":"x",'
+        '"message":"Must fix."}]'
+    )
+
+    with _patch_adk_runner(_adk_runner_single_event(findings_json)):
+        run_review("o", "r", 1, head_sha="abc123", dry_run=False)
+
+    provider.submit_review_decision.assert_called_once()
+    assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_continues_when_submit_review_decision_raises(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    """Transient SCM errors on review decision must not fail the run after posting."""
+    from code_review.runner import run_review
+
+    provider = _provider_with_review_decisions()
+    provider.submit_review_decision.side_effect = RuntimeError("API unavailable")
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    findings_json = (
+        '[{"path":"foo.py","line":1,"severity":"high","code":"x",'
+        '"message":"Must fix."}]'
+    )
+
+    with _patch_adk_runner(_adk_runner_single_event(findings_json)):
+        posted = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
+
+    assert len(posted) == 1
+    provider.post_review_comments.assert_called_once()
+    provider.submit_review_decision.assert_called_once()
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_submits_approve_when_only_low_nit_open(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    from code_review.runner import run_review
+
+    provider = _provider_with_review_decisions()
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    findings_json = """[
+        {"path":"foo.py","line":1,"severity":"low","code":"x","message":"Optional"},
+        {"path":"foo.py","line":2,"severity":"nit","code":"y","message":"Style"}
+    ]"""
+
+    with _patch_adk_runner(_adk_runner_single_event(findings_json)):
+        run_review("o", "r", 1, head_sha="abc123", dry_run=False)
+
+    provider.submit_review_decision.assert_called_once()
+    assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_dry_run_does_not_submit_review_decision(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    from code_review.runner import run_review
+
+    provider = _provider_with_review_decisions()
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    findings_json = (
+        '[{"path":"foo.py","line":1,"severity":"high","code":"x",'
+        '"message":"Must fix."}]'
+    )
+
+    with _patch_adk_runner(_adk_runner_single_event(findings_json)):
+        run_review("o", "r", 1, head_sha="abc123", dry_run=True)
+
+    provider.submit_review_decision.assert_not_called()
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_request_changes_from_pre_existing_unresolved_high_comment(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    """Quality gate counts unresolved items from provider even when agent posts no new findings."""
+    from code_review.runner import run_review
+
+    provider = _provider_with_review_decisions()
+    provider.get_unresolved_review_items_for_quality_gate = MagicMock(
+        return_value=[
+            UnresolvedReviewItem(
+                stable_id="thread:1",
+                thread_id="t1",
+                kind="discussion_thread",
+                path="foo.py",
+                line=1,
+                body="[High] Prior review",
+                inferred_severity="high",
+            )
+        ]
+    )
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(
+            provider="github",
+            url="https://api.github.com",
+        ),
+        provider=provider,
+    )
+
+    with _patch_adk_runner(_adk_runner_single_event("[]")):
+        run_review("o", "r", 1, head_sha="abc123", dry_run=False)
+
+    provider.submit_review_decision.assert_called_once()
+    assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"

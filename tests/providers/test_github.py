@@ -3,6 +3,8 @@
 import base64
 from unittest.mock import MagicMock, patch
 
+import httpx
+
 from code_review.providers import get_provider
 from code_review.providers.base import InlineComment
 from code_review.providers.github import GitHubProvider
@@ -168,6 +170,29 @@ def test_post_pr_summary_comment(mock_client):
 
 
 @patch("code_review.providers.github.httpx.Client")
+def test_submit_review_decision(mock_client):
+    mock_post = MagicMock()
+    mock_post.raise_for_status = MagicMock()
+    mock_post.content = b""
+    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    p.submit_review_decision(
+        "owner",
+        "repo",
+        1,
+        "REQUEST_CHANGES",
+        body="Automated threshold decision",
+        head_sha="abc123",
+    )
+    call_args = mock_client.return_value.__enter__.return_value.post.call_args
+    assert "/repos/owner/repo/pulls/1/reviews" in call_args[0][0]
+    assert call_args[1]["json"]["event"] == "REQUEST_CHANGES"
+    assert call_args[1]["json"]["body"] == "Automated threshold decision"
+    assert call_args[1]["json"]["commit_id"] == "abc123"
+
+
+@patch("code_review.providers.github.httpx.Client")
 def test_get_pr_info(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
@@ -182,3 +207,119 @@ def test_get_pr_info(mock_client):
     assert info is not None
     assert info.title == "Fix bug"
     assert "skip-review" in info.labels
+
+
+def test_capabilities_support_review_decisions():
+    p = GitHubProvider("https://api.github.com", "tok")
+    caps = p.capabilities()
+    assert caps.supports_review_decisions is True
+
+
+@patch("code_review.providers.github.httpx.Client")
+def test_get_unresolved_review_items_uses_graphql_threads(mock_client):
+    """Unresolved quality gate uses reviewThreads; skips resolved and outdated."""
+    gql = {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": [
+                            {
+                                "id": "t1",
+                                "isResolved": False,
+                                "isOutdated": False,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "databaseId": 1,
+                                            "body": "[High] Bug",
+                                            "path": "a.py",
+                                            "line": 2,
+                                        }
+                                    ]
+                                },
+                            },
+                            {
+                                "id": "t2",
+                                "isResolved": True,
+                                "isOutdated": False,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "databaseId": 2,
+                                            "body": "[High] Skip",
+                                            "path": "b.py",
+                                            "line": 1,
+                                        }
+                                    ]
+                                },
+                            },
+                            {
+                                "id": "t3",
+                                "isResolved": False,
+                                "isOutdated": True,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "databaseId": 3,
+                                            "body": "[High] Old",
+                                            "path": "c.py",
+                                            "line": 1,
+                                        }
+                                    ]
+                                },
+                            },
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    mock_post = MagicMock()
+    mock_post.raise_for_status = MagicMock()
+    mock_post.json.return_value = gql
+    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    items = p.get_unresolved_review_items_for_quality_gate("owner", "repo", 7)
+    assert len(items) == 1
+    assert items[0].kind == "discussion_thread"
+    assert items[0].inferred_severity == "high"
+    assert items[0].path == "a.py"
+    post_url = mock_client.return_value.__enter__.return_value.post.call_args[0][0]
+    assert post_url == "https://api.github.com/graphql"
+
+
+@patch.object(GitHubProvider, "_graphql")
+def test_unresolved_review_threads_stops_on_repeated_end_cursor(mock_graphql):
+    """Same endCursor with hasNextPage must not paginate forever."""
+    page = {
+        "repository": {
+            "pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": True, "endCursor": "stuck"},
+                    "nodes": [],
+                }
+            }
+        }
+    }
+    mock_graphql.return_value = page
+    p = GitHubProvider("https://api.github.com", "tok")
+    assert p._unresolved_review_threads_graphql("owner", "repo", 3) == []
+    assert mock_graphql.call_count == 2
+
+
+@patch("code_review.providers.github.httpx.Client")
+def test_get_unresolved_review_items_graphql_failure_returns_empty(mock_client):
+    """GraphQL failure must not reclassify all REST review comments as unresolved."""
+    mock_post = MagicMock()
+    mock_post.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "err", request=MagicMock(), response=MagicMock(status_code=500)
+    )
+    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    items = p.get_unresolved_review_items_for_quality_gate("o", "r", 1)
+    assert items == []
+    mock_client.return_value.__enter__.return_value.get.assert_not_called()

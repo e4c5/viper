@@ -1,7 +1,7 @@
 """GitLab API provider (merge requests = MR, project id = owner/repo URL-encoded)."""
 
 import logging
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
@@ -13,10 +13,15 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    UnresolvedReviewItem,
     _log_pr_info_warning,
     pr_info_from_api_dict,
 )
-from code_review.formatters.comment import render_suggestion_block
+from code_review.formatters.comment import (
+    infer_severity_from_comment_body,
+    max_inferred_severity,
+    render_suggestion_block,
+)
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
@@ -42,6 +47,41 @@ class GitLabProvider(ProviderInterface):
     def _path(self, owner: str, repo: str, *parts: str) -> str:
         proj = _project_id(owner, repo)
         return f"{self._base_url}/projects/{proj}/" + "/".join(parts)
+
+    def _get_mr_discussions_paginated(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[dict[str, Any]]:
+        """List all MR discussions (GitLab paginates; default page size would omit later threads)."""
+        base_path = self._path(owner, repo, "merge_requests", str(pr_number), "discussions")
+        combined: list[dict[str, Any]] = []
+        page = 1
+        per_page = 100
+        max_pages = 500
+        for _ in range(max_pages):
+            url = f"{base_path}?per_page={per_page}&page={page}"
+            try:
+                data = self._get(url)
+            except Exception as e:
+                logger.warning(
+                    "GitLab MR discussions fetch failed owner=%s repo=%s pr_number=%s page=%s: %s",
+                    owner,
+                    repo,
+                    pr_number,
+                    page,
+                    e,
+                )
+                break
+            if not isinstance(data, list):
+                break
+            if not data:
+                break
+            for item in data:
+                if isinstance(item, dict):
+                    combined.append(item)
+            if len(data) < per_page:
+                break
+            page += 1
+        return combined
 
     def _get(self, path: str) -> Any:
         with httpx.Client(timeout=self._timeout) as client:
@@ -205,10 +245,7 @@ class GitLabProvider(ProviderInterface):
         self, owner: str, repo: str, pr_number: int
     ) -> list[ReviewComment]:
         """Return existing MR discussion notes that are DiffNotes (inline)."""
-        path = self._path(owner, repo, "merge_requests", str(pr_number), "discussions")
-        data = self._get(path)
-        if not isinstance(data, list):
-            return []
+        data = self._get_mr_discussions_paginated(owner, repo, pr_number)
         result: list[ReviewComment] = []
         for disc in data:
             notes = disc.get("notes") or []
@@ -226,6 +263,63 @@ class GitLabProvider(ProviderInterface):
                     )
                 )
         return result
+
+    @staticmethod
+    def _gitlab_diff_notes_from_discussion(notes: Any) -> list[dict[str, Any]]:
+        if not isinstance(notes, list):
+            return []
+        return [n for n in notes if isinstance(n, dict) and n.get("type") == "DiffNote"]
+
+    @staticmethod
+    def _gitlab_unresolved_item_from_diff_notes(
+        did: str,
+        diff_notes: list[dict[str, Any]],
+        out_len: int,
+    ) -> UnresolvedReviewItem | None:
+        best_sev: Literal["high", "medium", "low", "nit", "unknown"] = "unknown"
+        body_text = ""
+        path_str = ""
+        line_no = 0
+        for n in diff_notes:
+            raw = (n.get("body") or "").strip()
+            if not raw:
+                continue
+            sev = infer_severity_from_comment_body(n.get("body") or "")
+            best_sev = max_inferred_severity(best_sev, sev)
+            if not body_text:
+                body_text = n.get("body") or ""
+                pos = n.get("position") or {}
+                path_str = str(pos.get("new_path") or pos.get("old_path") or "")
+                line_no = int(pos.get("new_line") or pos.get("old_line") or 0)
+        if not body_text:
+            return None
+        return UnresolvedReviewItem(
+            stable_id=f"gitlab:discussion:{did}" if did else f"gitlab:discussion:{out_len}",
+            thread_id=did or None,
+            kind="discussion_thread",
+            path=path_str,
+            line=line_no,
+            body=body_text,
+            inferred_severity=best_sev,
+        )
+
+    def get_unresolved_review_items_for_quality_gate(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[UnresolvedReviewItem]:
+        """One item per unresolved MR discussion (thread), severity = max across DiffNotes."""
+        data = self._get_mr_discussions_paginated(owner, repo, pr_number)
+        out: list[UnresolvedReviewItem] = []
+        for disc in data:
+            if not isinstance(disc, dict) or disc.get("resolved"):
+                continue
+            did = str(disc.get("id", "") or "")
+            diff_notes = self._gitlab_diff_notes_from_discussion(disc.get("notes"))
+            if not diff_notes:
+                continue
+            item = self._gitlab_unresolved_item_from_diff_notes(did, diff_notes, len(out))
+            if item is not None:
+                out.append(item)
+        return out
 
     def resolve_comment(self, owner: str, repo: str, comment_id: str) -> None:
         """
@@ -303,7 +397,7 @@ class GitLabProvider(ProviderInterface):
         resolvable_comments=False to avoid silent failures.
         """
         return ProviderCapabilities(
-            resolvable_comments=False, 
+            resolvable_comments=False,
             supports_suggestions=True,
             supports_multiline_suggestions=True,
         )

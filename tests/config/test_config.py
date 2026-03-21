@@ -12,6 +12,7 @@ from code_review.config import (
     get_scm_config,
     reset_config_cache,
 )
+from code_review.runner import ReviewOrchestrator
 
 
 def test_scm_config_invalid_url_raises():
@@ -98,4 +99,53 @@ def test_reset_config_cache_clears_both():
         llm2 = get_llm_config()
     assert scm1 is not scm2
     assert llm1 is not llm2
+    reset_config_cache()
+
+
+def test_scm_review_decision_settings_from_env():
+    with patch.dict(
+        os.environ,
+        {
+            "SCM_URL": "https://gitea.example.com",
+            "SCM_TOKEN": "secret",
+            "SCM_REVIEW_DECISION_ENABLED": "true",
+            "SCM_REVIEW_DECISION_HIGH_THRESHOLD": "2",
+            "SCM_REVIEW_DECISION_MEDIUM_THRESHOLD": "5",
+        },
+        clear=False,
+    ):
+        cfg = SCMConfig()
+        assert cfg.review_decision_enabled is True
+        assert cfg.review_decision_high_threshold == 2
+        assert cfg.review_decision_medium_threshold == 5
+
+
+def test_review_decision_cli_overrides_use_copy_not_cached_mutation():
+    """run_review decision kwargs must apply even if get_scm_config() was already cached."""
+    reset_config_cache()
+    with patch.dict(
+        os.environ,
+        {
+            "SCM_URL": "https://gitea.example.com",
+            "SCM_TOKEN": "secret",
+            "SCM_REVIEW_DECISION_ENABLED": "false",
+        },
+        clear=False,
+    ):
+        cached = get_scm_config()
+        assert cached.review_decision_enabled is False
+        orch = ReviewOrchestrator(
+            "o",
+            "r",
+            1,
+            head_sha="abc",
+            dry_run=True,
+            review_decision_enabled=True,
+            review_decision_high_threshold=9,
+        )
+        cfg, _, _ = orch._load_config_and_provider()
+        assert cfg.review_decision_enabled is True
+        assert cfg.review_decision_high_threshold == 9
+        assert get_scm_config() is cached
+        assert get_scm_config().review_decision_enabled is False
     reset_config_cache()

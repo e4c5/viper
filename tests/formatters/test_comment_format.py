@@ -7,6 +7,8 @@ from code_review.formatters.comment import (
     SEVERITY_LABELS,
     _strip_path_prefixes,
     finding_to_comment_body,
+    infer_severity_from_comment_body,
+    max_inferred_severity,
 )
 from code_review.schemas.findings import FindingV1
 
@@ -17,6 +19,18 @@ def test_strip_path_prefixes():
     assert _strip_path_prefixes("hello") == "hello"
     assert _strip_path_prefixes("In dst://src/main/foo.java at line 1") == "In src/main/foo.java at line 1"
     assert _strip_path_prefixes("File src://bar.py") == "File bar.py"
+
+
+def test_infer_severity_from_comment_body_strips_marker():
+    body = "<!-- code-review-agent:fingerprint=x;version=1 -->\n\n[High] Problem"
+    assert infer_severity_from_comment_body(body) == "high"
+    assert infer_severity_from_comment_body("[Medium] Note") == "medium"
+    assert infer_severity_from_comment_body("No tag here") == "unknown"
+
+
+def test_max_inferred_severity():
+    assert max_inferred_severity("low", "high") == "high"
+    assert max_inferred_severity("medium", "low") == "medium"
 
 
 def test_severity_labels_canonical():

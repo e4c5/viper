@@ -12,16 +12,19 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    UnresolvedReviewItem,
     _log_pr_info_warning,
     normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
-from code_review.formatters.comment import render_suggestion_block
+from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 DEFAULT_BASE_URL = "https://api.bitbucket.org/2.0"
 logger = logging.getLogger(__name__)
+
+_BB_PAGINATION_LOOP_MSG = "Bitbucket pagination loop detected (same next URL returned twice): %s"
 
 
 class BitbucketProvider(ProviderInterface):
@@ -39,6 +42,14 @@ class BitbucketProvider(ProviderInterface):
 
     def _path(self, owner: str, repo: str, *parts: str) -> str:
         return f"{self._base_url}/repositories/{owner}/{repo}/" + "/".join(parts)
+
+    def _bitbucket_enter_next_link_page(self, url: str, visited: set[str]) -> bool:
+        """Mark ``url`` visited for next-link pagination; log and return False on repeat URL."""
+        if url in visited:
+            logger.warning(_BB_PAGINATION_LOOP_MSG, url)
+            return False
+        visited.add(url)
+        return True
 
     def _get(self, path: str) -> Any:
         with httpx.Client(timeout=self._timeout) as client:
@@ -83,7 +94,10 @@ class BitbucketProvider(ProviderInterface):
         """Return list of changed files from PR diffstat (paginated)."""
         url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "diffstat")
         result: list[FileInfo] = []
+        visited: set[str] = set()
         while url:
+            if not self._bitbucket_enter_next_link_page(url, visited):
+                break
             data = self._get(url)
             page_files, next_url = self._parse_diffstat_page(data)
             result.extend(page_files)
@@ -172,7 +186,10 @@ class BitbucketProvider(ProviderInterface):
         """Return existing PR comments (inline and non-inline; paginated)."""
         url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
         result: list[ReviewComment] = []
+        visited: set[str] = set()
         while url:
+            if not self._bitbucket_enter_next_link_page(url, visited):
+                break
             data = self._get(url)
             page_comments, next_url = self._comments_from_page(data)
             result.extend(page_comments)
@@ -213,6 +230,71 @@ class BitbucketProvider(ProviderInterface):
         stripped = next_url.strip()
         return comments, stripped or None
 
+    @staticmethod
+    def _bbcloud_open_task_from_value(
+        t: Any, out_len: int
+    ) -> UnresolvedReviewItem | None:
+        if not isinstance(t, dict):
+            return None
+        state = (str(t.get("state") or "")).strip().upper()
+        if state in ("RESOLVED", "DECLINED", "CLOSED", "FULFILLED"):
+            return None
+        content = t.get("content")
+        raw_src = content.get("raw") if isinstance(content, dict) else ""
+        raw = str(raw_src or "").strip()
+        if not raw:
+            return None
+        tid = str(t.get("id", "") or "")
+        return UnresolvedReviewItem(
+            stable_id=f"bbcloud:task:{tid}" if tid else f"bbcloud:task:{out_len}",
+            thread_id=tid or None,
+            kind="task",
+            path="",
+            line=0,
+            body=raw,
+            inferred_severity=infer_severity_from_comment_body(raw),
+        )
+
+    @staticmethod
+    def _bbcloud_append_open_tasks_from_page(
+        values: list[Any], out: list[UnresolvedReviewItem]
+    ) -> None:
+        for t in values:
+            item = BitbucketProvider._bbcloud_open_task_from_value(t, len(out))
+            if item is not None:
+                out.append(item)
+
+    def get_unresolved_review_items_for_quality_gate(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[UnresolvedReviewItem]:
+        """Bitbucket Cloud: only open PR tasks expose resolved state; comments do not."""
+        url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "tasks")
+        out: list[UnresolvedReviewItem] = []
+        visited: set[str] = set()
+        while url:
+            if not self._bitbucket_enter_next_link_page(url, visited):
+                break
+            try:
+                data = self._get(url)
+            except Exception as e:
+                logger.warning(
+                    "Bitbucket Cloud PR tasks fetch failed owner=%s repo=%s pr=%s: %s",
+                    owner,
+                    repo,
+                    pr_number,
+                    e,
+                )
+                break
+            if not isinstance(data, dict):
+                break
+            values = data.get("values")
+            if not isinstance(values, list):
+                break
+            self._bbcloud_append_open_tasks_from_page(values, out)
+            nxt = data.get("next")
+            url = nxt.strip() if isinstance(nxt, str) and nxt.strip() else None
+        return out
+
     def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
         """Post PR-level comment (no inline)."""
         path = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
@@ -224,12 +306,8 @@ class BitbucketProvider(ProviderInterface):
         out: list[str] = []
         visited: set[str] = set()
         while url:
-            if url in visited:
-                logger.warning(
-                    "Bitbucket pagination loop detected (same next URL returned twice): %s", url
-                )
+            if not self._bitbucket_enter_next_link_page(url, visited):
                 break
-            visited.add(url)
             data = self._safe_get_commit_page(url, owner, repo, pr_number)
             if data is None:
                 return out

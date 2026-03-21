@@ -1,8 +1,10 @@
 """CLI entry point for the code review agent."""
 
 import os
+import re
 
 import typer
+from typer.models import OptionInfo
 
 from code_review.logging_config import configure_logging
 from code_review.runner import run_review
@@ -12,10 +14,68 @@ def _ensure_logging() -> None:
     """Configure logging from CODE_REVIEW_LOG_LEVEL before running."""
     configure_logging()
 
+
 app = typer.Typer()
 
 
 OWNER_REPO_PATTERN = r"^[a-zA-Z0-9_.-]+$"
+
+
+def _normalize_review_decision_options(
+    review_decision_enabled: bool | None,
+    review_decision_high_threshold: int | None,
+    review_decision_medium_threshold: int | None,
+) -> tuple[bool | None, int | None, int | None]:
+    if isinstance(review_decision_enabled, OptionInfo):
+        review_decision_enabled = None
+    if isinstance(review_decision_high_threshold, OptionInfo):
+        review_decision_high_threshold = None
+    if isinstance(review_decision_medium_threshold, OptionInfo):
+        review_decision_medium_threshold = None
+    return review_decision_enabled, review_decision_high_threshold, review_decision_medium_threshold
+
+
+def _cli_resolve_owner_repo_pr(
+    owner: str | None,
+    repo: str | None,
+    pr: int | None,
+    head_sha: str,
+) -> tuple[str, str, int | None, str]:
+    owner_f = owner or os.environ.get("SCM_OWNER", "")
+    repo_f = repo or os.environ.get("SCM_REPO", "")
+    pr_num = pr if pr is not None else _parse_int(os.environ.get("SCM_PR_NUM", ""))
+    head_sha_val = head_sha or os.environ.get("SCM_HEAD_SHA", "")
+    return owner_f, repo_f, pr_num, head_sha_val
+
+
+def _cli_validate_inputs(
+    owner: str,
+    repo: str,
+    pr_num: int | None,
+    head_sha_val: str,
+    dry_run: bool,
+) -> None:
+    if not owner or not repo or pr_num is None:
+        typer.echo(
+            "Error: owner, repo, and pr are required (--owner, --repo, --pr or SCM_* env vars)",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if not re.match(OWNER_REPO_PATTERN, owner) or not re.match(OWNER_REPO_PATTERN, repo):
+        typer.echo(
+            "Error: owner and repo may only contain letters, digits, '_', '-', and '.'.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if not dry_run and not head_sha_val:
+        typer.echo(
+            "Error: head_sha is required when posting comments (dry_run=False). "
+            "Provide --head-sha or SCM_HEAD_SHA, or use --dry-run to run without posting.",
+            err=True,
+        )
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -58,44 +118,49 @@ def review(
         "--fail-on-critical",
         help="Exit with non-zero status if any finding is high severity",
     ),
+    review_decision_enabled: bool | None = typer.Option(
+        None,
+        "--review-decision-enabled/--no-review-decision-enabled",
+        help="Enable/disable automatic PR review decision submission.",
+    ),
+    review_decision_high_threshold: int | None = typer.Option(
+        None,
+        "--review-decision-high-threshold",
+        min=0,
+        help="Request changes when open high findings reach this threshold.",
+    ),
+    review_decision_medium_threshold: int | None = typer.Option(
+        None,
+        "--review-decision-medium-threshold",
+        min=0,
+        help="Request changes when open medium findings reach this threshold.",
+    ),
 ) -> None:
     """Run the code review agent on a pull request."""
-    owner = owner or os.environ.get("SCM_OWNER", "")
-    repo = repo or os.environ.get("SCM_REPO", "")
-    pr_num = pr if pr is not None else _parse_int(os.environ.get("SCM_PR_NUM", ""))
-    head_sha_val = head_sha or os.environ.get("SCM_HEAD_SHA", "")
-
-    if not owner or not repo or pr_num is None:
-        typer.echo(
-            "Error: owner, repo, and pr are required (--owner, --repo, --pr or SCM_* env vars)",
-            err=True,
+    review_decision_enabled, review_decision_high_threshold, review_decision_medium_threshold = (
+        _normalize_review_decision_options(
+            review_decision_enabled,
+            review_decision_high_threshold,
+            review_decision_medium_threshold,
         )
-        raise typer.Exit(1)
-    import re as _re
+    )
 
-    if not _re.match(OWNER_REPO_PATTERN, owner) or not _re.match(OWNER_REPO_PATTERN, repo):
-        typer.echo(
-            "Error: owner and repo may only contain letters, digits, '_', '-', and '.'.",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-    if not dry_run and not head_sha_val:
-        typer.echo(
-            "Error: head_sha is required when posting comments (dry_run=False). "
-            "Provide --head-sha or SCM_HEAD_SHA, or use --dry-run to run without posting.",
-            err=True,
-        )
-        raise typer.Exit(1)
+    owner_f, repo_f, pr_num, head_sha_val = _cli_resolve_owner_repo_pr(
+        owner, repo, pr, head_sha
+    )
+    _cli_validate_inputs(owner_f, repo_f, pr_num, head_sha_val, dry_run)
 
     _ensure_logging()
     findings = run_review(
-        owner=owner,
-        repo=repo,
+        owner=owner_f,
+        repo=repo_f,
         pr_number=pr_num,
         head_sha=head_sha_val,
         dry_run=dry_run,
         print_findings=print_findings,
+        review_decision_enabled=review_decision_enabled,
+        review_decision_high_threshold=review_decision_high_threshold,
+        review_decision_medium_threshold=review_decision_medium_threshold,
     )
     if fail_on_critical and any(f.severity == "high" for f in findings):
         raise typer.Exit(2)

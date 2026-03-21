@@ -7,6 +7,7 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    UnresolvedReviewItem,
 )
 from code_review.providers.bitbucket import BitbucketProvider
 from code_review.providers.bitbucket_server import BitbucketServerProvider
@@ -42,5 +43,6 @@ __all__ = [
     "ProviderCapabilities",
     "ProviderInterface",
     "ReviewComment",
+    "UnresolvedReviewItem",
     "get_provider",
 ]

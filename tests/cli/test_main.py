@@ -114,6 +114,26 @@ def test_cli_app_invokable_as_main():
         assert e.code == 0
 
 
+def test_cli_review_decision_options_passed_to_run_review():
+    with patch("code_review.__main__.run_review") as mock_run:
+        mock_run.return_value = []
+        review(
+            owner="o",
+            repo="r",
+            pr=1,
+            head_sha="abc123",
+            dry_run=True,
+            review_decision_enabled=True,
+            review_decision_high_threshold=4,
+            review_decision_medium_threshold=6,
+        )
+        mock_run.assert_called_once()
+        kw = mock_run.call_args[1]
+        assert kw["review_decision_enabled"] is True
+        assert kw["review_decision_high_threshold"] == 4
+        assert kw["review_decision_medium_threshold"] == 6
+
+
 def test_cli_main_module_entry_point():
     """Running the package as __main__ (python -m code_review --help) invokes app()."""
     import subprocess

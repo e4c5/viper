@@ -14,6 +14,7 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     RateLimitError,
+    ReviewDecision,
     ReviewComment,
     _log_pr_commit_messages_warning,
     _log_pr_info_warning,
@@ -197,6 +198,39 @@ class GiteaProvider(ProviderInterface):
             )
         return result
 
+    def submit_review_decision(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        decision: ReviewDecision,
+        *,
+        body: str = "",
+        head_sha: str = "",
+    ) -> None:
+        """Submit a PR-level review decision on Gitea."""
+        payload: dict[str, Any] = {
+            "event": decision,
+            "body": body or "Automated review decision by Viper.",
+        }
+        if head_sha:
+            payload["commit_id"] = head_sha
+        path = f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+        try:
+            self._post(path, payload)
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code if exc.response is not None else None
+            if code in (404, 405, 501):
+                logger.warning(
+                    "Gitea PR review decision not supported or rejected (HTTP %s) owner=%s repo=%s pr=%s",
+                    code,
+                    owner,
+                    repo,
+                    pr_number,
+                )
+                return
+            raise
+
     def resolve_comment(self, owner: str, repo: str, comment_id: str) -> None:
         """Mark comment as resolved. Gitea does not support updating PR review comments; no-op."""
         try:
@@ -272,4 +306,8 @@ class GiteaProvider(ProviderInterface):
 
         Gitea does not support resolving/unresolving PR review comments.
         """
-        return ProviderCapabilities(resolvable_comments=False, supports_suggestions=True)
+        return ProviderCapabilities(
+            resolvable_comments=False,
+            supports_suggestions=True,
+            supports_review_decisions=True,
+        )

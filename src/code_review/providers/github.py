@@ -1,8 +1,9 @@
 """GitHub API provider (for local testing without Gitea)."""
 
 import base64
+import json
 import logging
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -12,18 +13,25 @@ from code_review.providers.base import (
     PRInfo,
     ProviderCapabilities,
     ProviderInterface,
+    ReviewDecision,
     ReviewComment,
+    UnresolvedReviewItem,
     _log_pr_commit_messages_warning,
     _log_pr_info_warning,
     commit_messages_from_commit_list,
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
-from code_review.formatters.comment import render_suggestion_block
+from code_review.formatters.comment import (
+    infer_severity_from_comment_body,
+    max_inferred_severity,
+    render_suggestion_block,
+)
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 DEFAULT_BASE_URL = "https://api.github.com"
+JSON_MEDIA_TYPE = "application/json"
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +56,7 @@ class GitHubProvider(ProviderInterface):
         with httpx.Client(timeout=self._timeout) as client:
             r = client.get(url, headers=self._headers(), params=params or {})
             r.raise_for_status()
-            if r.headers.get("content-type", "").startswith("application/json"):
+            if r.headers.get("content-type", "").startswith(JSON_MEDIA_TYPE):
                 return r.json()
             return r.text
 
@@ -76,6 +84,201 @@ class GitHubProvider(ProviderInterface):
             r = client.patch(url, headers=self._headers(), json=json)
             r.raise_for_status()
             return r.json() if r.content else None
+
+    def _graphql_endpoint(self) -> str:
+        u = self._base_url.rstrip("/")
+        if "api.github.com" in u:
+            return "https://api.github.com/graphql"
+        if u.endswith("/api/v3"):
+            return u[: -len("/api/v3")] + "/api/graphql"
+        return f"{u}/api/graphql"
+
+    def _graphql_headers(self) -> dict[str, str]:
+        h = {"Content-Type": JSON_MEDIA_TYPE, "Accept": JSON_MEDIA_TYPE}
+        if self._token:
+            h["Authorization"] = f"Bearer {self._token}"
+        return h
+
+    def _graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        url = self._graphql_endpoint()
+        payload = {"query": query, "variables": variables}
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.post(url, headers=self._graphql_headers(), json=payload)
+            r.raise_for_status()
+            body = r.json()
+        if not isinstance(body, dict):
+            raise RuntimeError("GitHub GraphQL: invalid JSON body")
+        if body.get("errors"):
+            raise RuntimeError(f"GitHub GraphQL errors: {body['errors']}")
+        data = body.get("data")
+        return data if isinstance(data, dict) else {}
+
+    _REVIEW_THREADS_GQL = """
+    query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              id
+              isResolved
+              isOutdated
+              comments(first: 50) {
+                nodes {
+                  databaseId
+                  body
+                  path
+                  line
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    @staticmethod
+    def _github_graphql_review_threads_container(data: dict[str, Any]) -> dict[str, Any] | None:
+        repo_d = data.get("repository")
+        if not isinstance(repo_d, dict):
+            return None
+        pr_d = repo_d.get("pullRequest")
+        if not isinstance(pr_d, dict):
+            return None
+        rt = pr_d.get("reviewThreads")
+        return rt if isinstance(rt, dict) else None
+
+    @staticmethod
+    def _github_aggregate_thread_comments(
+        cnodes: list[Any],
+    ) -> tuple[str, str, int, Literal["high", "medium", "low", "nit", "unknown"]] | None:
+        best_sev: Literal["high", "medium", "low", "nit", "unknown"] = "unknown"
+        body_text = ""
+        path_str = ""
+        line_no = 0
+        for c in cnodes:
+            if not isinstance(c, dict):
+                continue
+            raw_body = (c.get("body") or "").strip()
+            if not raw_body:
+                continue
+            sev = infer_severity_from_comment_body(raw_body)
+            best_sev = max_inferred_severity(best_sev, sev)
+            if not body_text:
+                body_text = c.get("body") or ""
+                path_str = str(c.get("path") or "")
+                line_no = int(c.get("line") or 0)
+        if not body_text:
+            return None
+        return body_text, path_str, line_no, best_sev
+
+    @staticmethod
+    def _github_thread_node_to_unresolved_item(node: dict[str, Any]) -> UnresolvedReviewItem | None:
+        if node.get("isResolved") or node.get("isOutdated"):
+            return None
+        comments_wrap = node.get("comments") or {}
+        cnodes = comments_wrap.get("nodes") if isinstance(comments_wrap, dict) else None
+        if not isinstance(cnodes, list) or not cnodes:
+            return None
+        agg = GitHubProvider._github_aggregate_thread_comments(cnodes)
+        if agg is None:
+            return None
+        body_text, path_str, line_no, best_sev = agg
+        tid = str(node.get("id") or "")
+        return UnresolvedReviewItem(
+            stable_id=f"github:thread:{tid}",
+            thread_id=tid,
+            kind="discussion_thread",
+            path=path_str,
+            line=line_no,
+            body=body_text,
+            inferred_severity=best_sev,
+        )
+
+    @staticmethod
+    def _github_review_threads_advance_cursor(
+        rt: dict[str, Any],
+        seen_end_cursors: set[str],
+        owner: str,
+        repo: str,
+        pr_number: int,
+    ) -> str | None:
+        """Return next GraphQL ``after`` cursor, or None when pagination should stop."""
+        page = rt.get("pageInfo") or {}
+        if not isinstance(page, dict) or not page.get("hasNextPage"):
+            return None
+        next_cursor = page.get("endCursor")
+        if not isinstance(next_cursor, str) or not next_cursor:
+            return None
+        if next_cursor in seen_end_cursors:
+            logger.warning(
+                "GitHub GraphQL reviewThreads pagination loop detected (repeated endCursor) "
+                "owner=%s repo=%s pr=%s",
+                owner,
+                repo,
+                pr_number,
+            )
+            return None
+        seen_end_cursors.add(next_cursor)
+        return next_cursor
+
+    def _unresolved_review_threads_graphql(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[UnresolvedReviewItem]:
+        """List unresolved, non-outdated review threads via GitHub GraphQL."""
+        out: list[UnresolvedReviewItem] = []
+        cursor: str | None = None
+        seen_end_cursors: set[str] = set()
+        max_pages = 500
+        for _ in range(max_pages):
+            variables: dict[str, Any] = {
+                "owner": owner,
+                "name": repo,
+                "number": int(pr_number),
+                "cursor": cursor,
+            }
+            data = self._graphql(self._REVIEW_THREADS_GQL, variables)
+            rt = self._github_graphql_review_threads_container(data)
+            if rt is None:
+                break
+            for node in rt.get("nodes") or []:
+                if not isinstance(node, dict):
+                    continue
+                item = self._github_thread_node_to_unresolved_item(node)
+                if item is not None:
+                    out.append(item)
+            cursor = self._github_review_threads_advance_cursor(
+                rt, seen_end_cursors, owner, repo, pr_number
+            )
+            if cursor is None:
+                break
+        else:
+            logger.warning(
+                "GitHub GraphQL reviewThreads pagination exceeded max_pages=%s owner=%s repo=%s pr=%s",
+                max_pages,
+                owner,
+                repo,
+                pr_number,
+            )
+        return out
+
+    def get_unresolved_review_items_for_quality_gate(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[UnresolvedReviewItem]:
+        """Use GraphQL review threads (resolved / outdated). On GraphQL failure, return []."""
+        try:
+            return self._unresolved_review_threads_graphql(owner, repo, pr_number)
+        except (httpx.HTTPError, json.JSONDecodeError, RuntimeError) as e:
+            logger.warning(
+                "GitHub GraphQL reviewThreads failed owner=%s repo=%s pr=%s: %s; "
+                "skipping pre-existing unresolved aggregation (REST comments lack resolution state).",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return []
 
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff for the PR (Accept: application/vnd.github.v3.diff)."""
@@ -151,6 +354,25 @@ class GitHubProvider(ProviderInterface):
             )
         return result
 
+    def submit_review_decision(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        decision: ReviewDecision,
+        *,
+        body: str = "",
+        head_sha: str = "",
+    ) -> None:
+        """Submit a PR-level review decision on GitHub."""
+        payload: dict[str, Any] = {
+            "event": decision,
+            "body": body or "Automated review decision by Viper.",
+        }
+        if head_sha:
+            payload["commit_id"] = head_sha
+        self._post(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews", payload)
+
     def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
         """Post PR-level comment (GitHub: issues comments endpoint for PRs)."""
         self._post(f"/repos/{owner}/{repo}/issues/{pr_number}/comments", {"body": body})
@@ -186,7 +408,8 @@ class GitHubProvider(ProviderInterface):
     def capabilities(self) -> ProviderCapabilities:
         """GitHub supports suggestion blocks; resolved is per-conversation, not per-comment."""
         return ProviderCapabilities(
-            resolvable_comments=False, 
+            resolvable_comments=False,
             supports_suggestions=True,
             supports_multiline_suggestions=True,
+            supports_review_decisions=True,
         )
