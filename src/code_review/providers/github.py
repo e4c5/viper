@@ -143,7 +143,9 @@ class GitHubProvider(ProviderInterface):
         """List unresolved, non-outdated review threads via GitHub GraphQL."""
         out: list[UnresolvedReviewItem] = []
         cursor: str | None = None
-        while True:
+        seen_end_cursors: set[str] = set()
+        max_pages = 500
+        for _ in range(max_pages):
             variables: dict[str, Any] = {
                 "owner": owner,
                 "name": repo,
@@ -203,9 +205,28 @@ class GitHubProvider(ProviderInterface):
             page = rt.get("pageInfo") or {}
             if not isinstance(page, dict) or not page.get("hasNextPage"):
                 break
-            cursor = page.get("endCursor")
-            if not cursor:
+            next_cursor = page.get("endCursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
                 break
+            if next_cursor in seen_end_cursors:
+                logger.warning(
+                    "GitHub GraphQL reviewThreads pagination loop detected (repeated endCursor) "
+                    "owner=%s repo=%s pr=%s",
+                    owner,
+                    repo,
+                    pr_number,
+                )
+                break
+            seen_end_cursors.add(next_cursor)
+            cursor = next_cursor
+        else:
+            logger.warning(
+                "GitHub GraphQL reviewThreads pagination exceeded max_pages=%s owner=%s repo=%s pr=%s",
+                max_pages,
+                owner,
+                repo,
+                pr_number,
+            )
         return out
 
     def get_unresolved_review_items_for_quality_gate(

@@ -84,7 +84,14 @@ class BitbucketProvider(ProviderInterface):
         """Return list of changed files from PR diffstat (paginated)."""
         url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "diffstat")
         result: list[FileInfo] = []
+        visited: set[str] = set()
         while url:
+            if url in visited:
+                logger.warning(
+                    "Bitbucket pagination loop detected (same next URL returned twice): %s", url
+                )
+                break
+            visited.add(url)
             data = self._get(url)
             page_files, next_url = self._parse_diffstat_page(data)
             result.extend(page_files)
@@ -173,7 +180,14 @@ class BitbucketProvider(ProviderInterface):
         """Return existing PR comments (inline and non-inline; paginated)."""
         url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
         result: list[ReviewComment] = []
+        visited: set[str] = set()
         while url:
+            if url in visited:
+                logger.warning(
+                    "Bitbucket pagination loop detected (same next URL returned twice): %s", url
+                )
+                break
+            visited.add(url)
             data = self._get(url)
             page_comments, next_url = self._comments_from_page(data)
             result.extend(page_comments)
@@ -220,7 +234,14 @@ class BitbucketProvider(ProviderInterface):
         """Bitbucket Cloud: only open PR tasks expose resolved state; comments do not."""
         url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "tasks")
         out: list[UnresolvedReviewItem] = []
+        visited: set[str] = set()
         while url:
+            if url in visited:
+                logger.warning(
+                    "Bitbucket pagination loop detected (same next URL returned twice): %s", url
+                )
+                break
+            visited.add(url)
             try:
                 data = self._get(url)
             except Exception as e:

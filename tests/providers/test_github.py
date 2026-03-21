@@ -291,6 +291,25 @@ def test_get_unresolved_review_items_uses_graphql_threads(mock_client):
     assert post_url == "https://api.github.com/graphql"
 
 
+@patch.object(GitHubProvider, "_graphql")
+def test_unresolved_review_threads_stops_on_repeated_end_cursor(mock_graphql):
+    """Same endCursor with hasNextPage must not paginate forever."""
+    page = {
+        "repository": {
+            "pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": True, "endCursor": "stuck"},
+                    "nodes": [],
+                }
+            }
+        }
+    }
+    mock_graphql.return_value = page
+    p = GitHubProvider("https://api.github.com", "tok")
+    assert p._unresolved_review_threads_graphql("owner", "repo", 3) == []
+    assert mock_graphql.call_count == 2
+
+
 @patch("code_review.providers.github.httpx.Client")
 def test_get_unresolved_review_items_graphql_fallback_to_rest_comments(mock_client):
     """When GraphQL fails, fall back to REST pull review comments."""

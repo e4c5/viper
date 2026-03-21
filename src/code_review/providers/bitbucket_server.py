@@ -414,11 +414,18 @@ class BitbucketServerProvider(ProviderInterface):
         self, owner: str, repo: str, pr_number: int
     ) -> list[UnresolvedReviewItem]:
         """Unresolved inline comments (non-RESOLVED) plus open PR tasks."""
-        items = list(
-            default_unresolved_review_items_from_comments(
-                self.get_existing_review_comments(owner, repo, pr_number)
+        try:
+            existing = self.get_existing_review_comments(owner, repo, pr_number)
+        except Exception as e:
+            logger.warning(
+                "Bitbucket Server PR activities fetch failed for quality gate owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
             )
-        )
+            existing = []
+        items = list(default_unresolved_review_items_from_comments(existing))
         path = self._path(owner, repo, "pull-requests", str(pr_number), "tasks")
         start = 0
         for _ in range(500):

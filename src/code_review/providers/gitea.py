@@ -215,7 +215,21 @@ class GiteaProvider(ProviderInterface):
         }
         if head_sha:
             payload["commit_id"] = head_sha
-        self._post(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews", payload)
+        path = f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+        try:
+            self._post(path, payload)
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code if exc.response is not None else None
+            if code in (404, 405, 501):
+                logger.warning(
+                    "Gitea PR review decision not supported or rejected (HTTP %s) owner=%s repo=%s pr=%s",
+                    code,
+                    owner,
+                    repo,
+                    pr_number,
+                )
+                return
+            raise
 
     def resolve_comment(self, owner: str, repo: str, comment_id: str) -> None:
         """Mark comment as resolved. Gitea does not support updating PR review comments; no-op."""
