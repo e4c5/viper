@@ -153,7 +153,7 @@ def _patch_store_and_fetcher(fetched_doc, fresh=False):
 @patch("code_review.context.pipeline.distill_context_text", return_value="Distilled brief.")
 def test_under_budget_returns_context_tag(mock_distill):
     doc = _make_fetched_doc(body="x" * 100)  # well under 20 KB
-    patch_store, patch_fetch, store_mock = _patch_store_and_fetcher(doc, fresh=False)
+    patch_store, patch_fetch, _ = _patch_store_and_fetcher(doc, fresh=False)
     ctx = _make_ctx()
     scm = _make_scm()
 

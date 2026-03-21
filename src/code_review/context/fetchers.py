@@ -177,50 +177,20 @@ def fetch_gitlab_issue(
     )
 
 
-def fetch_jira_issue(
-    base_url: str,
-    email: str,
-    api_token: str,
-    key: str,
-    timeout: float = 30.0,
-    extra_fields: list[str] | None = None,
-) -> FetchedDocument | None:
-    root = base_url.rstrip("/")
-    path = f"{root}/rest/api/3/issue/{key}"
-    base_fields = ["summary", "description", "issuetype", "status", "updated"]
-    extra = [f.strip() for f in (extra_fields or []) if f.strip()]
-    fields_param = ",".join(base_fields + extra)
-    with httpx.Client(timeout=timeout) as client:
-        r = client.get(path, params={"fields": fields_param}, auth=(email, api_token))
-        if r.status_code == 404:
-            logger.warning("Jira issue not found: %s", key)
-            return None
-        if r.status_code != 200:
-            _raise_auth("GET", path, r.status_code, r.text)
-            raise ContextAwareFatalError(f"Jira fetch failed ({r.status_code}): {path}")
-        data = r.json()
-    fields_d = data.get("fields") or {}
-    summary = (fields_d.get("summary") or "").strip()
-    desc = fields_d.get("description")
-    desc_text = ""
+def _jira_description_text(desc: Any) -> str:
     if isinstance(desc, str):
-        desc_text = desc
-    elif isinstance(desc, dict):
-        desc_text = _adf_to_plain(desc)
-    it = fields_d.get("issuetype") or {}
-    st = fields_d.get("status") or {}
-    issue_type = it.get("name", "") if isinstance(it, dict) else str(it)
-    status_name = st.get("name", "") if isinstance(st, dict) else str(st)
-    updated = fields_d.get("updated")
-    lines = [
-        f"Key: {key}",
-        f"Summary: {summary}",
-        f"Issue type: {issue_type}",
-        f"Status: {status_name}",
-    ]
-    if desc_text:
-        lines.append("Description:")
-        lines.append(desc_text)
+        return desc
+    if isinstance(desc, dict):
+        return _adf_to_plain(desc)
+    return ""
+
+
+def _jira_field_name(field: Any) -> str:
+    return field.get("name", "") if isinstance(field, dict) else str(field)
+
+
+def _jira_extra_field_lines(fields_d: dict, extra: list[str]) -> list[str]:
+    lines: list[str] = []
     for field_name in extra:
         value = fields_d.get(field_name)
         if value is None:
@@ -232,12 +202,51 @@ def fetch_jira_issue(
         if value.strip():
             lines.append(f"{field_name}:")
             lines.append(value.strip())
-    meta = {"issuetype": issue_type, "status": status_name}
+    return lines
+
+
+def fetch_jira_issue(
+    base_url: str,
+    email: str,
+    api_token: str,
+    key: str,
+    timeout: float = 30.0,
+    extra_fields: list[str] | None = None,
+) -> FetchedDocument | None:
+    root = base_url.rstrip("/")
+    path = f"{root}/rest/api/3/issue/{key}"
+    extra = [f.strip() for f in (extra_fields or []) if f.strip()]
+    fields_param = ",".join(["summary", "description", "issuetype", "status", "updated"] + extra)
+    with httpx.Client(timeout=timeout) as client:
+        r = client.get(path, params={"fields": fields_param}, auth=(email, api_token))
+        if r.status_code == 404:
+            logger.warning("Jira issue not found: %s", key)
+            return None
+        if r.status_code != 200:
+            _raise_auth("GET", path, r.status_code, r.text)
+            raise ContextAwareFatalError(f"Jira fetch failed ({r.status_code}): {path}")
+        data = r.json()
+    fields_d = data.get("fields") or {}
+    summary = (fields_d.get("summary") or "").strip()
+    issue_type = _jira_field_name(fields_d.get("issuetype") or {})
+    status_name = _jira_field_name(fields_d.get("status") or {})
+    updated = fields_d.get("updated")
+    lines = [
+        f"Key: {key}",
+        f"Summary: {summary}",
+        f"Issue type: {issue_type}",
+        f"Status: {status_name}",
+    ]
+    desc_text = _jira_description_text(fields_d.get("description"))
+    if desc_text:
+        lines.append("Description:")
+        lines.append(desc_text)
+    lines.extend(_jira_extra_field_lines(fields_d, extra))
     return FetchedDocument(
         external_id=key.upper(),
         title=summary,
         body="\n".join(lines),
-        metadata=meta,
+        metadata={"issuetype": issue_type, "status": status_name},
         version=str(data.get("id", "")),
         external_updated_at=updated if isinstance(updated, str) else None,
     )
