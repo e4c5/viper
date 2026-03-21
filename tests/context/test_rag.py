@@ -15,7 +15,7 @@ def test_chunk_plain_text_validation_errors():
 
 
 def test_chunk_plain_text_splits_with_overlap():
-    text = "x" * 50
+    text = "".join(str(i % 10) for i in range(50))
     chunks = chunk_plain_text(text, max_chunk_chars=20, overlap=5)
     assert len(chunks) >= 3
     assert all(chunks)
