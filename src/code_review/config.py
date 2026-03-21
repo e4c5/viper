@@ -137,7 +137,7 @@ class LLMConfig(BaseSettings):
 class ContextAwareReviewConfig(BaseSettings):
     """Optional context enrichment (issues, Jira, Confluence).
 
-    See docs/CONTEXT-AWARE-REVIEW.md for environment variables.
+    See docs/CONTEXT-AWARE-USER-GUIDE.md for environment variables.
     """
 
     model_config = SettingsConfigDict(extra="ignore", case_sensitive=False)
