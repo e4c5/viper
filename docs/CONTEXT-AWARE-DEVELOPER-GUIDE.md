@@ -7,7 +7,7 @@ This guide documents the implementation details of context-aware review:
 - extension points
 - test strategy
 
-Use this alongside `docs/CONTEXT-AWARE-REVIEW.md`, which is the product/spec overview.
+Use this alongside `docs/CONTEXT-AWARE-USER-GUIDE.md` for operator-facing setup and usage.
 
 ---
 
