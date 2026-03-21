@@ -254,8 +254,10 @@ class ContextStore:
         if len(query_embedding) != self.embedding_dimensions:
             return []
         vec_lit = "[" + ",".join(str(float(x)) for x in query_embedding) + "]"
+        if document_ids is not None and len(document_ids) == 0:
+            return []
         with conn.cursor() as cur:
-            if document_ids:
+            if document_ids is not None:
                 cur.execute(
                     f"""
                     SELECT content FROM {T_CHUNKS}
