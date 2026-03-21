@@ -6,11 +6,15 @@ import pytest
 
 from code_review.context.errors import ContextAwareAuthError, ContextAwareFatalError
 from code_review.context.fetchers import (
+    _adf_to_plain,
+    _strip_html_to_text,
     fetch_confluence_page,
     fetch_github_issue,
     fetch_gitlab_issue,
     fetch_jira_issue,
+    fetch_reference,
 )
+from code_review.context.types import ContextReference, ReferenceType
 
 
 def _mock_httpx_response(status_code: int, json_data=None, text: str = "") -> MagicMock:

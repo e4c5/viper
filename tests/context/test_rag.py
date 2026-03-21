@@ -19,6 +19,17 @@ def test_chunk_plain_text_validation_errors():
         chunk_plain_text("abc", max_chunk_chars=10, overlap=10)
 
 
+def test_chunk_empty_and_whitespace():
+    assert chunk_plain_text("") == []
+    assert chunk_plain_text("   \n\t  ") == []
+
+
+def test_chunk_short_and_exact():
+    assert chunk_plain_text("short") == ["short"]
+    text = "a" * 1800
+    assert chunk_plain_text(text, max_chunk_chars=1800) == [text]
+
+
 def test_chunk_plain_text_splits_with_overlap():
     text = "".join(str(i % 10) for i in range(50))
     chunks = chunk_plain_text(text, max_chunk_chars=20, overlap=5)
@@ -26,6 +37,11 @@ def test_chunk_plain_text_splits_with_overlap():
     assert all(chunks)
     # Overlap implies neighboring chunks share trailing/leading content.
     assert chunks[0][-5:] == chunks[1][:5]
+
+
+def test_semantic_query_empty_and_whitespace_diff():
+    assert build_semantic_query_from_diff("") == "pull request code changes"
+    assert build_semantic_query_from_diff("   \n  ") == "pull request code changes"
 
 
 @patch("code_review.context.rag.get_llm_config")
