@@ -149,13 +149,9 @@ class GitHubProvider(ProviderInterface):
         return rt if isinstance(rt, dict) else None
 
     @staticmethod
-    def _github_thread_node_to_unresolved_item(node: dict[str, Any]) -> UnresolvedReviewItem | None:
-        if node.get("isResolved") or node.get("isOutdated"):
-            return None
-        comments_wrap = node.get("comments") or {}
-        cnodes = comments_wrap.get("nodes") if isinstance(comments_wrap, dict) else None
-        if not isinstance(cnodes, list) or not cnodes:
-            return None
+    def _github_aggregate_thread_comments(
+        cnodes: list[Any],
+    ) -> tuple[str, str, int, Literal["high", "medium", "low", "nit", "unknown"]] | None:
         best_sev: Literal["high", "medium", "low", "nit", "unknown"] = "unknown"
         body_text = ""
         path_str = ""
@@ -174,6 +170,20 @@ class GitHubProvider(ProviderInterface):
                 line_no = int(c.get("line") or 0)
         if not body_text:
             return None
+        return body_text, path_str, line_no, best_sev
+
+    @staticmethod
+    def _github_thread_node_to_unresolved_item(node: dict[str, Any]) -> UnresolvedReviewItem | None:
+        if node.get("isResolved") or node.get("isOutdated"):
+            return None
+        comments_wrap = node.get("comments") or {}
+        cnodes = comments_wrap.get("nodes") if isinstance(comments_wrap, dict) else None
+        if not isinstance(cnodes, list) or not cnodes:
+            return None
+        agg = GitHubProvider._github_aggregate_thread_comments(cnodes)
+        if agg is None:
+            return None
+        body_text, path_str, line_no, best_sev = agg
         tid = str(node.get("id") or "")
         return UnresolvedReviewItem(
             stable_id=f"github:thread:{tid}",

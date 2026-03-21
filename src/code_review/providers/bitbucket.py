@@ -231,31 +231,38 @@ class BitbucketProvider(ProviderInterface):
         return comments, stripped or None
 
     @staticmethod
+    def _bbcloud_open_task_from_value(
+        t: Any, out_len: int
+    ) -> UnresolvedReviewItem | None:
+        if not isinstance(t, dict):
+            return None
+        state = (str(t.get("state") or "")).strip().upper()
+        if state in ("RESOLVED", "DECLINED", "CLOSED", "FULFILLED"):
+            return None
+        content = t.get("content")
+        raw_src = content.get("raw") if isinstance(content, dict) else ""
+        raw = str(raw_src or "").strip()
+        if not raw:
+            return None
+        tid = str(t.get("id", "") or "")
+        return UnresolvedReviewItem(
+            stable_id=f"bbcloud:task:{tid}" if tid else f"bbcloud:task:{out_len}",
+            thread_id=tid or None,
+            kind="task",
+            path="",
+            line=0,
+            body=raw,
+            inferred_severity=infer_severity_from_comment_body(raw),
+        )
+
+    @staticmethod
     def _bbcloud_append_open_tasks_from_page(
         values: list[Any], out: list[UnresolvedReviewItem]
     ) -> None:
         for t in values:
-            if not isinstance(t, dict):
-                continue
-            state = (str(t.get("state") or "")).strip().upper()
-            if state in ("RESOLVED", "DECLINED", "CLOSED", "FULFILLED"):
-                continue
-            raw = (t.get("content") or {}).get("raw") if isinstance(t.get("content"), dict) else ""
-            raw = str(raw or "").strip()
-            if not raw:
-                continue
-            tid = str(t.get("id", "") or "")
-            out.append(
-                UnresolvedReviewItem(
-                    stable_id=f"bbcloud:task:{tid}" if tid else f"bbcloud:task:{len(out)}",
-                    thread_id=tid or None,
-                    kind="task",
-                    path="",
-                    line=0,
-                    body=raw,
-                    inferred_severity=infer_severity_from_comment_body(raw),
-                )
-            )
+            item = BitbucketProvider._bbcloud_open_task_from_value(t, len(out))
+            if item is not None:
+                out.append(item)
 
     def get_unresolved_review_items_for_quality_gate(
         self, owner: str, repo: str, pr_number: int
