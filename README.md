@@ -30,7 +30,17 @@ In **CI/Jenkins**, the pipeline supplies these via credentials and job or global
 
 **Context-aware review (optional)** — The runner can pull linked GitHub Issues, Jira tickets, or Confluence pages, distill them into a short brief, and attach that (plus optional PR commit messages) to the review prompt. Off by default; requires PostgreSQL with pgvector when enabled. See [Context-aware code review](docs/CONTEXT-AWARE-REVIEW.md).
 
-**Auto review decision (optional)** — You can enable automatic PR review decisions on SCMs that support them. Set `SCM_REVIEW_DECISION_ENABLED=true` to submit `REQUEST_CHANGES` when open findings meet thresholds (`SCM_REVIEW_DECISION_HIGH_THRESHOLD`, `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD`), otherwise submit `APPROVE` (for example when only low/nit findings remain open).
+**Auto review decision (optional)** — You can enable automatic PR review decisions on SCMs that support them. Set `SCM_REVIEW_DECISION_ENABLED=true` to submit `REQUEST_CHANGES` when **aggregated open** high/medium signals meet thresholds (`SCM_REVIEW_DECISION_HIGH_THRESHOLD`, `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD`), otherwise submit `APPROVE` (for example when only low/nit remain). Counts combine **net-new findings from this run** with **already-unresolved review items** from the SCM (deduped by fingerprint marker when present). Severity for existing threads is inferred from `[High]` / `[Medium]` / … in comment text where possible.
+
+Per-SCM “open” semantics:
+
+| SCM | What counts as unresolved for the gate |
+|-----|----------------------------------------|
+| **GitHub** | Pull request review threads that are not resolved and not outdated (via GraphQL `reviewThreads`; falls back to REST review comments if GraphQL fails). |
+| **Gitea** | Review comments with `resolved=false` from the API (when exposed). |
+| **GitLab** | Merge request discussions with `resolved=false` (thread-level; severity is the max across diff notes in the thread). |
+| **Bitbucket Cloud** | Open PR **tasks** only (inline comments do not expose resolved state in the API). |
+| **Bitbucket Server/DC** | Comments that are not `RESOLVED` plus open PR **tasks**. |
 
 ---
 

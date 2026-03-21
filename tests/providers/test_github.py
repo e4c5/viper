@@ -3,6 +3,8 @@
 import base64
 from unittest.mock import MagicMock, patch
 
+import httpx
+
 from code_review.providers import get_provider
 from code_review.providers.base import InlineComment
 from code_review.providers.github import GitHubProvider
@@ -211,3 +213,101 @@ def test_capabilities_support_review_decisions():
     p = GitHubProvider("https://api.github.com", "tok")
     caps = p.capabilities()
     assert caps.supports_review_decisions is True
+
+
+@patch("code_review.providers.github.httpx.Client")
+def test_get_unresolved_review_items_uses_graphql_threads(mock_client):
+    """Unresolved quality gate uses reviewThreads; skips resolved and outdated."""
+    gql = {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": [
+                            {
+                                "id": "t1",
+                                "isResolved": False,
+                                "isOutdated": False,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "databaseId": 1,
+                                            "body": "[High] Bug",
+                                            "path": "a.py",
+                                            "line": 2,
+                                        }
+                                    ]
+                                },
+                            },
+                            {
+                                "id": "t2",
+                                "isResolved": True,
+                                "isOutdated": False,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "databaseId": 2,
+                                            "body": "[High] Skip",
+                                            "path": "b.py",
+                                            "line": 1,
+                                        }
+                                    ]
+                                },
+                            },
+                            {
+                                "id": "t3",
+                                "isResolved": False,
+                                "isOutdated": True,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "databaseId": 3,
+                                            "body": "[High] Old",
+                                            "path": "c.py",
+                                            "line": 1,
+                                        }
+                                    ]
+                                },
+                            },
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    mock_post = MagicMock()
+    mock_post.raise_for_status = MagicMock()
+    mock_post.json.return_value = gql
+    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    items = p.get_unresolved_review_items_for_quality_gate("owner", "repo", 7)
+    assert len(items) == 1
+    assert items[0].kind == "discussion_thread"
+    assert items[0].inferred_severity == "high"
+    assert items[0].path == "a.py"
+    post_url = mock_client.return_value.__enter__.return_value.post.call_args[0][0]
+    assert post_url == "https://api.github.com/graphql"
+
+
+@patch("code_review.providers.github.httpx.Client")
+def test_get_unresolved_review_items_graphql_fallback_to_rest_comments(mock_client):
+    """When GraphQL fails, fall back to REST pull review comments."""
+    mock_post = MagicMock()
+    mock_post.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "err", request=MagicMock(), response=MagicMock(status_code=500)
+    )
+    mock_get_resp = MagicMock()
+    mock_get_resp.headers = {"content-type": "application/json"}
+    mock_get_resp.json.return_value = [
+        {"id": 99, "path": "z.py", "line": 3, "body": "[Medium] rest"},
+    ]
+    mock_get_resp.raise_for_status = MagicMock()
+    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_get_resp
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    items = p.get_unresolved_review_items_for_quality_gate("o", "r", 1)
+    assert len(items) == 1
+    assert items[0].inferred_severity == "medium"

@@ -130,6 +130,29 @@ def test_post_review_comments_multiline_includes_from(mock_client):
 
 
 @patch("code_review.providers.bitbucket.httpx.Client")
+def test_get_unresolved_review_items_open_tasks_only(mock_client):
+    """Bitbucket Cloud quality gate uses PR tasks (comments lack resolved state)."""
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "values": [
+            {"id": 10, "state": "OPEN", "content": {"raw": "[High] Do this"}},
+            {"id": 11, "state": "RESOLVED", "content": {"raw": "[High] Done"}},
+        ],
+        "next": None,
+    }
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketProvider("https://api.bitbucket.org/2.0", "tok")
+    items = p.get_unresolved_review_items_for_quality_gate("ws", "slug", 5)
+    assert len(items) == 1
+    assert items[0].kind == "task"
+    assert items[0].inferred_severity == "high"
+    call_url = mock_client.return_value.__enter__.return_value.get.call_args[0][0]
+    assert "/pullrequests/5/tasks" in call_url
+
+
+@patch("code_review.providers.bitbucket.httpx.Client")
 def test_get_existing_review_comments(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {

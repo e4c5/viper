@@ -184,6 +184,53 @@ def test_get_existing_review_comments(mock_client):
 
 
 @patch("code_review.providers.gitlab.httpx.Client")
+def test_get_unresolved_review_items_skips_resolved_discussions(mock_client):
+    """Quality gate uses discussion-level resolved; one thread row per discussion."""
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = [
+        {
+            "id": "disc-open",
+            "resolved": False,
+            "notes": [
+                {
+                    "id": 1,
+                    "type": "DiffNote",
+                    "body": "[Low] Minor",
+                    "position": {"new_path": "a.py", "new_line": 1},
+                },
+                {
+                    "id": 2,
+                    "type": "DiffNote",
+                    "body": "[High] Must fix",
+                    "position": {"new_path": "a.py", "new_line": 2},
+                },
+            ],
+        },
+        {
+            "id": "disc-resolved",
+            "resolved": True,
+            "notes": [
+                {
+                    "id": 3,
+                    "type": "DiffNote",
+                    "body": "[High] Gone",
+                    "position": {"new_path": "b.py", "new_line": 1},
+                }
+            ],
+        },
+    ]
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    items = p.get_unresolved_review_items_for_quality_gate("owner", "repo", 1)
+    assert len(items) == 1
+    assert items[0].thread_id == "disc-open"
+    assert items[0].inferred_severity == "high"
+    assert items[0].kind == "discussion_thread"
+
+
+@patch("code_review.providers.gitlab.httpx.Client")
 def test_post_pr_summary_comment(mock_client):
     mock_post = MagicMock()
     mock_post.raise_for_status = MagicMock()
