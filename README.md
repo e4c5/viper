@@ -28,7 +28,7 @@ Choose the path that matches your setup.
 
 In **CI/Jenkins**, the pipeline supplies these via credentials and job or global env—you do not need a local `.env`. See [Jenkins (existing)](docs/JENKINS-EXISTING.md) and [Quick Start](docs/QUICKSTART.md#configuration).
 
-**Context-aware review (optional)** — The runner can pull linked GitHub Issues, Jira tickets, or Confluence pages, distill them into a short brief, and attach that (plus optional PR commit messages) to the review prompt. Off by default; requires PostgreSQL with pgvector when enabled. See [Context-aware code review](docs/CONTEXT-AWARE-REVIEW.md).
+**Context-aware review (optional)** — The runner can pull linked GitHub Issues, Jira tickets, or Confluence pages, distill them into a short brief, and attach that (plus optional PR commit messages) to the review prompt. Off by default; requires PostgreSQL with pgvector when enabled. See [Context-aware code review](docs/CONTEXT-AWARE-REVIEW.md), [Context-aware user guide](docs/CONTEXT-AWARE-USER-GUIDE.md), and [Context-aware developer guide](docs/CONTEXT-AWARE-DEVELOPER-GUIDE.md).
 
 **Auto review decision (optional)** — You can enable automatic PR review decisions on SCMs that support them. Set `SCM_REVIEW_DECISION_ENABLED=true` to submit `REQUEST_CHANGES` when **aggregated open** high/medium signals meet thresholds (`SCM_REVIEW_DECISION_HIGH_THRESHOLD`, `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD`), otherwise submit `APPROVE` (for example when only low/nit remain). Counts combine **net-new findings from this run** with **already-unresolved review items** from the SCM (deduped by fingerprint marker when present). Severity for existing threads is inferred from `[High]` / `[Medium]` / … in comment text where possible.
 

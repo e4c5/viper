@@ -11,6 +11,11 @@ uses that context to:
 This feature is **opt-in and disabled by default**. It does not change any existing
 behaviour unless `CONTEXT_AWARE_REVIEW_ENABLED=true` is set.
 
+Companion documents:
+
+- End-user setup and operations: [CONTEXT-AWARE-USER-GUIDE.md](CONTEXT-AWARE-USER-GUIDE.md)
+- Implementation internals and extension points: [CONTEXT-AWARE-DEVELOPER-GUIDE.md](CONTEXT-AWARE-DEVELOPER-GUIDE.md)
+
 ---
 
 ## Table of Contents
