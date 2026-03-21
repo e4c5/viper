@@ -20,6 +20,14 @@ def test_base_review_prompt_not_empty():
     assert "Review" in text or "review" in text
 
 
+def test_base_review_prompt_includes_test_code_criteria():
+    """Test-only review criteria (issue #49): scoped checks for assertions and complexity."""
+    assert "Test code only" in BASE_REVIEW_PROMPT
+    assert "vacuous" in BASE_REVIEW_PROMPT.lower()
+    assert "mega-tests" in BASE_REVIEW_PROMPT.lower()
+    assert "false positives" in BASE_REVIEW_PROMPT.lower()
+
+
 def test_get_review_standards_returns_non_empty():
     """get_review_standards returns non-empty string for known and unknown language."""
     for lang in ("python", "javascript", "go", "unknown"):

@@ -211,7 +211,7 @@ The agent (inside ADK) uses `get_configured_model()` for the model and calls too
 ### 5.8 `standards/`
 
 - **detector.py**: `detect_from_paths(paths)` and `detect_from_paths_and_content(paths, content_map)` return `DetectedContext` (language, framework, confidence). Used by runner and by the `detect_language_context` tool.
-- **prompts/**: `get_review_standards(language, framework)` returns a string (base prompt + per-language fragment) appended to the agent instruction.
+- **prompts/**: `get_review_standards(language, framework)` returns a string (base prompt + per-language fragment) appended to the agent instruction. Shared criteria live in **`prompts/base.md`** (loaded as `BASE_REVIEW_PROMPT`); that file includes a **“Test code only”** section with extra checks for weak assertions and oversized/unfocused tests, explicitly scoped so they are **not** applied to production code (avoids false positives). Language-specific bullets are in `prompts/<language>.md` and listed in `prompts/__init__.py`.
 
 ### 5.9 `formatters/comment.py`
 
@@ -345,6 +345,7 @@ Compare with and without this env var; if you get findings only with `LLM_DIFF_B
 ### 7.4 Customizing Review Criteria (language / framework)
 
 - **standards/detector.py**: Extend path/config rules or confidence logic.
+- **standards/prompts/base.md**: Edit for criteria that apply to **all** languages (including cross-cutting rules such as test-only checks).
 - **standards/prompts/**: Add or edit per-language fragments and wire them in **get_review_standards()** in `standards/` (e.g. in `prompts/__init__.py` or equivalent).
 
 ### 7.5 Comment Format and Fingerprinting
