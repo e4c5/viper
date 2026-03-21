@@ -1,7 +1,7 @@
 """GitLab API provider (merge requests = MR, project id = owner/repo URL-encoded)."""
 
 import logging
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
@@ -13,10 +13,15 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    UnresolvedReviewItem,
     _log_pr_info_warning,
     pr_info_from_api_dict,
 )
-from code_review.formatters.comment import render_suggestion_block
+from code_review.formatters.comment import (
+    infer_severity_from_comment_body,
+    max_inferred_severity,
+    render_suggestion_block,
+)
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
@@ -226,6 +231,59 @@ class GitLabProvider(ProviderInterface):
                     )
                 )
         return result
+
+    def get_unresolved_review_items_for_quality_gate(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[UnresolvedReviewItem]:
+        """One item per unresolved MR discussion (thread), severity = max across DiffNotes."""
+        path = self._path(owner, repo, "merge_requests", str(pr_number), "discussions")
+        data = self._get(path)
+        if not isinstance(data, list):
+            return []
+        out: list[UnresolvedReviewItem] = []
+        for disc in data:
+            if not isinstance(disc, dict):
+                continue
+            if disc.get("resolved"):
+                continue
+            did = str(disc.get("id", "") or "")
+            notes = disc.get("notes") or []
+            if not isinstance(notes, list):
+                continue
+            diff_notes = [
+                n for n in notes if isinstance(n, dict) and n.get("type") == "DiffNote"
+            ]
+            if not diff_notes:
+                continue
+            best_sev: Literal["high", "medium", "low", "nit", "unknown"] = "unknown"
+            body_text = ""
+            path_str = ""
+            line_no = 0
+            for n in diff_notes:
+                raw = (n.get("body") or "").strip()
+                if not raw:
+                    continue
+                sev = infer_severity_from_comment_body(n.get("body") or "")
+                best_sev = max_inferred_severity(best_sev, sev)
+                if not body_text:
+                    body_text = n.get("body") or ""
+                    pos = n.get("position") or {}
+                    path_str = str(pos.get("new_path") or pos.get("old_path") or "")
+                    line_no = int(pos.get("new_line") or pos.get("old_line") or 0)
+            if not body_text:
+                continue
+            out.append(
+                UnresolvedReviewItem(
+                    stable_id=f"gitlab:discussion:{did}" if did else f"gitlab:discussion:{len(out)}",
+                    thread_id=did or None,
+                    kind="discussion_thread",
+                    path=path_str,
+                    line=line_no,
+                    body=body_text,
+                    inferred_severity=best_sev,
+                )
+            )
+        return out
 
     def resolve_comment(self, owner: str, repo: str, comment_id: str) -> None:
         """

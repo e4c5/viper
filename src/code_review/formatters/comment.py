@@ -128,3 +128,14 @@ def infer_severity_from_comment_body(body: str) -> Literal["high", "medium", "lo
         if pos != -1 and pos < 160:
             return sev
     return "unknown"
+
+
+_SEV_RANK: dict[str, int] = {"high": 4, "medium": 3, "low": 2, "nit": 1, "unknown": 0}
+
+
+def max_inferred_severity(
+    a: Literal["high", "medium", "low", "nit", "unknown"],
+    b: Literal["high", "medium", "low", "nit", "unknown"],
+) -> Literal["high", "medium", "low", "nit", "unknown"]:
+    """Return the stronger of two inferred severities (for multi-note / multi-comment threads)."""
+    return a if _SEV_RANK.get(a, 0) >= _SEV_RANK.get(b, 0) else b

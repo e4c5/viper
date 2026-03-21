@@ -12,11 +12,12 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     ReviewComment,
+    UnresolvedReviewItem,
     _log_pr_info_warning,
     normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
-from code_review.formatters.comment import render_suggestion_block
+from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
@@ -212,6 +213,55 @@ class BitbucketProvider(ProviderInterface):
             return comments, None
         stripped = next_url.strip()
         return comments, stripped or None
+
+    def get_unresolved_review_items_for_quality_gate(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[UnresolvedReviewItem]:
+        """Bitbucket Cloud: only open PR tasks expose resolved state; comments do not."""
+        url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "tasks")
+        out: list[UnresolvedReviewItem] = []
+        while url:
+            try:
+                data = self._get(url)
+            except Exception as e:
+                logger.warning(
+                    "Bitbucket Cloud PR tasks fetch failed owner=%s repo=%s pr=%s: %s",
+                    owner,
+                    repo,
+                    pr_number,
+                    e,
+                )
+                break
+            if not isinstance(data, dict):
+                break
+            values = data.get("values")
+            if not isinstance(values, list):
+                break
+            for t in values:
+                if not isinstance(t, dict):
+                    continue
+                state = (str(t.get("state") or "")).strip().upper()
+                if state in ("RESOLVED", "DECLINED", "CLOSED", "FULFILLED"):
+                    continue
+                raw = (t.get("content") or {}).get("raw") if isinstance(t.get("content"), dict) else ""
+                raw = str(raw or "").strip()
+                if not raw:
+                    continue
+                tid = str(t.get("id", "") or "")
+                out.append(
+                    UnresolvedReviewItem(
+                        stable_id=f"bbcloud:task:{tid}" if tid else f"bbcloud:task:{len(out)}",
+                        thread_id=tid or None,
+                        kind="task",
+                        path="",
+                        line=0,
+                        body=raw,
+                        inferred_severity=infer_severity_from_comment_body(raw),
+                    )
+                )
+            nxt = data.get("next")
+            url = nxt.strip() if isinstance(nxt, str) and nxt.strip() else None
+        return out
 
     def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
         """Post PR-level comment (no inline)."""

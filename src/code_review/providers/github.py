@@ -2,7 +2,7 @@
 
 import base64
 import logging
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -14,13 +14,19 @@ from code_review.providers.base import (
     ProviderInterface,
     ReviewDecision,
     ReviewComment,
+    UnresolvedReviewItem,
     _log_pr_commit_messages_warning,
     _log_pr_info_warning,
     commit_messages_from_commit_list,
+    default_unresolved_review_items_from_comments,
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
-from code_review.formatters.comment import render_suggestion_block
+from code_review.formatters.comment import (
+    infer_severity_from_comment_body,
+    max_inferred_severity,
+    render_suggestion_block,
+)
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
@@ -77,6 +83,149 @@ class GitHubProvider(ProviderInterface):
             r = client.patch(url, headers=self._headers(), json=json)
             r.raise_for_status()
             return r.json() if r.content else None
+
+    def _graphql_endpoint(self) -> str:
+        u = self._base_url.rstrip("/")
+        if "api.github.com" in u:
+            return "https://api.github.com/graphql"
+        if u.endswith("/api/v3"):
+            return u[: -len("/api/v3")] + "/api/graphql"
+        return f"{u}/api/graphql"
+
+    def _graphql_headers(self) -> dict[str, str]:
+        h = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self._token:
+            h["Authorization"] = f"Bearer {self._token}"
+        return h
+
+    def _graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        url = self._graphql_endpoint()
+        payload = {"query": query, "variables": variables}
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.post(url, headers=self._graphql_headers(), json=payload)
+            r.raise_for_status()
+            body = r.json()
+        if not isinstance(body, dict):
+            raise RuntimeError("GitHub GraphQL: invalid JSON body")
+        if body.get("errors"):
+            raise RuntimeError(f"GitHub GraphQL errors: {body['errors']}")
+        data = body.get("data")
+        return data if isinstance(data, dict) else {}
+
+    _REVIEW_THREADS_GQL = """
+    query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              id
+              isResolved
+              isOutdated
+              comments(first: 50) {
+                nodes {
+                  databaseId
+                  body
+                  path
+                  line
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    def _unresolved_review_threads_graphql(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[UnresolvedReviewItem]:
+        """List unresolved, non-outdated review threads via GitHub GraphQL."""
+        out: list[UnresolvedReviewItem] = []
+        cursor: str | None = None
+        while True:
+            variables: dict[str, Any] = {
+                "owner": owner,
+                "name": repo,
+                "number": int(pr_number),
+                "cursor": cursor,
+            }
+            data = self._graphql(self._REVIEW_THREADS_GQL, variables)
+            repo_d = data.get("repository")
+            if not isinstance(repo_d, dict):
+                break
+            pr_d = repo_d.get("pullRequest")
+            if not isinstance(pr_d, dict):
+                break
+            rt = pr_d.get("reviewThreads")
+            if not isinstance(rt, dict):
+                break
+            nodes = rt.get("nodes") or []
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                if node.get("isResolved") or node.get("isOutdated"):
+                    continue
+                comments_wrap = node.get("comments") or {}
+                cnodes = comments_wrap.get("nodes") if isinstance(comments_wrap, dict) else None
+                if not isinstance(cnodes, list) or not cnodes:
+                    continue
+                best_sev: Literal["high", "medium", "low", "nit", "unknown"] = "unknown"
+                body_text = ""
+                path_str = ""
+                line_no = 0
+                for c in cnodes:
+                    if not isinstance(c, dict):
+                        continue
+                    raw_body = (c.get("body") or "").strip()
+                    if not raw_body:
+                        continue
+                    sev = infer_severity_from_comment_body(raw_body)
+                    best_sev = max_inferred_severity(best_sev, sev)
+                    if not body_text:
+                        body_text = c.get("body") or ""
+                        path_str = str(c.get("path") or "")
+                        line_no = int(c.get("line") or 0)
+                if not body_text:
+                    continue
+                tid = str(node.get("id") or "")
+                out.append(
+                    UnresolvedReviewItem(
+                        stable_id=f"github:thread:{tid}",
+                        thread_id=tid,
+                        kind="discussion_thread",
+                        path=path_str,
+                        line=line_no,
+                        body=body_text,
+                        inferred_severity=best_sev,
+                    )
+                )
+            page = rt.get("pageInfo") or {}
+            if not isinstance(page, dict) or not page.get("hasNextPage"):
+                break
+            cursor = page.get("endCursor")
+            if not cursor:
+                break
+        return out
+
+    def get_unresolved_review_items_for_quality_gate(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[UnresolvedReviewItem]:
+        """Use GraphQL review threads (resolved / outdated); fall back to REST comments."""
+        try:
+            return self._unresolved_review_threads_graphql(owner, repo, pr_number)
+        except Exception as e:
+            logger.warning(
+                "GitHub GraphQL reviewThreads failed owner=%s repo=%s pr=%s: %s; "
+                "falling back to REST review comments (no thread resolution).",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return default_unresolved_review_items_from_comments(
+                self.get_existing_review_comments(owner, repo, pr_number)
+            )
 
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff for the PR (Accept: application/vnd.github.v3.diff)."""
