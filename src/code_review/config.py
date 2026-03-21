@@ -145,7 +145,7 @@ class ContextAwareReviewConfig(BaseSettings):
     enabled: bool = Field(default=False, validation_alias="CONTEXT_AWARE_REVIEW_ENABLED")
     db_url: str | None = Field(default=None, validation_alias="CONTEXT_AWARE_REVIEW_DB_URL")
     github_issues_enabled: bool = Field(
-        default=True, validation_alias="CONTEXT_GITHUB_ISSUES_ENABLED"
+        default=False, validation_alias="CONTEXT_GITHUB_ISSUES_ENABLED"
     )
     gitlab_issues_enabled: bool = Field(
         default=False, validation_alias="CONTEXT_GITLAB_ISSUES_ENABLED"
