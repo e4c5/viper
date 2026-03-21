@@ -177,6 +177,15 @@ class ContextAwareReviewConfig(BaseSettings):
         validation_alias="CONTEXT_GITLAB_TOKEN",
         description="Token for GitLab Issues API when SCM_PROVIDER is not gitlab.",
     )
+    jira_extra_fields: str = Field(
+        default="",
+        validation_alias="CONTEXT_JIRA_EXTRA_FIELDS",
+        description=(
+            "Comma-separated list of additional Jira field names to fetch "
+            "(e.g. 'customfield_10016,customfield_10014' for acceptance criteria). "
+            "Values are appended to the distillation context."
+        ),
+    )
 
     @field_validator(
         "jira_token",

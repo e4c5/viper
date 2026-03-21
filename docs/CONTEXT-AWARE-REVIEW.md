@@ -67,7 +67,11 @@ to enable.
 > If `CONTEXT_AWARE_REVIEW_ENABLED=true`, the runner should fail fast when an enabled
 > source is misconfigured or cannot authenticate. In particular:
 > - Missing required credentials for an enabled source are fatal.
-> - Authentication or authorization failure for an enabled source is fatal.
+> - Authentication or authorization failure (HTTP 401/403) for an enabled source is fatal.
+> - Transient or server-side errors (HTTP 5xx, network timeouts) for a specific reference
+>   are logged as warnings and that reference is skipped; the review continues with whatever
+>   context was successfully fetched. This avoids aborting an entire review due to a single
+>   temporarily unavailable external system.
 > - If no references are found, the review continues normally without added context.
 
 ### Database Schema
@@ -101,10 +105,12 @@ CONTEXT_JIRA_TOKEN=your_jira_api_token
 |----------|---------|-------------|
 | `CONTEXT_AWARE_REVIEW_ENABLED` | `false` | Master switch. Set to `true` to activate. |
 | `CONTEXT_GITHUB_ISSUES_ENABLED` | `true` | Fetch linked GitHub Issue content when enabled. Uses `SCM_TOKEN`. |
+| `CONTEXT_GITLAB_ISSUES_ENABLED` | `false` | Fetch linked GitLab Issue content when enabled. Uses `SCM_TOKEN` when `SCM_PROVIDER=gitlab`, otherwise requires `CONTEXT_GITLAB_TOKEN`. |
 | `CONTEXT_JIRA_ENABLED` | `false` | Fetch linked Jira ticket content. Requires `CONTEXT_JIRA_URL`, `CONTEXT_JIRA_EMAIL`, etc. |
 | `CONTEXT_JIRA_URL` | — | Jira base URL. |
 | `CONTEXT_JIRA_EMAIL` | — | Jira account email used for API access. |
 | `CONTEXT_JIRA_TOKEN` | — | Jira API token (treated as a secret). |
+| `CONTEXT_JIRA_EXTRA_FIELDS` | — | Comma-separated list of additional Jira field names to fetch (e.g. `customfield_10016,customfield_10014`). Values are included in the distillation context. Useful for acceptance-criteria or other custom fields. |
 | `CONTEXT_CONFLUENCE_ENABLED` | `false` | Fetch linked Confluence page content. |
 | `CONTEXT_CONFLUENCE_URL` | — | Confluence base URL. |
 | `CONTEXT_CONFLUENCE_EMAIL` | — | Confluence account email used for API access. |

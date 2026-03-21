@@ -56,6 +56,7 @@ class FetchReferenceConfig:
     ctx_gitlab_enabled: bool
     ctx_jira_enabled: bool
     ctx_confluence_enabled: bool
+    jira_extra_fields: tuple[str, ...] = ()
 
 
 def _append_body(lines: list[str], body: str, label: str = BODY_LABEL) -> None:
@@ -182,12 +183,15 @@ def fetch_jira_issue(
     api_token: str,
     key: str,
     timeout: float = 30.0,
+    extra_fields: list[str] | None = None,
 ) -> FetchedDocument | None:
     root = base_url.rstrip("/")
     path = f"{root}/rest/api/3/issue/{key}"
-    fields = "summary,description,issuetype,status,updated"
+    base_fields = ["summary", "description", "issuetype", "status", "updated"]
+    extra = [f.strip() for f in (extra_fields or []) if f.strip()]
+    fields_param = ",".join(base_fields + extra)
     with httpx.Client(timeout=timeout) as client:
-        r = client.get(path, params={"fields": fields}, auth=(email, api_token))
+        r = client.get(path, params={"fields": fields_param}, auth=(email, api_token))
         if r.status_code == 404:
             logger.warning("Jira issue not found: %s", key)
             return None
@@ -217,6 +221,17 @@ def fetch_jira_issue(
     if desc_text:
         lines.append("Description:")
         lines.append(desc_text)
+    for field_name in extra:
+        value = fields_d.get(field_name)
+        if value is None:
+            continue
+        if isinstance(value, dict):
+            value = _adf_to_plain(value) or str(value)
+        elif not isinstance(value, str):
+            value = str(value)
+        if value.strip():
+            lines.append(f"{field_name}:")
+            lines.append(value.strip())
     meta = {"issuetype": issue_type, "status": status_name}
     return FetchedDocument(
         external_id=key.upper(),
@@ -302,7 +317,13 @@ def fetch_reference(
             proj, iid = _parse_gitlab_issue_ref(ref)
             return fetch_gitlab_issue(cfg.gitlab_api_base, cfg.gitlab_token, proj, iid)
         if ref.ref_type == ReferenceType.JIRA and cfg.ctx_jira_enabled:
-            return fetch_jira_issue(cfg.jira_base, cfg.jira_email, cfg.jira_token, ref.external_id)
+            return fetch_jira_issue(
+                cfg.jira_base,
+                cfg.jira_email,
+                cfg.jira_token,
+                ref.external_id,
+                extra_fields=list(cfg.jira_extra_fields),
+            )
         if ref.ref_type == ReferenceType.CONFLUENCE and cfg.ctx_confluence_enabled:
             return fetch_confluence_page(
                 cfg.confluence_base, cfg.confluence_email, cfg.confluence_token, ref.external_id

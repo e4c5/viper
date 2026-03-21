@@ -58,7 +58,7 @@ def _init_prometheus() -> bool:
         _prometheus_run_counter = Counter(
             "code_review_runs_total",
             "Total code review runs",
-            ["outcome"],
+            ["outcome", "context_aware"],
             registry=_prometheus_registry,
         )
         _prometheus_duration_histogram = Histogram(
@@ -173,6 +173,7 @@ def finish_run(
     findings_count: int,
     posts_count: int,
     duration_seconds: float,
+    context_brief_attached: bool = False,
 ) -> None:
     """End the run span and record Prometheus metrics."""
 
@@ -185,13 +186,15 @@ def finish_run(
         files_count=files_count,
         findings_count=findings_count,
         posts_count=posts_count,
+        context_aware=context_brief_attached,
     )
 
     # Prometheus
     if _init_prometheus():
         try:
             outcome = "completed" if (files_count > 0 or findings_count > 0) else "skipped"
-            _prometheus_run_counter.labels(outcome=outcome).inc()
+            context_aware = "true" if context_brief_attached else "false"
+            _prometheus_run_counter.labels(outcome=outcome, context_aware=context_aware).inc()
             _prometheus_duration_histogram.observe(duration_seconds)
             _prometheus_findings_counter.inc(findings_count)
             _prometheus_posts_counter.inc(posts_count)

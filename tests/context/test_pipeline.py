@@ -5,9 +5,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import code_review.context.pipeline as pipeline_module
 from code_review.context.errors import ContextAwareFatalError
 from code_review.context.pipeline import build_context_brief_for_pr
 from code_review.context.types import ContextReference, ReferenceType
+
+
+@pytest.fixture(autouse=True)
+def _clear_store_cache():
+    """Reset the module-level ContextStore cache so each test gets a fresh mock."""
+    pipeline_module._store_cache.clear()
+    yield
+    pipeline_module._store_cache.clear()
 
 
 # ---------------------------------------------------------------------------

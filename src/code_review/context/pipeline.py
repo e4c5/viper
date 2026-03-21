@@ -19,6 +19,10 @@ from code_review.context.types import ContextReference, ReferenceType
 
 logger = logging.getLogger(__name__)
 
+# Module-level ContextStore cache keyed by (db_url, embedding_dimensions).
+# Avoids re-running schema DDL on every review call.
+_store_cache: dict[tuple[str, int], "ContextStore"] = {}
+
 
 def _github_api_and_token(scm: SCMConfig, ctx: ContextAwareReviewConfig) -> tuple[str, str]:
     if scm.provider == "github":
@@ -79,6 +83,7 @@ def _get_source_tokens(ctx: ContextAwareReviewConfig) -> tuple[str, str, str, st
 def _load_context_documents(
     *,
     store: ContextStore,
+    conn,
     scm: SCMConfig,
     ctx: ContextAwareReviewConfig,
     applicable: list[ContextReference],
@@ -93,6 +98,11 @@ def _load_context_documents(
 ) -> tuple[list[tuple[str, str]], list[tuple[str, object]]]:
     docs_for_distill: list[tuple[str, str]] = []
     doc_ids_for_rag: list[tuple[str, object]] = []
+    extra_fields = tuple(
+        f.strip()
+        for f in (ctx.jira_extra_fields or "").split(",")
+        if f.strip()
+    )
     fetch_cfg = FetchReferenceConfig(
         github_api_base=gh_api,
         github_token=gh_tok,
@@ -108,78 +118,70 @@ def _load_context_documents(
         ctx_gitlab_enabled=ctx.gitlab_issues_enabled,
         ctx_jira_enabled=ctx.jira_enabled,
         ctx_confluence_enabled=ctx.confluence_enabled,
+        jira_extra_fields=extra_fields,
     )
-    conn = store.connect()
-    try:
-        store.ensure_schema(conn)
-        for ref in applicable:
-            src_name, base = _source_name_and_base(ref, ctx, scm)
-            if not base and ref.ref_type != ReferenceType.GITHUB_ISSUE:
+    for ref in applicable:
+        src_name, base = _source_name_and_base(ref, ctx, scm)
+        if not base and ref.ref_type != ReferenceType.GITHUB_ISSUE:
+            continue
+        source_id = store.get_or_create_source(conn, src_name, base)
+        row = store.load_document(conn, source_id, ref.external_id)
+        if row is not None and row[3]:
+            content = row[1]
+            doc_id = row[0]
+            logger.debug("context cache hit %s", ref.display)
+        else:
+            fetched = fetch_reference(
+                ref,
+                cfg=fetch_cfg,
+            )
+            if fetched is None:
                 continue
-            source_id = store.get_or_create_source(conn, src_name, base)
-            row = store.load_document(conn, source_id, ref.external_id)
-            if row is not None and row[3]:
-                content = row[1]
-                doc_id = row[0]
-                logger.debug("context cache hit %s", ref.display)
-            else:
-                fetched = fetch_reference(
-                    ref,
-                    cfg=fetch_cfg,
-                )
-                if fetched is None:
-                    continue
-                doc_id = store.upsert_document(conn, source_id, fetched)
-                content = fetched.body
-            docs_for_distill.append((ref.display, content))
-            doc_ids_for_rag.append((ref.display, doc_id))
-    finally:
-        conn.close()
+            doc_id = store.upsert_document(conn, source_id, fetched)
+            content = fetched.body
+        docs_for_distill.append((ref.display, content))
+        doc_ids_for_rag.append((ref.display, doc_id))
     return (docs_for_distill, doc_ids_for_rag)
 
 
 def _build_retrieved_context_text(
     *,
     store: ContextStore,
+    conn,
     ctx: ContextAwareReviewConfig,
     full_diff: str,
     docs_for_distill: list[tuple[str, str]],
     doc_ids_for_rag: list[tuple[str, object]],
     combined: str,
 ) -> str:
-    conn = store.connect()
     try:
-        store.ensure_schema(conn)
+        q_emb = embed_query_text(
+            build_semantic_query_from_diff(full_diff),
+            ctx.embedding_model,
+        )
+    except Exception as e:
+        raise ContextAwareFatalError(f"Context embedding (query) failed: {e}") from e
+    for (label, did), (_, body_text) in zip(doc_ids_for_rag, docs_for_distill, strict=True):
+        if store.count_chunks_for_document(conn, did) > 0:
+            continue
+        chunks = chunk_plain_text(body_text)
+        if not chunks:
+            continue
         try:
-            q_emb = embed_query_text(
-                build_semantic_query_from_diff(full_diff),
-                ctx.embedding_model,
-            )
+            embs = embed_texts(chunks, ctx.embedding_model)
         except Exception as e:
-            raise ContextAwareFatalError(f"Context embedding (query) failed: {e}") from e
-        for (label, did), (_, body_text) in zip(doc_ids_for_rag, docs_for_distill, strict=True):
-            if store.count_chunks_for_document(conn, did) > 0:
-                continue
-            chunks = chunk_plain_text(body_text)
-            if not chunks:
-                continue
-            try:
-                embs = embed_texts(chunks, ctx.embedding_model)
-            except Exception as e:
-                raise ContextAwareFatalError(f"Context embedding (chunks) failed: {e}") from e
-            payload = [
-                (i, ch, embs[i], {"document": label})
-                for i, ch in enumerate(chunks)
-                if i < len(embs)
-            ]
-            store.replace_chunks(conn, did, payload)
-        doc_ids = [did for _, did in doc_ids_for_rag]
-        retrieved = store.search_chunks(conn, q_emb, limit=16, document_ids=doc_ids)
-        if not retrieved:
-            return combined[: ctx.max_bytes] + "\n…(truncated)"
-        return "\n\n".join(retrieved)
-    finally:
-        conn.close()
+            raise ContextAwareFatalError(f"Context embedding (chunks) failed: {e}") from e
+        payload = [
+            (i, ch, embs[i], {"document": label})
+            for i, ch in enumerate(chunks)
+            if i < len(embs)
+        ]
+        store.replace_chunks(conn, did, payload)
+    doc_ids = [did for _, did in doc_ids_for_rag]
+    retrieved = store.search_chunks(conn, q_emb, limit=16, document_ids=doc_ids)
+    if not retrieved:
+        return combined[: ctx.max_bytes] + "\n…(truncated)"
+    return "\n\n".join(retrieved)
 
 
 def build_context_brief_for_pr(
@@ -206,49 +208,62 @@ def build_context_brief_for_pr(
     gl_api, gl_tok = _gitlab_api_and_token(scm, ctx)
     jira_email, jira_tok, conf_email, conf_tok = _get_source_tokens(ctx)
 
-    store = ContextStore(ctx.db_url or "", ctx.embedding_dimensions)
-    documents_for_distill, doc_ids_for_rag = _load_context_documents(
-        store=store,
-        scm=scm,
-        ctx=ctx,
-        applicable=applicable,
-        gh_api=gh_api,
-        gh_tok=gh_tok,
-        gl_api=gl_api,
-        gl_tok=gl_tok,
-        jira_email=jira_email,
-        jira_tok=jira_tok,
-        conf_email=conf_email,
-        conf_tok=conf_tok,
-    )
+    db_url = ctx.db_url or ""
+    cache_key = (db_url, ctx.embedding_dimensions)
+    store = _store_cache.get(cache_key)
+    if store is None:
+        store = ContextStore(db_url, ctx.embedding_dimensions)
+        _store_cache[cache_key] = store
 
-    if not documents_for_distill:
-        logger.info("context_aware: no document bodies resolved")
-        return None
-
-    combined = "\n\n---\n\n".join(f"## {label}\n{text}" for label, text in documents_for_distill)
-    total_bytes = len(combined.encode("utf-8"))
-    logger.info(
-        "context_aware: resolved %d document(s), ~%d bytes before distillation",
-        len(documents_for_distill),
-        total_bytes,
-    )
-
-    raw_for_distill = combined
-    if total_bytes > ctx.max_bytes:
-        logger.info(
-            "context_aware: over byte budget (%d > %d), running retrieval",
-            total_bytes,
-            ctx.max_bytes,
-        )
-        raw_for_distill = _build_retrieved_context_text(
+    conn = store.connect()
+    try:
+        store.ensure_schema(conn)
+        documents_for_distill, doc_ids_for_rag = _load_context_documents(
             store=store,
+            conn=conn,
+            scm=scm,
             ctx=ctx,
-            full_diff=full_diff,
-            docs_for_distill=documents_for_distill,
-            doc_ids_for_rag=doc_ids_for_rag,
-            combined=combined,
+            applicable=applicable,
+            gh_api=gh_api,
+            gh_tok=gh_tok,
+            gl_api=gl_api,
+            gl_tok=gl_tok,
+            jira_email=jira_email,
+            jira_tok=jira_tok,
+            conf_email=conf_email,
+            conf_tok=conf_tok,
         )
+
+        if not documents_for_distill:
+            logger.info("context_aware: no document bodies resolved")
+            return None
+
+        combined = "\n\n---\n\n".join(f"## {label}\n{text}" for label, text in documents_for_distill)
+        total_bytes = len(combined.encode("utf-8"))
+        logger.info(
+            "context_aware: resolved %d document(s), ~%d bytes before distillation",
+            len(documents_for_distill),
+            total_bytes,
+        )
+
+        raw_for_distill = combined
+        if total_bytes > ctx.max_bytes:
+            logger.info(
+                "context_aware: over byte budget (%d > %d), running retrieval",
+                total_bytes,
+                ctx.max_bytes,
+            )
+            raw_for_distill = _build_retrieved_context_text(
+                store=store,
+                conn=conn,
+                ctx=ctx,
+                full_diff=full_diff,
+                docs_for_distill=documents_for_distill,
+                doc_ids_for_rag=doc_ids_for_rag,
+                combined=combined,
+            )
+    finally:
+        conn.close()
 
     brief = distill_context_text(raw_for_distill, max_output_tokens=ctx.distilled_max_tokens)
     if not brief.strip():

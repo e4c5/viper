@@ -45,36 +45,36 @@ Identified during validation of the context-aware code review implementation aga
 
 ## Low Priority
 
-- [ ] **No Prometheus labels for context enrichment**
+- [x] **No Prometheus labels for context enrichment**
   `context_brief_attached` is passed to `create_review_agent` but never reaches
   `observability.finish_run`. Add a `context_aware` label to the existing Prometheus
   run counter so operators can track context adoption and distillation failures on
   dashboards.
 
-- [ ] **Jira acceptance-criteria / custom fields not fetched**
+- [x] **Jira acceptance-criteria / custom fields not fetched**
   `fetch_jira_issue` requests only `summary,description,issuetype,status,updated`.
   Add an optional `CONTEXT_JIRA_EXTRA_FIELDS` config variable (comma-separated field
   names) that is appended to the `fields` query parameter, allowing teams to pull
   acceptance-criteria or other custom fields relevant to their Jira setup.
 
-- [ ] **`CONTEXT_GITLAB_ISSUES_ENABLED` missing from env var table**
+- [x] **`CONTEXT_GITLAB_ISSUES_ENABLED` missing from env var table**
   The environment variable table in `CONTEXT-AWARE-REVIEW.md` (section 2) lists
   `CONTEXT_GITHUB_ISSUES_ENABLED` but omits `CONTEXT_GITLAB_ISSUES_ENABLED`, even
   though it is fully implemented. Add the missing row.
 
-- [ ] **Silent skip on non-auth fatal fetch errors**
+- [x] **Silent skip on non-auth fatal fetch errors**
   In `fetch_reference`, a `ContextAwareFatalError` from a non-auth HTTP error (e.g.
   Jira returning 500) is downgraded to a warning and the reference is silently skipped.
   The plan says enabled-source failures should be fatal. Either enforce this, or
   document clearly that only 401/403 are fatal while server errors are skipped, and
   update `CONTEXT-AWARE-REVIEW.md` accordingly.
 
-- [ ] **Two DB connections opened per `build_context_brief_for_pr` call**
+- [x] **Two DB connections opened per `build_context_brief_for_pr` call**
   `_load_context_documents` opens and closes one connection; `_build_retrieved_context_text`
   opens another. Refactor `pipeline.py` to open a single connection at the top of
   `build_context_brief_for_pr` and pass it through both helpers.
 
-- [ ] **`ContextStore._schema_ok` not persisted across reviews**
+- [x] **`ContextStore._schema_ok` not persisted across reviews**
   A new `ContextStore` is instantiated on every call, so `_schema_ok` is always `False`
   and `ensure_schema` (with its `CREATE EXTENSION / CREATE TABLE IF NOT EXISTS` DDL)
   runs on every review. Cache the store instance or use a module-level flag to skip
