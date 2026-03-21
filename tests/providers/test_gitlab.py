@@ -230,6 +230,59 @@ def test_get_unresolved_review_items_skips_resolved_discussions(mock_client):
     assert items[0].kind == "discussion_thread"
 
 
+def _json_get_response(payload):
+    m = MagicMock()
+    m.headers = {"content-type": "application/json"}
+    m.json.return_value = payload
+    return m
+
+
+@patch("code_review.providers.gitlab.httpx.Client")
+def test_get_unresolved_review_items_paginates_discussions(mock_client):
+    """Quality gate must follow GitLab discussions pagination (page/per_page)."""
+    note = {
+        "id": 1,
+        "type": "DiffNote",
+        "body": "[Low] x",
+        "position": {"new_path": "f.py", "new_line": 1},
+    }
+    page1 = [
+        {
+            "id": str(i),
+            "resolved": False,
+            "notes": [dict(note, id=i)],
+        }
+        for i in range(100)
+    ]
+    page2 = [
+        {
+            "id": "page-two",
+            "resolved": False,
+            "notes": [
+                {
+                    "id": 200,
+                    "type": "DiffNote",
+                    "body": "[High] second page",
+                    "position": {"new_path": "g.py", "new_line": 2},
+                }
+            ],
+        }
+    ]
+    mock_client.return_value.__enter__.return_value.get.side_effect = [
+        _json_get_response(page1),
+        _json_get_response(page2),
+    ]
+
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    items = p.get_unresolved_review_items_for_quality_gate("owner", "repo", 1)
+
+    assert len(items) == 101
+    assert any(i.thread_id == "page-two" and i.inferred_severity == "high" for i in items)
+    urls = [c[0][0] for c in mock_client.return_value.__enter__.return_value.get.call_args_list]
+    assert any("page=1" in u and "per_page=100" in u for u in urls)
+    assert any("page=2" in u for u in urls)
+
+
 @patch("code_review.providers.gitlab.httpx.Client")
 def test_post_pr_summary_comment(mock_client):
     mock_post = MagicMock()

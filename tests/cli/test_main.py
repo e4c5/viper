@@ -114,23 +114,24 @@ def test_cli_app_invokable_as_main():
         assert e.code == 0
 
 
-def test_cli_review_decision_options_override_env():
+def test_cli_review_decision_options_passed_to_run_review():
     with patch("code_review.__main__.run_review") as mock_run:
         mock_run.return_value = []
-        with patch.dict(os.environ, {}, clear=False):
-            review(
-                owner="o",
-                repo="r",
-                pr=1,
-                head_sha="abc123",
-                dry_run=True,
-                review_decision_enabled=True,
-                review_decision_high_threshold=4,
-                review_decision_medium_threshold=6,
-            )
-            assert os.environ["SCM_REVIEW_DECISION_ENABLED"] == "true"
-            assert os.environ["SCM_REVIEW_DECISION_HIGH_THRESHOLD"] == "4"
-            assert os.environ["SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"] == "6"
+        review(
+            owner="o",
+            repo="r",
+            pr=1,
+            head_sha="abc123",
+            dry_run=True,
+            review_decision_enabled=True,
+            review_decision_high_threshold=4,
+            review_decision_medium_threshold=6,
+        )
+        mock_run.assert_called_once()
+        kw = mock_run.call_args[1]
+        assert kw["review_decision_enabled"] is True
+        assert kw["review_decision_high_threshold"] == 4
+        assert kw["review_decision_medium_threshold"] == 6
 
 
 def test_cli_main_module_entry_point():

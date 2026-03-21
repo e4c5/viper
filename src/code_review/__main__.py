@@ -78,25 +78,6 @@ def _cli_validate_inputs(
         raise typer.Exit(1)
 
 
-def _apply_review_decision_env_overrides(
-    review_decision_enabled: bool | None,
-    review_decision_high_threshold: int | None,
-    review_decision_medium_threshold: int | None,
-) -> None:
-    if review_decision_enabled is not None:
-        os.environ["SCM_REVIEW_DECISION_ENABLED"] = (
-            "true" if review_decision_enabled else "false"
-        )
-    if review_decision_high_threshold is not None:
-        os.environ["SCM_REVIEW_DECISION_HIGH_THRESHOLD"] = str(
-            review_decision_high_threshold
-        )
-    if review_decision_medium_threshold is not None:
-        os.environ["SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"] = str(
-            review_decision_medium_threshold
-        )
-
-
 @app.command()
 def review(
     owner: str | None = typer.Option(
@@ -168,11 +149,6 @@ def review(
         owner, repo, pr, head_sha
     )
     _cli_validate_inputs(owner_f, repo_f, pr_num, head_sha_val, dry_run)
-    _apply_review_decision_env_overrides(
-        review_decision_enabled,
-        review_decision_high_threshold,
-        review_decision_medium_threshold,
-    )
 
     _ensure_logging()
     findings = run_review(
@@ -182,6 +158,9 @@ def review(
         head_sha=head_sha_val,
         dry_run=dry_run,
         print_findings=print_findings,
+        review_decision_enabled=review_decision_enabled,
+        review_decision_high_threshold=review_decision_high_threshold,
+        review_decision_medium_threshold=review_decision_medium_threshold,
     )
     if fail_on_critical and any(f.severity == "high" for f in findings):
         raise typer.Exit(2)

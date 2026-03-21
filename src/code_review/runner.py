@@ -1038,6 +1038,9 @@ class ReviewOrchestrator:
         *,
         dry_run: bool = False,
         print_findings: bool = False,
+        review_decision_enabled: bool | None = None,
+        review_decision_high_threshold: int | None = None,
+        review_decision_medium_threshold: int | None = None,
     ):
         self.owner = owner
         self.repo = repo
@@ -1045,6 +1048,9 @@ class ReviewOrchestrator:
         self.head_sha = head_sha
         self.dry_run = dry_run
         self.print_findings = print_findings
+        self._review_decision_enabled_override = review_decision_enabled
+        self._review_decision_high_threshold_override = review_decision_high_threshold
+        self._review_decision_medium_threshold_override = review_decision_medium_threshold
 
     def _load_config_and_provider(self):
         """Load SCM/LLM config and create the provider instance.
@@ -1052,6 +1058,19 @@ class ReviewOrchestrator:
         Returns (cfg, llm_cfg, provider).
         """
         cfg = get_scm_config()
+        overrides: dict[str, bool | int] = {}
+        if self._review_decision_enabled_override is not None:
+            overrides["review_decision_enabled"] = self._review_decision_enabled_override
+        if self._review_decision_high_threshold_override is not None:
+            overrides["review_decision_high_threshold"] = (
+                self._review_decision_high_threshold_override
+            )
+        if self._review_decision_medium_threshold_override is not None:
+            overrides["review_decision_medium_threshold"] = (
+                self._review_decision_medium_threshold_override
+            )
+        if overrides:
+            cfg = cfg.model_copy(update=overrides)
         llm_cfg = get_llm_config()
         token_val = (
             cfg.token.get_secret_value() if hasattr(cfg.token, "get_secret_value") else cfg.token
@@ -1960,13 +1979,27 @@ def run_review(
     *,
     dry_run: bool = False,
     print_findings: bool = False,
+    review_decision_enabled: bool | None = None,
+    review_decision_high_threshold: int | None = None,
+    review_decision_medium_threshold: int | None = None,
 ) -> list[FindingV1]:
     """
     Run the code review agent (findings-only mode). Fetches existing comments,
     runs agent, parses findings, filters by ignore list, and posts via provider.
     Returns list of findings that were posted (or would be posted if dry_run).
+
+    Optional review-decision kwargs apply only to this run (they do not mutate
+    the process-global cached :func:`~code_review.config.get_scm_config` instance).
     """
     orchestrator = ReviewOrchestrator(
-        owner, repo, pr_number, head_sha, dry_run=dry_run, print_findings=print_findings
+        owner,
+        repo,
+        pr_number,
+        head_sha,
+        dry_run=dry_run,
+        print_findings=print_findings,
+        review_decision_enabled=review_decision_enabled,
+        review_decision_high_threshold=review_decision_high_threshold,
+        review_decision_medium_threshold=review_decision_medium_threshold,
     )
     return orchestrator.run()

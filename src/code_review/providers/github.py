@@ -18,7 +18,6 @@ from code_review.providers.base import (
     _log_pr_commit_messages_warning,
     _log_pr_info_warning,
     commit_messages_from_commit_list,
-    default_unresolved_review_items_from_comments,
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
@@ -256,21 +255,19 @@ class GitHubProvider(ProviderInterface):
     def get_unresolved_review_items_for_quality_gate(
         self, owner: str, repo: str, pr_number: int
     ) -> list[UnresolvedReviewItem]:
-        """Use GraphQL review threads (resolved / outdated); fall back to REST comments."""
+        """Use GraphQL review threads (resolved / outdated). On GraphQL failure, return []."""
         try:
             return self._unresolved_review_threads_graphql(owner, repo, pr_number)
         except Exception as e:
             logger.warning(
                 "GitHub GraphQL reviewThreads failed owner=%s repo=%s pr=%s: %s; "
-                "falling back to REST review comments (no thread resolution).",
+                "skipping pre-existing unresolved aggregation (REST comments lack resolution state).",
                 owner,
                 repo,
                 pr_number,
                 e,
             )
-            return default_unresolved_review_items_from_comments(
-                self.get_existing_review_comments(owner, repo, pr_number)
-            )
+            return []
 
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff for the PR (Accept: application/vnd.github.v3.diff)."""

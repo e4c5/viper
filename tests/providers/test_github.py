@@ -311,22 +311,15 @@ def test_unresolved_review_threads_stops_on_repeated_end_cursor(mock_graphql):
 
 
 @patch("code_review.providers.github.httpx.Client")
-def test_get_unresolved_review_items_graphql_fallback_to_rest_comments(mock_client):
-    """When GraphQL fails, fall back to REST pull review comments."""
+def test_get_unresolved_review_items_graphql_failure_returns_empty(mock_client):
+    """GraphQL failure must not reclassify all REST review comments as unresolved."""
     mock_post = MagicMock()
     mock_post.raise_for_status.side_effect = httpx.HTTPStatusError(
         "err", request=MagicMock(), response=MagicMock(status_code=500)
     )
-    mock_get_resp = MagicMock()
-    mock_get_resp.headers = {"content-type": "application/json"}
-    mock_get_resp.json.return_value = [
-        {"id": 99, "path": "z.py", "line": 3, "body": "[Medium] rest"},
-    ]
-    mock_get_resp.raise_for_status = MagicMock()
     mock_client.return_value.__enter__.return_value.post.return_value = mock_post
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_get_resp
 
     p = GitHubProvider("https://api.github.com", "tok")
     items = p.get_unresolved_review_items_for_quality_gate("o", "r", 1)
-    assert len(items) == 1
-    assert items[0].inferred_severity == "medium"
+    assert items == []
+    mock_client.return_value.__enter__.return_value.get.assert_not_called()

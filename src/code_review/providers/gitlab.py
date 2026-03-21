@@ -48,6 +48,41 @@ class GitLabProvider(ProviderInterface):
         proj = _project_id(owner, repo)
         return f"{self._base_url}/projects/{proj}/" + "/".join(parts)
 
+    def _get_mr_discussions_paginated(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[dict[str, Any]]:
+        """List all MR discussions (GitLab paginates; default page size would omit later threads)."""
+        base_path = self._path(owner, repo, "merge_requests", str(pr_number), "discussions")
+        combined: list[dict[str, Any]] = []
+        page = 1
+        per_page = 100
+        max_pages = 500
+        for _ in range(max_pages):
+            url = f"{base_path}?per_page={per_page}&page={page}"
+            try:
+                data = self._get(url)
+            except Exception as e:
+                logger.warning(
+                    "GitLab MR discussions fetch failed owner=%s repo=%s pr_number=%s page=%s: %s",
+                    owner,
+                    repo,
+                    pr_number,
+                    page,
+                    e,
+                )
+                break
+            if not isinstance(data, list):
+                break
+            if not data:
+                break
+            for item in data:
+                if isinstance(item, dict):
+                    combined.append(item)
+            if len(data) < per_page:
+                break
+            page += 1
+        return combined
+
     def _get(self, path: str) -> Any:
         with httpx.Client(timeout=self._timeout) as client:
             r = client.get(path, headers=self._headers())
@@ -210,10 +245,7 @@ class GitLabProvider(ProviderInterface):
         self, owner: str, repo: str, pr_number: int
     ) -> list[ReviewComment]:
         """Return existing MR discussion notes that are DiffNotes (inline)."""
-        path = self._path(owner, repo, "merge_requests", str(pr_number), "discussions")
-        data = self._get(path)
-        if not isinstance(data, list):
-            return []
+        data = self._get_mr_discussions_paginated(owner, repo, pr_number)
         result: list[ReviewComment] = []
         for disc in data:
             notes = disc.get("notes") or []
@@ -275,10 +307,7 @@ class GitLabProvider(ProviderInterface):
         self, owner: str, repo: str, pr_number: int
     ) -> list[UnresolvedReviewItem]:
         """One item per unresolved MR discussion (thread), severity = max across DiffNotes."""
-        path = self._path(owner, repo, "merge_requests", str(pr_number), "discussions")
-        data = self._get(path)
-        if not isinstance(data, list):
-            return []
+        data = self._get_mr_discussions_paginated(owner, repo, pr_number)
         out: list[UnresolvedReviewItem] = []
         for disc in data:
             if not isinstance(disc, dict) or disc.get("resolved"):
