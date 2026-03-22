@@ -7,25 +7,25 @@ from typing import Any, Literal
 
 import httpx
 
+from code_review.formatters.comment import (
+    infer_severity_from_comment_body,
+    max_inferred_severity,
+    render_suggestion_block,
+)
 from code_review.providers.base import (
     FileInfo,
     InlineComment,
     PRInfo,
     ProviderCapabilities,
     ProviderInterface,
-    ReviewDecision,
     ReviewComment,
+    ReviewDecision,
     UnresolvedReviewItem,
     _log_pr_commit_messages_warning,
     _log_pr_info_warning,
     commit_messages_from_commit_list,
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
-)
-from code_review.formatters.comment import (
-    infer_severity_from_comment_body,
-    max_inferred_severity,
-    render_suggestion_block,
 )
 from code_review.providers.review_decision_common import github_style_pull_review_json
 from code_review.providers.safety import truncate_repo_content

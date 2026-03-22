@@ -24,6 +24,7 @@ def _suppress_third_party_loggers() -> None:
     # Suppress litellm's own verbose output and logging
     try:
         import litellm
+
         litellm.suppress_debug_info = True
         litellm.set_verbose = False
         litellm_logger = logging.getLogger("LiteLLM")

@@ -5,7 +5,6 @@ match the diff content at the reported line, the runner searches nearby lines
 and relocates the finding to the closest matching line.
 """
 
-import pytest
 
 from code_review.runner import _relocate_findings_by_anchor
 from code_review.schemas.findings import FindingV1
@@ -137,8 +136,8 @@ class TestRelocateFindingsByAnchor:
     def test_multiple_findings_mixed(self):
         """Multiple findings: some relocated, some not."""
         f1 = _finding("foo.py", 8, anchor="Files.writeString")  # relocate to 10
-        f2 = _finding("foo.py", 12, anchor="viewName")          # already correct
-        f3 = _finding("bar.py", 100, anchor="doSomething")      # relocate to 101
+        f2 = _finding("foo.py", 12, anchor="viewName")  # already correct
+        f3 = _finding("bar.py", 100, anchor="doSomething")  # relocate to 101
 
         result = _relocate_findings_by_anchor([f1, f2, f3], SAMPLE_DIFF)
         assert len(result) == 3

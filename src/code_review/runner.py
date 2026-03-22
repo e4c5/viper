@@ -480,9 +480,7 @@ def _get_file_lines_by_path(
     return out
 
 
-def _generate_auto_pr_description(
-    title: str, paths: list[str], max_files: int = 10
-) -> str:
+def _generate_auto_pr_description(title: str, paths: list[str], max_files: int = 10) -> str:
     """
     Build a non-empty, deterministic PR description when the user did not add one.
 
@@ -567,7 +565,6 @@ def _maybe_post_started_review_comment(
         )
 
 
-
 def _resolve_stale_comments_if_supported(
     provider,
     owner: str,
@@ -641,9 +638,7 @@ def _post_inline_comments(
                 line_type=line_type,
             )
         )
-    return _post_comments_one_by_one(
-        provider, owner, repo, pr_number, head_sha, comments
-    )
+    return _post_comments_one_by_one(provider, owner, repo, pr_number, head_sha, comments)
 
 
 def _post_comments_one_by_one(
@@ -972,9 +967,8 @@ def _suppress_ssl_teardown_errors(loop, context: dict) -> None:
     exc = context.get("exception")
     msg = context.get("message", "")
     _teardown_msg = "SSL" in msg or "Fatal write error" in msg or "write backlog" in msg
-    _teardown_exc = (
-        (isinstance(exc, OSError) and getattr(exc, "errno", None) == 9)
-        or (isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc))
+    _teardown_exc = (isinstance(exc, OSError) and getattr(exc, "errno", None) == 9) or (
+        isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc)
     )
     if _teardown_msg and _teardown_exc:
         return
@@ -1106,9 +1100,7 @@ class ReviewOrchestrator:
         if (
             cfg.skip_label
             and cfg.skip_label.strip()
-            and any(
-                lb.strip().lower() == cfg.skip_label.strip().lower() for lb in pr_info.labels
-            )
+            and any(lb.strip().lower() == cfg.skip_label.strip().lower() for lb in pr_info.labels)
         ):
             _duration_ms = (time.perf_counter() - start_time) * 1000
             _log_run_complete(trace_id, owner, repo, pr_number, 0, 0, 0, _duration_ms)
@@ -1188,9 +1180,7 @@ class ReviewOrchestrator:
             return None
         _duration_ms = (time.perf_counter() - start_time) * 1000
         _log_run_complete(trace_id, owner, repo, pr_number, 0, 0, 0, _duration_ms)
-        observability.finish_run(
-            run_handle, owner, repo, pr_number, 0, 0, 0, _duration_ms / 1000.0
-        )
+        observability.finish_run(run_handle, owner, repo, pr_number, 0, 0, 0, _duration_ms / 1000.0)
         return []
 
     def _fetch_pr_files_and_diffs(self, provider, owner: str, repo: str, pr_number: int):
@@ -1420,12 +1410,7 @@ class ReviewOrchestrator:
         )
         if full_diff:
             annotated = annotate_diff_with_line_numbers(full_diff)
-            msg += (
-                "\n\nHere is the unified diff for this PR:\n"
-                "```diff\n"
-                f"{annotated}\n"
-                "```"
-            )
+            msg += f"\n\nHere is the unified diff for this PR:\n```diff\n{annotated}\n```"
         if prompt_suffix:
             msg += "\n\n" + prompt_suffix
         if logger.isEnabledFor(logging.DEBUG):
@@ -1465,11 +1450,7 @@ class ReviewOrchestrator:
         for f in all_findings:
             body = finding_to_comment_body(f)
             body_hash = hashlib.sha256(body.encode()).hexdigest()
-            fp = (
-                _fingerprint_for_finding(f, file_lines_by_path)
-                if file_lines_by_path
-                else ""
-            )
+            fp = _fingerprint_for_finding(f, file_lines_by_path) if file_lines_by_path else ""
             if _should_skip_finding_for_dedup(
                 f.path, body_hash, fp, ignore_set, resolved_body_set, resolved_fp_set
             ):
@@ -1591,9 +1572,7 @@ class ReviewOrchestrator:
         return [f for f, _ in to_post]
 
     @staticmethod
-    def _print_findings_summary(
-        print_findings: bool, to_post: list[tuple[FindingV1, str]]
-    ) -> None:
+    def _print_findings_summary(print_findings: bool, to_post: list[tuple[FindingV1, str]]) -> None:
         if not print_findings:
             return
         if to_post:
@@ -1618,9 +1597,7 @@ class ReviewOrchestrator:
             print("No findings to post.")
 
     @staticmethod
-    def _log_post_counts(
-        dry_run: bool, planned_count: int, successful_post_count: int
-    ) -> None:
+    def _log_post_counts(dry_run: bool, planned_count: int, successful_post_count: int) -> None:
         if dry_run:
             logger.info("Dry run: would post %d comment(s)", planned_count)
         else:

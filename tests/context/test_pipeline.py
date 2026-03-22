@@ -206,9 +206,7 @@ def test_fetch_returns_none_skips_ref(mock_distill):
 
     with patch("code_review.context.pipeline.ContextStore", return_value=store_instance):
         with patch("code_review.context.pipeline.fetch_reference", return_value=None):
-            result = build_context_brief_for_pr(
-                _make_ctx(), _make_scm(), [_GITHUB_REF], "diff"
-            )
+            result = build_context_brief_for_pr(_make_ctx(), _make_scm(), [_GITHUB_REF], "diff")
 
     assert result is None
 

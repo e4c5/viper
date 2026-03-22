@@ -94,16 +94,15 @@ def finding_to_comment_body(
                 "</details>"
             )
         else:
-            prompt_block = (
-                "\n\n---\n**Prompt for AI Agents**\n\n"
-                f"{prompt_text}"
-            )
+            prompt_block = f"\n\n---\n**Prompt for AI Agents**\n\n{prompt_text}"
         return main + prompt_block
 
     return main
 
 
-def infer_severity_from_comment_body(body: str) -> Literal["high", "medium", "low", "nit", "unknown"]:
+def infer_severity_from_comment_body(
+    body: str,
+) -> Literal["high", "medium", "low", "nit", "unknown"]:
     """Infer Viper-style severity from a review comment body ([High]/[Medium]/…).
 
     Strips HTML comment blocks (e.g. fingerprint markers) first, then looks for

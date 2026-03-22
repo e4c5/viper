@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
 # Webhook Post content parameters (JSONPath) per SCM. Used by single- and multi-SCM flows.
 GITEA_WEBHOOK_PARAMS = {
@@ -132,7 +132,7 @@ def jenkins_session(
     base_url: str,
     username: str,
     password: str,
-) -> Generator["JenkinsUI", None, None]:
+) -> Generator[JenkinsUI, None, None]:
     """Start Playwright, create a logged-in JenkinsUI, yield it, then tear down."""
     from playwright.sync_api import sync_playwright
 

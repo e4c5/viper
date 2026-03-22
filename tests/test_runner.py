@@ -5,9 +5,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.conftest import runner_run_async_returning
 from code_review.agent import create_review_agent
 from code_review.providers.base import FileInfo, PRInfo, ProviderCapabilities, UnresolvedReviewItem
+from tests.conftest import runner_run_async_returning
 
 
 class MockProvider:
@@ -191,10 +191,7 @@ def test_run_review_raises_when_posting_without_head_sha(
         mock_get_scm_config, mock_get_provider, mock_get_context_window, provider=provider
     )
 
-    findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"medium","code":"x",'
-        '"message":"Fix."}]'
-    )
+    findings_json = '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
 
     with _patch_adk_runner(_adk_runner_single_event(findings_json)):
         with pytest.raises(ValueError, match="head_sha is required when posting"):
@@ -309,10 +306,7 @@ def test_run_review_uses_file_by_file_mode_when_diff_exceeds_budget(
     mock_get_provider.return_value = provider
     mock_get_context_window.return_value = 16
 
-    findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"medium","code":"x",'
-        '"message":"Fix."}]'
-    )
+    findings_json = '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
     mock_runner = _adk_runner_n_per_file_calls(findings_json, 2)
 
     with _patch_adk_runner(mock_runner):
@@ -364,8 +358,7 @@ def test_run_review_submits_request_changes_when_threshold_met(
     )
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"high","code":"x",'
-        '"message":"Must fix."}]'
+        '[{"path":"foo.py","line":1,"severity":"high","code":"x","message":"Must fix."}]'
     )
 
     with _patch_adk_runner(_adk_runner_single_event(findings_json)):
@@ -395,8 +388,7 @@ def test_run_review_continues_when_submit_review_decision_raises(
     )
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"high","code":"x",'
-        '"message":"Must fix."}]'
+        '[{"path":"foo.py","line":1,"severity":"high","code":"x","message":"Must fix."}]'
     )
 
     with _patch_adk_runner(_adk_runner_single_event(findings_json)):
@@ -454,8 +446,7 @@ def test_run_review_dry_run_does_not_submit_review_decision(
     )
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"high","code":"x",'
-        '"message":"Must fix."}]'
+        '[{"path":"foo.py","line":1,"severity":"high","code":"x","message":"Must fix."}]'
     )
 
     with _patch_adk_runner(_adk_runner_single_event(findings_json)):

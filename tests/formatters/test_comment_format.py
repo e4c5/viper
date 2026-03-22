@@ -17,7 +17,10 @@ def test_strip_path_prefixes():
     """dst:// and src:// are removed from displayed text."""
     assert _strip_path_prefixes("") == ""
     assert _strip_path_prefixes("hello") == "hello"
-    assert _strip_path_prefixes("In dst://src/main/foo.java at line 1") == "In src/main/foo.java at line 1"
+    assert (
+        _strip_path_prefixes("In dst://src/main/foo.java at line 1")
+        == "In src/main/foo.java at line 1"
+    )
     assert _strip_path_prefixes("File src://bar.py") == "File bar.py"
 
 

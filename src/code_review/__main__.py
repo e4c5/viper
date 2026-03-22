@@ -145,9 +145,7 @@ def review(
         )
     )
 
-    owner_f, repo_f, pr_num, head_sha_val = _cli_resolve_owner_repo_pr(
-        owner, repo, pr, head_sha
-    )
+    owner_f, repo_f, pr_num, head_sha_val = _cli_resolve_owner_repo_pr(owner, repo, pr, head_sha)
     _cli_validate_inputs(owner_f, repo_f, pr_num, head_sha_val, dry_run)
 
     _ensure_logging()

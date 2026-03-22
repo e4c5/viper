@@ -7,13 +7,13 @@ from code_review.diff.parser import annotate_diff_with_line_numbers
 from code_review.providers.base import ProviderInterface
 from code_review.providers.safety import truncate_repo_content
 
-
 # ---------------------------------------------------------------------------
 # Shared tool factories
 # get_file_content, get_file_lines, and get_pr_files have identical
 # implementations in both create_gitea_tools and create_findings_only_tools.
 # They are factored out here so changes only need to be made in one place.
 # ---------------------------------------------------------------------------
+
 
 def _make_get_file_content(provider: ProviderInterface) -> Callable:
     """Build the get_file_content ADK tool for the given provider."""

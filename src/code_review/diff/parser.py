@@ -25,6 +25,7 @@ def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
     Each hunk contains lines with (content, old_line, new_line).
     old_line/new_line are None for context lines in add/remove-only hunks.
     """
+
     def _flush_current_hunk() -> None:
         nonlocal current_lines, current_path, current_old_start, current_old_count
         nonlocal current_new_start, current_new_count

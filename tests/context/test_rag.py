@@ -63,7 +63,9 @@ def test_build_semantic_query_from_diff_uses_llm_output(
 @patch("code_review.context.rag.get_llm_config")
 @patch("code_review.context.rag.get_configured_model")
 @patch("code_review.context.rag.litellm.completion", side_effect=Exception("timeout"))
-def test_semantic_query_falls_back_to_heuristic_on_llm_failure(mock_completion, mock_model, mock_llm):
+def test_semantic_query_falls_back_to_heuristic_on_llm_failure(
+    mock_completion, mock_model, mock_llm
+):
     mock_llm.return_value = MagicMock(model="gpt-4o-mini", temperature=0.0)
     mock_model.return_value = "openai/gpt-4o-mini"
 

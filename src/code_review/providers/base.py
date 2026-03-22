@@ -61,9 +61,9 @@ def commit_messages_from_commit_list(data: object) -> list[str]:
         if not isinstance(item, dict):
             continue
         commit_obj = item.get("commit")
-        raw_msg = (
-            commit_obj.get("message") if isinstance(commit_obj, dict) else None
-        ) or item.get("message")
+        raw_msg = (commit_obj.get("message") if isinstance(commit_obj, dict) else None) or item.get(
+            "message"
+        )
         msg = str(raw_msg or "").strip()
         if msg:
             out.append(msg)
@@ -131,9 +131,7 @@ def pr_info_from_api_dict(data: dict, description_key: str = "body") -> PRInfo:
     """Build PRInfo from a provider API dict. Use description_key='description' for GitLab/Bitbucket."""
     title = data.get("title", "") or ""
     labels_raw = data.get("labels") or []
-    labels = [
-        lb.get("name", lb) if isinstance(lb, dict) else str(lb) for lb in labels_raw
-    ]
+    labels = [lb.get("name", lb) if isinstance(lb, dict) else str(lb) for lb in labels_raw]
     description = data.get(description_key, "") or ""
     return PRInfo(title=title, labels=labels, description=description)
 

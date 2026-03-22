@@ -522,9 +522,7 @@ def test_fetch_reference_fatal_error_is_downgraded_to_none():
 def test_fetch_reference_dispatches_to_jira():
     ref = _make_ref(ReferenceType.JIRA, "PROJ-99")
     cfg = _make_fetch_cfg()
-    with patch(
-        "code_review.context.fetchers.fetch_jira_issue", return_value=None
-    ) as mock_jira:
+    with patch("code_review.context.fetchers.fetch_jira_issue", return_value=None) as mock_jira:
         fetch_reference(ref, cfg=cfg)
     mock_jira.assert_called_once()
     _, kwargs = mock_jira.call_args

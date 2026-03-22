@@ -2,8 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
-from tests.conftest import runner_run_async_returning
 from code_review.providers.base import FileInfo
+from tests.conftest import runner_run_async_returning
 
 
 @patch("code_review.runner.get_context_window")
@@ -34,10 +34,7 @@ def test_run_review_emits_trace_id_and_run_complete(
     mock_get_provider.return_value = provider
     mock_context_window.return_value = 1_000_000
 
-    findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"medium","code":"x",'
-        '"message":"Fix."}]'
-    )
+    findings_json = '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
     mock_event.content = MagicMock()
@@ -51,7 +48,16 @@ def test_run_review_emits_trace_id_and_run_complete(
         trace_id, owner, repo, pr_number, files_count, findings_count, posts_count, duration_ms
     ):
         run_complete_calls.append(
-            (trace_id, owner, repo, pr_number, files_count, findings_count, posts_count, duration_ms)
+            (
+                trace_id,
+                owner,
+                repo,
+                pr_number,
+                files_count,
+                findings_count,
+                posts_count,
+                duration_ms,
+            )
         )
 
     with patch("code_review.runner._log_run_complete", side_effect=capture_run_complete):
@@ -110,7 +116,16 @@ def test_run_review_emits_run_complete_on_early_exit(
         trace_id, owner, repo, pr_number, files_count, findings_count, posts_count, duration_ms
     ):
         run_complete_calls.append(
-            (trace_id, owner, repo, pr_number, files_count, findings_count, posts_count, duration_ms)
+            (
+                trace_id,
+                owner,
+                repo,
+                pr_number,
+                files_count,
+                findings_count,
+                posts_count,
+                duration_ms,
+            )
         )
 
     with patch("code_review.runner._log_run_complete", side_effect=capture_run_complete):

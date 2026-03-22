@@ -5,7 +5,6 @@ import os
 from unittest.mock import patch
 
 from code_review.logging_config import (
-    DEFAULT_LEVEL,
     LOG_LEVEL_ENV,
     configure_logging,
 )

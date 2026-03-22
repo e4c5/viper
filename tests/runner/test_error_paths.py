@@ -183,9 +183,7 @@ def test_post_review_comment_skipped_not_fallback_to_pr_summary(
         provider.post_review_comments.side_effect = RuntimeError("inline failure")
         provider.post_pr_summary_comment = MagicMock()
 
-    findings_json = (
-        '[{"path":"foo.py","line":2,"severity":"high","code":"x","message":"Fix now."}]'
-    )
+    findings_json = '[{"path":"foo.py","line":2,"severity":"high","code":"x","message":"Fix now."}]'
     to_post, provider = _exercise_error_path(
         mock_get_scm_config,
         mock_get_provider,
@@ -252,9 +250,7 @@ def test_file_by_file_skips_file_on_generic_error(
 ):
     """File-by-file mode skips a file and continues when an unexpected error is raised."""
     call_count = [0]
-    findings = (
-        '[{"path":"b.py","line":2,"severity":"medium","code":"s","message":"Improve."}]'
-    )
+    findings = '[{"path":"b.py","line":2,"severity":"medium","code":"s","message":"Improve."}]'
 
     run_async_side_effect = _build_file_by_file_run_async_side_effect(
         call_count, lambda: RuntimeError("unexpected LLM error"), findings
@@ -286,9 +282,7 @@ def test_file_by_file_authentication_error_is_fatal(
     so CI fails fast instead of silently skipping all files.
     """
     call_count = [0]
-    findings = (
-        '[{"path":"b.py","line":3,"severity":"low","code":"ok","message":"Still fine."}]'
-    )
+    findings = '[{"path":"b.py","line":3,"severity":"low","code":"ok","message":"Still fine."}]'
 
     def make_auth_error():
         # AuthenticationError(message, llm_provider, model, response=None)
@@ -336,9 +330,7 @@ def test_run_marker_comment_posted_for_omit_marker_providers(
         provider.post_review_comments = MagicMock(side_effect=RuntimeError("409 Conflict"))
         provider.post_pr_summary_comment = MagicMock()
 
-    findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
-    )
+    findings_json = '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
     to_post, provider = _exercise_error_path(
         mock_get_scm_config,
         mock_get_provider,
@@ -380,9 +372,7 @@ def test_run_marker_comment_not_posted_for_standard_providers(
         provider.post_review_comments = MagicMock()
         provider.post_pr_summary_comment = MagicMock()
 
-    findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
-    )
+    findings_json = '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
     _to_post, provider = _exercise_error_path(
         mock_get_scm_config,
         mock_get_provider,
@@ -420,9 +410,7 @@ def test_run_marker_comment_not_posted_when_inline_succeeds_for_omit_marker_prov
         provider.post_review_comments = MagicMock()
         provider.post_pr_summary_comment = MagicMock()
 
-    findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
-    )
+    findings_json = '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
     _to_post, provider = _exercise_error_path(
         mock_get_scm_config,
         mock_get_provider,

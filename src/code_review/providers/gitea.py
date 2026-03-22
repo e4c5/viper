@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from code_review.diff.position import get_diff_hunk_for_line
+from code_review.formatters.comment import render_suggestion_block
 from code_review.providers.base import (
     FileInfo,
     InlineComment,
@@ -14,15 +15,14 @@ from code_review.providers.base import (
     ProviderCapabilities,
     ProviderInterface,
     RateLimitError,
-    ReviewDecision,
     ReviewComment,
+    ReviewDecision,
     _log_pr_commit_messages_warning,
     _log_pr_info_warning,
     commit_messages_from_commit_list,
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
-from code_review.formatters.comment import render_suggestion_block
 from code_review.providers.review_decision_common import github_style_pull_review_json
 from code_review.providers.safety import truncate_repo_content
 
@@ -63,9 +63,7 @@ class GiteaProvider(ProviderInterface):
         with httpx.Client(timeout=self._timeout) as client:
             r = client.request(method, url, headers=self._headers(), **kwargs)
             if r.status_code == 429:
-                raise RateLimitError(
-                    f"Rate limit exceeded (HTTP 429) for {method} {url}: {r.text}"
-                )
+                raise RateLimitError(f"Rate limit exceeded (HTTP 429) for {method} {url}: {r.text}")
             if r.status_code in self._RETRY_STATUSES and max_retries > 0:
                 time.sleep(self._RETRY_DELAY_SECONDS)
                 r = client.request(method, url, headers=self._headers(), **kwargs)

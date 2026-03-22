@@ -63,9 +63,7 @@ def get_diff_hunk_for_line(diff_text: str, path: str, line: int) -> str | None:
             continue
         # Rebuild hunk lines: @@ header then content lines with prefix
         lines: list[str] = []
-        lines.append(
-            f"@@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},{hunk.new_count} @@"
-        )
+        lines.append(f"@@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},{hunk.new_count} @@")
         for content, old_ln, new_ln in hunk.lines:
             if old_ln is not None and new_ln is not None:
                 prefix = " "

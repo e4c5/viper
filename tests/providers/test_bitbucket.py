@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from code_review.providers import get_provider
 from code_review.providers.base import InlineComment
 from code_review.providers.bitbucket import BitbucketProvider
+from code_review.providers.review_decision_common import effective_review_body
 
 
 def test_get_provider_bitbucket():
@@ -219,8 +220,12 @@ def test_submit_review_decision_approve(mock_client):
 
     p = BitbucketProvider("https://api.bitbucket.org/2.0", "tok")
     p.submit_review_decision("ws", "repo", 9, "APPROVE", body="x", head_sha="sha")
-    url = mock_client.return_value.__enter__.return_value.post.call_args[0][0]
-    assert url.endswith("/pullrequests/9/approve")
+    posts = mock_client.return_value.__enter__.return_value.post
+    assert posts.call_count == 2
+    urls = [posts.call_args_list[i][0][0] for i in range(2)]
+    assert any(u.endswith("/pullrequests/9/approve") for u in urls)
+    comment_call = next(c for c in posts.call_args_list if "/pullrequests/9/comments" in c[0][0])
+    assert comment_call[1]["json"]["content"]["raw"] == effective_review_body("x")
 
 
 @patch("code_review.providers.bitbucket.httpx.Client")
@@ -232,5 +237,9 @@ def test_submit_review_decision_request_changes(mock_client):
 
     p = BitbucketProvider("https://api.bitbucket.org/2.0", "tok")
     p.submit_review_decision("ws", "repo", 9, "REQUEST_CHANGES", body="please fix")
-    url = mock_client.return_value.__enter__.return_value.post.call_args[0][0]
-    assert url.endswith("/pullrequests/9/request-changes")
+    posts = mock_client.return_value.__enter__.return_value.post
+    assert posts.call_count == 2
+    urls = [posts.call_args_list[i][0][0] for i in range(2)]
+    assert any(u.endswith("/pullrequests/9/request-changes") for u in urls)
+    comment_call = next(c for c in posts.call_args_list if "/pullrequests/9/comments" in c[0][0])
+    assert comment_call[1]["json"]["content"]["raw"] == "please fix"

@@ -55,7 +55,9 @@ def build_semantic_query_from_diff(diff_text: str, max_diff_chars: int = 14_000)
             max_tokens=256,
             temperature=llm.temperature,
         )
-        choices = (resp["choices"] if isinstance(resp, dict) else getattr(resp, "choices", None)) or []
+        choices = (
+            resp["choices"] if isinstance(resp, dict) else getattr(resp, "choices", None)
+        ) or []
         if choices:
             text = _choice_message_text(choices[0])
             if text:

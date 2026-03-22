@@ -2,9 +2,9 @@
 
 from unittest.mock import MagicMock, patch
 
-from tests.conftest import runner_run_async_returning
 from code_review.diff.fingerprint import format_comment_body_with_marker
 from code_review.providers.base import FileInfo, ProviderCapabilities, ReviewComment
+from tests.conftest import runner_run_async_returning
 
 
 @patch("code_review.runner.get_context_window")

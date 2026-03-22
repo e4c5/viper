@@ -6,7 +6,6 @@ from pathlib import Path
 
 from code_review.standards.prompts.base import BASE_REVIEW_PROMPT, _read_prompt_fragment
 
-
 _PROMPTS_DIR = Path(__file__).parent
 
 _LANGUAGE_FILES: dict[str, str] = {

@@ -24,10 +24,7 @@ def test_parse_findings_json_raw_array():
 
 
 def test_parse_findings_json_markdown_wrapped():
-    text = (
-        '```json\n[{"path":"y","line":2,"severity":"medium",'
-        '"code":"s","message":"msg"}]\n```'
-    )
+    text = '```json\n[{"path":"y","line":2,"severity":"medium","code":"s","message":"msg"}]\n```'
     out = _parse_findings_json(text)
     assert len(out) == 1
     assert out[0]["path"] == "y"

@@ -6,6 +6,11 @@ from urllib.parse import quote
 
 import httpx
 
+from code_review.formatters.comment import (
+    infer_severity_from_comment_body,
+    max_inferred_severity,
+    render_suggestion_block,
+)
 from code_review.providers.base import (
     FileInfo,
     InlineComment,
@@ -18,11 +23,8 @@ from code_review.providers.base import (
     _log_pr_info_warning,
     pr_info_from_api_dict,
 )
-from code_review.providers.review_decision_common import gitlab_note_with_submit_review_requested_changes
-from code_review.formatters.comment import (
-    infer_severity_from_comment_body,
-    max_inferred_severity,
-    render_suggestion_block,
+from code_review.providers.review_decision_common import (
+    gitlab_note_with_submit_review_requested_changes,
 )
 from code_review.providers.safety import truncate_repo_content
 
@@ -387,7 +389,8 @@ class GitLabProvider(ProviderInterface):
             if not isinstance(data, list):
                 break
             out.extend(
-                msg for item in data
+                msg
+                for item in data
                 if isinstance(item, dict)
                 for msg in [(item.get("message") or item.get("title") or "").strip()]
                 if msg

@@ -100,9 +100,7 @@ def test_post_review_comments_with_diff_hunk(mock_client):
     from code_review.providers.base import InlineComment
 
     diff_body = (
-        "diff --git a/foo.py b/foo.py\n"
-        "--- a/foo.py\n+++ b/foo.py\n"
-        "@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+        "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py\n@@ -1,2 +1,3 @@\n x\n+y\n z\n"
     )
     mock_diff = MagicMock()
     mock_diff.text = diff_body
@@ -270,8 +268,7 @@ def test_submit_review_decision_re_raises_other_http_errors(mock_client):
 @patch("code_review.providers.gitea.httpx.Client")
 def test_get_pr_diff_for_file(mock_client):
     full_diff = (
-        "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py\n"
-        + "@@ -1,2 +1,3 @@\n x\n+y\n z"
+        "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py\n" + "@@ -1,2 +1,3 @@\n x\n+y\n z"
     )
     mock_resp = MagicMock()
     mock_resp.text = full_diff
@@ -348,7 +345,9 @@ def test_update_pr_description_with_title(mock_patch):
     """update_pr_description can also set the PR title."""
     p = GiteaProvider("https://gitea.example.com", "tok")
     p.update_pr_description("o", "r", 1, "New body.", title="New title")
-    mock_patch.assert_called_once_with("/repos/o/r/pulls/1", {"body": "New body.", "title": "New title"})
+    mock_patch.assert_called_once_with(
+        "/repos/o/r/pulls/1", {"body": "New body.", "title": "New title"}
+    )
 
 
 def test_capabilities():

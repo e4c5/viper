@@ -190,9 +190,7 @@ def test_findings_only_instruction_restricts_to_visible_diff_lines():
         "FINDINGS_ONLY_INSTRUCTION must describe the <L{n}> annotation mechanism"
     )
     # Must distinguish added (+) vs context lines
-    assert "+" in instr, (
-        "FINDINGS_ONLY_INSTRUCTION must mention '+' for added lines"
-    )
+    assert "+" in instr, "FINDINGS_ONLY_INSTRUCTION must mention '+' for added lines"
 
 
 def test_findings_only_instruction_head_sha_ref_guidance():
@@ -284,5 +282,3 @@ def test_shared_agent_fix_and_examples_appear_in_both_instructions():
     assert _SHARED_AGENT_FIX_AND_EXAMPLES in SINGLE_SHOT_INSTRUCTION, (
         "SINGLE_SHOT_INSTRUCTION must contain the shared agent_fix_prompt/examples fragment"
     )
-
-

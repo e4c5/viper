@@ -109,4 +109,3 @@ def test_java_fragment_contains_spring_guidance():
     result = get_review_standards("java", None)
     assert "Spring" in result or "Jakarta" in result
     assert "transaction" in result or "Transactional" in result
-

@@ -133,7 +133,8 @@ FINDINGS_ONLY_INSTRUCTION = (
     "  For example: ``<L42> +def new_function():`` means this line is new-file line 42.\n"
     "  Context lines look like: ``<L10>  unchanged_code``.\n"
     "  Removed lines (prefix ``-``) have NO annotation and cannot be referenced.\n"
-    + _SHARED_LINE_NUMBER_RULES + "\n"
+    + _SHARED_LINE_NUMBER_RULES
+    + "\n"
     "\n"
     "Valid file paths:\n"
     "- Only report findings for files that are actually part of the current PR diff.\n"
@@ -147,13 +148,10 @@ FINDINGS_ONLY_INSTRUCTION = (
     "\n"
     "Your job is to find code issues only. Do NOT fetch existing comments or\n"
     "post comments. The orchestrator handles that.\n"
-    "\n"
-    + _SHARED_FORMAT_AND_PLACEMENT + "\n"
-    "\n"
-    + _SHARED_PATCH_NOTE + "\n"
+    "\n" + _SHARED_FORMAT_AND_PLACEMENT + "\n"
+    "\n" + _SHARED_PATCH_NOTE + "\n"
     "When reviewing a single file, use the same path string you were given for that file in every finding.\n"
-    "\n"
-    + _SHARED_AGENT_FIX_AND_EXAMPLES + "\n"
+    "\n" + _SHARED_AGENT_FIX_AND_EXAMPLES + "\n"
 )
 
 # Instruction for single-shot mode: the full diff is embedded in the user message.
@@ -174,7 +172,8 @@ SINGLE_SHOT_INSTRUCTION = (
     "  For example: ``<L42> +def new_function():`` means this line is new-file line 42.\n"
     "  Context lines look like: ``<L10>  unchanged_code``.\n"
     "  Removed lines (prefix ``-``) have NO annotation and cannot be referenced.\n"
-    + _SHARED_LINE_NUMBER_RULES + "\n"
+    + _SHARED_LINE_NUMBER_RULES
+    + "\n"
     "\n"
     "Valid file paths:\n"
     "- Only report findings for files that appear in the diff.\n"
@@ -182,12 +181,9 @@ SINGLE_SHOT_INSTRUCTION = (
     "\n"
     "Your job is to find code issues only. Do NOT attempt to post comments or fetch\n"
     "anything — the diff is already provided and no external tools are available.\n"
-    "\n"
-    + _SHARED_FORMAT_AND_PLACEMENT + "\n"
-    "\n"
-    + _SHARED_PATCH_NOTE + "\n"
-    "\n"
-    + _SHARED_AGENT_FIX_AND_EXAMPLES + "\n"
+    "\n" + _SHARED_FORMAT_AND_PLACEMENT + "\n"
+    "\n" + _SHARED_PATCH_NOTE + "\n"
+    "\n" + _SHARED_AGENT_FIX_AND_EXAMPLES + "\n"
 )
 
 
@@ -240,7 +236,7 @@ def create_review_agent(
         instruction = instruction.rstrip() + "\n\n" + _CONTEXT_FROM_LINKED_SOURCES
     if review_standards:
         instruction = instruction.rstrip() + "\n\n" + review_standards
-        
+
     capabilities = provider.capabilities()
     if capabilities.supports_suggestions and not capabilities.supports_multiline_suggestions:
         instruction = instruction.rstrip() + (

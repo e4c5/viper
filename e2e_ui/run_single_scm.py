@@ -27,10 +27,12 @@ def main() -> None:
     with jenkins_session(base_url, username, password) as ui:
         for cid, secret in creds.items():
             ui.add_credential_global(cid, secret)
-        ui.set_global_env_vars({
-            "SCM_PROVIDER": scm_provider,
-            "SCM_URL": scm_url,
-        })
+        ui.set_global_env_vars(
+            {
+                "SCM_PROVIDER": scm_provider,
+                "SCM_URL": scm_url,
+            }
+        )
         ui.create_pipeline_job(
             name="code-review",
             script_path="docker/jenkins/Jenkinsfile",

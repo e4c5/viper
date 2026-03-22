@@ -173,7 +173,7 @@ def test_shared_tool_factories_produce_identical_implementations():
         assert full_fn is not None, f"create_gitea_tools must have {name}"
         assert findings_fn is not None, f"create_findings_only_tools must have {name}"
         # Both must come from the same factory (same __qualname__ pattern)
-        import code_review.agent.tools.gitea_tools as _gtmod
+
         factory_fn = getattr(_gtmod, f"_make_{name}")
         reference = factory_fn(provider)
         assert full_fn.__qualname__ == reference.__qualname__, (

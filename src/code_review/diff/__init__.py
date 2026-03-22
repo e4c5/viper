@@ -8,7 +8,12 @@ from code_review.diff.fingerprint import (
     parse_marker_from_comment_body,
     surrounding_content_hash,
 )
-from code_review.diff.parser import DiffHunk, annotate_diff_with_line_numbers, iter_new_lines, parse_unified_diff
+from code_review.diff.parser import (
+    DiffHunk,
+    annotate_diff_with_line_numbers,
+    iter_new_lines,
+    parse_unified_diff,
+)
 from code_review.diff.position import (
     CommentablePosition,
     get_commentable_positions,

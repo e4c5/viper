@@ -2,8 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
-from tests.conftest import runner_run_async_returning
 from code_review.providers.base import FileInfo
+from tests.conftest import runner_run_async_returning
 
 
 @patch("code_review.runner.get_context_window")
@@ -50,14 +50,10 @@ def test_large_pr_file_by_file_no_duplicate_posts(
         text = new_message.parts[0].text if new_message.parts else ""
         if '"a.py"' in text:
             findings = (
-                '[{"path":"a.py","line":1,"severity":"medium","code":"x",'
-                '"message":"Fix a."}]'
+                '[{"path":"a.py","line":1,"severity":"medium","code":"x","message":"Fix a."}]'
             )
         elif '"b.py"' in text:
-            findings = (
-                '[{"path":"b.py","line":2,"severity":"low","code":"y",'
-                '"message":"Fix b."}]'
-            )
+            findings = '[{"path":"b.py","line":2,"severity":"low","code":"y","message":"Fix b."}]'
         else:
             findings = "[]"
         mock_event = MagicMock()
@@ -186,12 +182,12 @@ def test_large_pr_file_by_file_message_requests_file_diff(
 
     assert len(messages_sent) == 1
     msg = messages_sent[0]
-    assert (
-        "get_pr_diff_for_file" in msg
-    ), "message to agent should instruct use of get_pr_diff_for_file in file-by-file mode"
-    assert (
-        "a.py" in msg
-    ), "message to agent should include the file path so the agent knows which file to review"
+    assert "get_pr_diff_for_file" in msg, (
+        "message to agent should instruct use of get_pr_diff_for_file in file-by-file mode"
+    )
+    assert "a.py" in msg, (
+        "message to agent should include the file path so the agent knows which file to review"
+    )
 
 
 @patch("code_review.runner.get_context_window")

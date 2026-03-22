@@ -43,9 +43,7 @@ def test_get_configured_model_vertex_returns_model_string(mock_get_config):
 
 @patch("code_review.models.get_llm_config")
 def test_get_configured_model_openai_uses_litellm_or_fallback(mock_get_config):
-    mock_get_config.return_value = MagicMock(
-        provider="openai", model="gpt-4o", api_key=None
-    )
+    mock_get_config.return_value = MagicMock(provider="openai", model="gpt-4o", api_key=None)
     result = get_configured_model()
     # Either LiteLlm instance or model string if ImportError
     if hasattr(result, "model"):
@@ -68,9 +66,7 @@ def test_get_configured_model_anthropic_uses_litellm_or_fallback(mock_get_config
 
 @patch("code_review.models.get_llm_config")
 def test_get_configured_model_ollama_uses_litellm_or_fallback(mock_get_config):
-    mock_get_config.return_value = MagicMock(
-        provider="ollama", model="llama3.2", api_key=None
-    )
+    mock_get_config.return_value = MagicMock(provider="ollama", model="llama3.2", api_key=None)
     result = get_configured_model()
     if hasattr(result, "model"):
         assert result.model == "ollama_chat/llama3.2"
@@ -113,17 +109,13 @@ def test_get_configured_model_openrouter_uses_litellm_or_fallback(mock_get_confi
 
 @patch("code_review.models.get_llm_config")
 def test_get_context_window(mock_get_config):
-    mock_get_config.return_value = MagicMock(
-        context_window=64_000, api_key=None
-    )
+    mock_get_config.return_value = MagicMock(context_window=64_000, api_key=None)
     assert get_context_window() == 64_000
 
 
 @patch("code_review.models.get_llm_config")
 def test_get_max_output_tokens(mock_get_config):
-    mock_get_config.return_value = MagicMock(
-        max_output_tokens=2048, api_key=None
-    )
+    mock_get_config.return_value = MagicMock(max_output_tokens=2048, api_key=None)
     assert get_max_output_tokens() == 2048
 
 

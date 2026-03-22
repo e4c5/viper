@@ -96,9 +96,7 @@ class LLMConfig(BaseSettings):
     # See note above: we do not auto-load .env; only real env vars are used.
     model_config = SettingsConfigDict(env_prefix="LLM_", extra="ignore")
 
-    provider: Literal[
-        "gemini", "openai", "anthropic", "ollama", "vertex", "openrouter"
-    ] = "gemini"
+    provider: Literal["gemini", "openai", "anthropic", "ollama", "vertex", "openrouter"] = "gemini"
     api_key: SecretStr | None = Field(
         default=None,
         description="API key for the configured LLM provider (single key; provider chosen via LLM_PROVIDER).",

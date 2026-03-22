@@ -96,8 +96,7 @@ def fetch_github_issue(
             raise ContextAwareFatalError(f"GitHub issue fetch failed ({r.status_code}): {path}")
         data = r.json()
     labels = [
-        (lb.get("name") if isinstance(lb, dict) else str(lb))
-        for lb in (data.get("labels") or [])
+        (lb.get("name") if isinstance(lb, dict) else str(lb)) for lb in (data.get("labels") or [])
     ]
     meta = {
         "state": data.get("state"),

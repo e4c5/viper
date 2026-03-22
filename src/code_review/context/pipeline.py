@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Module-level ContextStore cache keyed by (db_url, embedding_dimensions).
 # Avoids re-running schema DDL on every review call.
-_store_cache: dict[tuple[str, int], "ContextStore"] = {}
+_store_cache: dict[tuple[str, int], ContextStore] = {}
 
 
 def _github_api_and_token(scm: SCMConfig, ctx: ContextAwareReviewConfig) -> tuple[str, str]:
@@ -98,11 +98,7 @@ def _load_context_documents(
 ) -> tuple[list[tuple[str, str]], list[tuple[str, object]]]:
     docs_for_distill: list[tuple[str, str]] = []
     doc_ids_for_rag: list[tuple[str, object]] = []
-    extra_fields = tuple(
-        f.strip()
-        for f in (ctx.jira_extra_fields or "").split(",")
-        if f.strip()
-    )
+    extra_fields = tuple(f.strip() for f in (ctx.jira_extra_fields or "").split(",") if f.strip())
     fetch_cfg = FetchReferenceConfig(
         github_api_base=gh_api,
         github_token=gh_tok,
@@ -172,9 +168,7 @@ def _build_retrieved_context_text(
         except Exception as e:
             raise ContextAwareFatalError(f"Context embedding (chunks) failed: {e}") from e
         payload = [
-            (i, ch, embs[i], {"document": label})
-            for i, ch in enumerate(chunks)
-            if i < len(embs)
+            (i, ch, embs[i], {"document": label}) for i, ch in enumerate(chunks) if i < len(embs)
         ]
         store.replace_chunks(conn, did, payload)
     doc_ids = [did for _, did in doc_ids_for_rag]
@@ -240,7 +234,9 @@ def build_context_brief_for_pr(
             logger.info("context_aware: no document bodies resolved")
             return None
 
-        combined = "\n\n---\n\n".join(f"## {label}\n{text}" for label, text in documents_for_distill)
+        combined = "\n\n---\n\n".join(
+            f"## {label}\n{text}" for label, text in documents_for_distill
+        )
         total_bytes = len(combined.encode("utf-8"))
         logger.info(
             "context_aware: resolved %d document(s), ~%d bytes before distillation",

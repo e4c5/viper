@@ -223,7 +223,7 @@ def test_annotate_diff_roundtrip_line_numbers_match_parser():
         if line.startswith("<L"):
             end = line.index(">")
             n = int(line[2:end])
-            annotated[n] = line[end + 1:]
+            annotated[n] = line[end + 1 :]
 
     # Collect expected new-file lines from parser
     expected: dict[int, str] = {}

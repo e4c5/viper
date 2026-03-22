@@ -61,9 +61,7 @@ def test_format_comment_body_with_marker():
 
 def test_format_comment_body_with_marker_at_end():
     """When marker_at_end=True (e.g. Bitbucket), visible text comes first; marker at end."""
-    body = format_comment_body_with_marker(
-        "Visible comment.", "fp99", "0.1.0", marker_at_end=True
-    )
+    body = format_comment_body_with_marker("Visible comment.", "fp99", "0.1.0", marker_at_end=True)
     assert body.startswith("Visible comment.")
     assert body.endswith("-->")  # marker HTML comment at end
     assert "<!-- code-review-agent:" in body

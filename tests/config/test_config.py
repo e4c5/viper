@@ -29,7 +29,11 @@ def test_scm_config_allowed_hosts_normalized():
     """allowed_hosts is stripped and empty segments removed; empty string becomes None."""
     with patch.dict(
         os.environ,
-        {"SCM_URL": "https://gitea.example.com", "SCM_TOKEN": "x", "SCM_ALLOWED_HOSTS": "  a , , b  "},
+        {
+            "SCM_URL": "https://gitea.example.com",
+            "SCM_TOKEN": "x",
+            "SCM_ALLOWED_HOSTS": "  a , , b  ",
+        },
         clear=False,
     ):
         cfg = SCMConfig()

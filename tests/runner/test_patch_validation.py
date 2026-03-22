@@ -6,7 +6,6 @@ line-visibility guardrail). Without this check the patch would be rendered as a
 suggestion block replacing the wrong code.
 """
 
-import pytest
 
 from code_review.runner import _validate_suggested_patches
 from code_review.schemas.findings import FindingV1
@@ -57,7 +56,9 @@ def test_valid_patch_kept():
 def test_misplaced_patch_stripped():
     """A patch with no token overlap with the diff line should have its patch cleared."""
     # Line 10 is "if isId || !nullable {"; patch is for System.nanoTime() — no overlap
-    f = _finding("foo.py", 10, '.append(System.nanoTime()).append("* author=\\"antikythera\\"\\n");')
+    f = _finding(
+        "foo.py", 10, '.append(System.nanoTime()).append("* author=\\"antikythera\\"\\n");'
+    )
     result = _validate_suggested_patches([f], SAMPLE_DIFF)
     assert len(result) == 1
     assert result[0].suggested_patch is None, (

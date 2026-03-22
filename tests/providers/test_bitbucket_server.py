@@ -1,8 +1,9 @@
 """Tests for BitbucketServerProvider (mocked HTTP)."""
 
-import pytest
+from unittest.mock import MagicMock, patch
+
 import httpx
-from unittest.mock import MagicMock, call, patch
+import pytest
 
 from code_review.providers import get_provider
 from code_review.providers.base import InlineComment
@@ -319,9 +320,7 @@ def test_get_existing_review_comments_uses_activities_endpoint(mock_client):
     # Verify the /activities URL was called, not /comments
     call_args = mock_client.return_value.__enter__.return_value.get.call_args
     called_url = call_args[0][0]
-    assert called_url.endswith("/activities"), (
-        f"Expected /activities endpoint, got: {called_url}"
-    )
+    assert called_url.endswith("/activities"), f"Expected /activities endpoint, got: {called_url}"
     assert "/comments" not in called_url
 
     assert len(comments) == 1
@@ -433,7 +432,10 @@ def test_extract_commit_id_missing_latestcommit_uses_ref_id():
 @pytest.mark.parametrize("bad_latest", [None, ""])
 def test_extract_commit_id_empty_latestcommit_uses_ref_id(bad_latest):
     """latestCommit=None/empty falls back to ref.id."""
-    assert _extract_commit_id({"id": "refs/heads/main", "latestCommit": bad_latest}) == "refs/heads/main"
+    assert (
+        _extract_commit_id({"id": "refs/heads/main", "latestCommit": bad_latest})
+        == "refs/heads/main"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +507,9 @@ def test_post_review_comments_uses_line_type_added(mock_client):
     provider, http = _setup_post_review_comments_mocks(mock_client)
 
     provider.post_review_comments(
-        "PROJ", "repo", 1,
+        "PROJ",
+        "repo",
+        1,
         [InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")],
         head_sha="sha1",
     )
@@ -520,7 +524,9 @@ def test_post_review_comments_uses_line_type_context(mock_client):
     provider, http = _setup_post_review_comments_mocks(mock_client)
 
     provider.post_review_comments(
-        "PROJ", "repo", 1,
+        "PROJ",
+        "repo",
+        1,
         [InlineComment(path="foo.java", line=8, body="Context issue", line_type="CONTEXT")],
         head_sha="sha1",
     )
@@ -548,7 +554,9 @@ def test_post_review_comments_uses_base_to_head_hash_direction_for_to_file(mock_
 
     p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
     p.post_review_comments(
-        "PROJ", "repo", 1,
+        "PROJ",
+        "repo",
+        1,
         [InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")],
         head_sha="source_head_hash",
     )
@@ -592,7 +600,9 @@ def test_post_review_comments_retries_without_hashes_on_409(mock_client):
 
     p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
     p.post_review_comments(
-        "PROJ", "repo", 1,
+        "PROJ",
+        "repo",
+        1,
         [InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")],
         head_sha="source_head_hash",
     )
@@ -638,7 +648,9 @@ def test_post_review_comments_409_without_hashes_propagates(mock_client):
     p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
     with pytest.raises(httpx.HTTPStatusError):
         p.post_review_comments(
-            "PROJ", "repo", 1,
+            "PROJ",
+            "repo",
+            1,
             [InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")],
         )
 
@@ -702,6 +714,7 @@ def test_fallback_no_pr_summary_when_inline_fails():
     assert count == 0
     # PR summary fallback must NOT be called
     provider.post_pr_summary_comment.assert_not_called()
+
 
 def test_capabilities():
     p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")

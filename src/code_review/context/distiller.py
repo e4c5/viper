@@ -92,8 +92,12 @@ def distill_context_text(
     choices = (resp["choices"] if isinstance(resp, dict) else getattr(resp, "choices", None)) or []
     if not choices:
         return _raw_context_fallback(raw_context)
-    msg = choices[0]["message"] if isinstance(choices[0], dict) else getattr(choices[0], "message", None)
-    content = (msg["content"] if isinstance(msg, dict) else getattr(msg, "content", None))
+    msg = (
+        choices[0]["message"]
+        if isinstance(choices[0], dict)
+        else getattr(choices[0], "message", None)
+    )
+    content = msg["content"] if isinstance(msg, dict) else getattr(msg, "content", None)
     distilled = _distilled_text_from_content(content)
     if distilled:
         return distilled

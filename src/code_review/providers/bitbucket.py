@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.base import (
     FileInfo,
     InlineComment,
@@ -18,7 +19,7 @@ from code_review.providers.base import (
     normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
-from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
+from code_review.providers.review_decision_common import effective_review_body
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
@@ -133,7 +134,7 @@ class BitbucketProvider(ProviderInterface):
 
     @staticmethod
     def _file_path_from_diffstat_entry(entry: dict[str, Any]) -> str:
-        return ((entry.get("new") or {}).get("path") or (entry.get("old") or {}).get("path") or "")
+        return (entry.get("new") or {}).get("path") or (entry.get("old") or {}).get("path") or ""
 
     @staticmethod
     def _status_from_diffstat(raw_status: Any) -> str:
@@ -232,9 +233,7 @@ class BitbucketProvider(ProviderInterface):
         return comments, stripped or None
 
     @staticmethod
-    def _bbcloud_open_task_from_value(
-        t: Any, out_len: int
-    ) -> UnresolvedReviewItem | None:
+    def _bbcloud_open_task_from_value(t: Any, out_len: int) -> UnresolvedReviewItem | None:
         if not isinstance(t, dict):
             return None
         state = (str(t.get("state") or "")).strip().upper()
@@ -311,13 +310,19 @@ class BitbucketProvider(ProviderInterface):
         body: str = "",
         head_sha: str = "",
     ) -> None:
-        """Approve or request changes (Bitbucket Cloud 2.0). ``head_sha`` is ignored (API unused)."""
+        """Approve or request changes (Bitbucket Cloud 2.0).
+
+        Cloud approve/request-changes endpoints do not take the runner's reason text; we post the
+        same summary as a PR comment so it matches GitHub/Gitea review bodies.
+        ``head_sha`` is unused.
+        """
+        _ = head_sha
         base = self._path(owner, repo, "pullrequests", str(pr_number))
         if decision == "APPROVE":
             self._post(f"{base}/approve", {})
-            return
-        _ = body, head_sha
-        self._post(f"{base}/request-changes", {})
+        else:
+            self._post(f"{base}/request-changes", {})
+        self.post_pr_summary_comment(owner, repo, pr_number, effective_review_body(body))
 
     def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
         """List commits on the PR (paginated)."""

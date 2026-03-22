@@ -42,14 +42,10 @@ def get_configured_model() -> Any:
 
     config = get_llm_config()
     env_var = _PROVIDER_API_KEY_ENV.get(config.provider)
-    api_key = (
-        config.api_key.get_secret_value().strip() if config.api_key is not None else ""
-    )
+    api_key = config.api_key.get_secret_value().strip() if config.api_key is not None else ""
 
     # Keep injected provider credentials scoped to the current config/provider call.
-    if _INJECTED_PROVIDER_API_ENV and (
-        _INJECTED_PROVIDER_API_ENV != env_var or not api_key
-    ):
+    if _INJECTED_PROVIDER_API_ENV and (_INJECTED_PROVIDER_API_ENV != env_var or not api_key):
         _clear_injected_provider_api_env()
 
     if env_var and api_key:

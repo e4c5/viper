@@ -5,12 +5,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.conftest import runner_run_async_returning
 from code_review.runner import (
     ReviewOrchestrator,
     _generate_auto_pr_description,
     _maybe_post_started_review_comment,
 )
+from tests.conftest import runner_run_async_returning
 
 
 @contextmanager
@@ -52,6 +52,7 @@ def _orchestrator_run_env(
         )
         mock_get_provider.return_value = provider
         yield provider, mock_runner_instance
+
 
 # --- ReviewOrchestrator._load_config_and_provider() ---
 
@@ -602,8 +603,10 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
         provider.get_file_content.return_value = "line1\nline2\n"
         provider.get_pr_info.return_value = None
         provider.capabilities.return_value = MagicMock(
-            resolvable_comments=False, supports_suggestions=False,
-            omit_fingerprint_marker_in_body=False, markup_supports_collapsible=False,
+            resolvable_comments=False,
+            supports_suggestions=False,
+            omit_fingerprint_marker_in_body=False,
+            markup_supports_collapsible=False,
             markup_hides_html_comment=False,
         )
         mock_get_provider.return_value = provider
@@ -617,7 +620,9 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
         mock_runner_instance.run_async = _capture_run_async
         mock_runner_cls.return_value = mock_runner_instance
 
-        orchestrator = ReviewOrchestrator("myowner", "myrepo", 42, head_sha="abc123def", dry_run=True)
+        orchestrator = ReviewOrchestrator(
+            "myowner", "myrepo", 42, head_sha="abc123def", dry_run=True
+        )
         orchestrator.run()
 
     # At least one message should have been sent to the LLM
