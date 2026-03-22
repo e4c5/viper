@@ -243,3 +243,71 @@ def test_submit_review_decision_request_changes(mock_client):
     assert any(u.endswith("/pullrequests/9/request-changes") for u in urls)
     comment_call = next(c for c in posts.call_args_list if "/pullrequests/9/comments" in c[0][0])
     assert comment_call[1]["json"]["content"]["raw"] == "please fix"
+
+
+@patch("code_review.providers.bitbucket.httpx.Client")
+def test_submit_review_decision_approve_clears_request_changes_first(mock_client):
+    """APPROVE must DELETE /request-changes before POSTing /approve (re-run scenario).
+
+    When the agent re-runs on an updated PR that now passes quality gate and the bot had
+    previously requested changes, approving should first remove the prior state.
+    """
+    mock_delete_resp = MagicMock()
+    mock_delete_resp.raise_for_status = MagicMock()
+    mock_post_resp = MagicMock()
+    mock_post_resp.raise_for_status = MagicMock()
+    mock_post_resp.content = b""
+    http = mock_client.return_value.__enter__.return_value
+    http.delete.return_value = mock_delete_resp
+    http.post.return_value = mock_post_resp
+
+    p = BitbucketProvider("https://api.bitbucket.org/2.0", "tok")
+    p.submit_review_decision("ws", "repo", 9, "APPROVE", body="lgtm")
+
+    assert http.delete.call_count == 1
+    assert http.delete.call_args[0][0].endswith("/pullrequests/9/request-changes")
+    urls = [http.post.call_args_list[i][0][0] for i in range(http.post.call_count)]
+    assert any(u.endswith("/pullrequests/9/approve") for u in urls)
+
+
+@patch("code_review.providers.bitbucket.httpx.Client")
+def test_submit_review_decision_request_changes_clears_approve_first(mock_client):
+    """REQUEST_CHANGES must DELETE /approve before POSTing /request-changes (re-run scenario)."""
+    mock_delete_resp = MagicMock()
+    mock_delete_resp.raise_for_status = MagicMock()
+    mock_post_resp = MagicMock()
+    mock_post_resp.raise_for_status = MagicMock()
+    mock_post_resp.content = b""
+    http = mock_client.return_value.__enter__.return_value
+    http.delete.return_value = mock_delete_resp
+    http.post.return_value = mock_post_resp
+
+    p = BitbucketProvider("https://api.bitbucket.org/2.0", "tok")
+    p.submit_review_decision("ws", "repo", 9, "REQUEST_CHANGES", body="please fix")
+
+    assert http.delete.call_count == 1
+    assert http.delete.call_args[0][0].endswith("/pullrequests/9/approve")
+    urls = [http.post.call_args_list[i][0][0] for i in range(http.post.call_count)]
+    assert any(u.endswith("/pullrequests/9/request-changes") for u in urls)
+
+
+@patch("code_review.providers.bitbucket.httpx.Client")
+def test_submit_review_decision_approve_ignores_404_on_clear(mock_client):
+    """A 404 from DELETE /request-changes (nothing to clear) must be silently ignored."""
+    import httpx as real_httpx
+
+    mock_delete_resp = MagicMock()
+    mock_delete_resp.status_code = 404
+    mock_404 = real_httpx.HTTPStatusError("not found", request=MagicMock(), response=mock_delete_resp)
+    mock_post_resp = MagicMock()
+    mock_post_resp.raise_for_status = MagicMock()
+    mock_post_resp.content = b""
+    http = mock_client.return_value.__enter__.return_value
+    http.delete.return_value = MagicMock(raise_for_status=MagicMock(side_effect=mock_404))
+    http.post.return_value = mock_post_resp
+
+    p = BitbucketProvider("https://api.bitbucket.org/2.0", "tok")
+    p.submit_review_decision("ws", "repo", 9, "APPROVE", body="lgtm")
+
+    urls = [http.post.call_args_list[i][0][0] for i in range(http.post.call_count)]
+    assert any(u.endswith("/pullrequests/9/approve") for u in urls)

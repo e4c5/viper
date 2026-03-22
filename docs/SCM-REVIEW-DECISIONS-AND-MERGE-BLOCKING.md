@@ -17,6 +17,17 @@ Counts are based on **aggregated open** high/medium signals (this run plus unres
 
 **Important:** Submitting `APPROVE` or `REQUEST_CHANGES` via API **does not by itself change merge permissions**. The **merge button** (or equivalent) is only constrained when the **repository or branch** is configured to require reviews, approvals, or merge checks. Admins and users with bypass permissions may still merge unless the SCM is configured to forbid that.
 
+### Re-runs after the PR is updated
+
+When PR authors push new commits to address comments, the agent re-runs automatically (the idempotency key changes with the new `head_sha`). The runner computes fresh high/medium counts and may submit a **different** decision from the previous run. State-transition behaviour per provider:
+
+| Provider | Transition handling |
+|----------|---------------------|
+| **GitHub / Gitea** | A new review object is posted; the previous one becomes outdated. GitHub skips outdated threads when counting unresolved signals. |
+| **GitLab** | When submitting `REQUEST_CHANGES`, `DELETE .../approve` is called first (soft-fail 404) so the bot cannot simultaneously hold an approval *and* a request-changes note on the same MR. |
+| **Bitbucket Cloud** | Before writing the new state the opposite endpoint is cleared (`DELETE /request-changes` before approving; `DELETE /approve` before requesting changes). A 404 on the DELETE is silently ignored. |
+| **Bitbucket Server** | `PUT .../participants/{slug}` replaces the status in place; transitions are inherently idempotent. |
+
 ---
 
 ## 2. What this codebase implements today
@@ -27,8 +38,8 @@ Counts are based on **aggregated open** high/medium signals (this run plus unres
 |---------------------------|----------------------------------------|
 | `github` | Yes (`POST .../pulls/{id}/reviews` with `event`). |
 | `gitea` | Yes (same-style review API; unsupported or old servers may return 404/405 — handled in code). |
-| `gitlab` | Yes — `POST .../merge_requests/:iid/approve` (optional `sha`); `REQUEST_CHANGES` via MR note + `/submit_review requested_changes` (needs a pending review on some GitLab versions). |
-| `bitbucket` (Cloud) | Yes — `POST .../pullrequests/{id}/approve` and `.../request-changes`. |
+| `gitlab` | Yes — `POST .../merge_requests/:iid/approve` (optional `sha`); `REQUEST_CHANGES` first calls `DELETE .../approve` (soft-fail) then posts an MR note + `/submit_review requested_changes` (needs a pending review on some GitLab versions). |
+| `bitbucket` (Cloud) | Yes — `POST .../pullrequests/{id}/approve` and `.../request-changes`; prior conflicting state is cleared before the new state is written (see §1 re-run table). |
 | `bitbucket_server` (Data Center / Server) | Yes when **`SCM_BITBUCKET_SERVER_USER_SLUG`** is set — `PUT .../pull-requests/{id}/participants/{slug}?version=…` with `APPROVED` / `NEEDS_WORK`. If unset, capability is false and the runner skips submission. |
 
 All providers still post **inline comments** and participate in the **quality gate counts** as documented in the README.

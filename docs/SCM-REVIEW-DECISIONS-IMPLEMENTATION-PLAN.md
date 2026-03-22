@@ -47,12 +47,12 @@ No runner changes are **required** to add a new SCM: implement `submit_review_de
 ### 3.3 GitLab — **done (submission)**
 
 - **Quality gate**: **Implemented** — MR discussions (`src/code_review/providers/gitlab.py`).
-- **`submit_review_decision`**: **Implemented** — `POST .../approve` (optional `sha`); `REQUEST_CHANGES` via MR note + `/submit_review requested_changes` (GitLab may require a pending review for the quick action to apply).
+- **`submit_review_decision`**: **Implemented** — `POST .../approve` (optional `sha`); `REQUEST_CHANGES` first calls `DELETE .../approve` (soft-fail on 404/403/405, so already-not-approved is safe) then posts an MR note + `/submit_review requested_changes` (GitLab may require a pending review for the quick action to apply). The unapprove step prevents the bot from being simultaneously approved and requesting changes after the PR is updated.
 
 ### 3.4 Bitbucket Cloud — **done (submission)**
 
 - **Quality gate**: **Partial** — open PR tasks only (unchanged).
-- **`submit_review_decision`**: **Implemented** — `POST .../approve` and `.../request-changes`; rationale text is posted as a PR-level comment because those endpoints omit `body`.
+- **`submit_review_decision`**: **Implemented** — `POST .../approve` and `.../request-changes`; the opposite endpoint is cleared first (`DELETE /request-changes` before approving; `DELETE /approve` before requesting changes) so state transitions are clean when the PR is re-evaluated; rationale text is posted as a PR-level comment because those endpoints omit `body`.
 
 ### 3.5 Bitbucket Server / Data Center — **done (submission, conditional)**
 

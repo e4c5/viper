@@ -346,3 +346,71 @@ def test_submit_review_decision_request_changes_note(mock_client):
 def test_gitlab_capabilities_support_review_decisions():
     p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
     assert p.capabilities().supports_review_decisions is True
+
+
+@patch("code_review.providers.gitlab.httpx.Client")
+def test_submit_review_decision_request_changes_unapproves_first(mock_client):
+    """REQUEST_CHANGES must DELETE /approve before posting the note (re-run scenario).
+
+    When the agent re-runs on an updated PR and the bot had previously approved,
+    submitting REQUEST_CHANGES should first remove that approval so the MR is not
+    left in the contradictory "approved + request-changes" state.
+    """
+    mock_delete_resp = MagicMock()
+    mock_delete_resp.raise_for_status = MagicMock()
+    mock_post_resp = MagicMock()
+    mock_post_resp.raise_for_status = MagicMock()
+    mock_post_resp.json.return_value = {"id": 1}
+    http = mock_client.return_value.__enter__.return_value
+    http.delete.return_value = mock_delete_resp
+    http.post.return_value = mock_post_resp
+
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p.submit_review_decision("owner", "repo", 7, "REQUEST_CHANGES", body="fix it")
+
+    # DELETE /approve must have been called
+    assert http.delete.call_count == 1
+    delete_url = http.delete.call_args[0][0]
+    assert "/merge_requests/7/approve" in delete_url
+    # POST /notes with the quick-action body must follow
+    assert http.post.call_count == 1
+    assert "/merge_requests/7/notes" in http.post.call_args[0][0]
+
+
+@patch("code_review.providers.gitlab.httpx.Client")
+def test_submit_review_decision_request_changes_ignores_404_unapprove(mock_client):
+    """A 404 from DELETE /approve (bot had not approved) must be silently ignored."""
+    import httpx as real_httpx
+
+    mock_delete_resp = MagicMock()
+    mock_delete_resp.status_code = 404
+    mock_404 = real_httpx.HTTPStatusError("not found", request=MagicMock(), response=mock_delete_resp)
+    mock_post_resp = MagicMock()
+    mock_post_resp.raise_for_status = MagicMock()
+    mock_post_resp.json.return_value = {"id": 1}
+    http = mock_client.return_value.__enter__.return_value
+    http.delete.return_value = MagicMock(raise_for_status=MagicMock(side_effect=mock_404))
+    http.post.return_value = mock_post_resp
+
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    # Must not raise even though DELETE returned 404
+    p.submit_review_decision("owner", "repo", 7, "REQUEST_CHANGES", body="fix it")
+    assert http.post.call_count == 1
+    assert "/merge_requests/7/notes" in http.post.call_args[0][0]
+
+
+@patch("code_review.providers.gitlab.httpx.Client")
+def test_submit_review_decision_approve_does_not_delete(mock_client):
+    """APPROVE must NOT call DELETE /approve (no prior state to clean up on approve path)."""
+    mock_post_resp = MagicMock()
+    mock_post_resp.raise_for_status = MagicMock()
+    mock_post_resp.content = b""
+    http = mock_client.return_value.__enter__.return_value
+    http.post.return_value = mock_post_resp
+
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p.submit_review_decision("owner", "repo", 7, "APPROVE", body="lgtm", head_sha="abc")
+
+    assert http.delete.call_count == 0
+    assert http.post.call_count == 1
+    assert "/merge_requests/7/approve" in http.post.call_args[0][0]

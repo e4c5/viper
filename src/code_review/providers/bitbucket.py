@@ -79,6 +79,11 @@ class BitbucketProvider(ProviderInterface):
             r.raise_for_status()
             return r.json() if r.content else None
 
+    def _delete(self, path: str) -> None:
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.delete(path, headers=self._headers())
+            r.raise_for_status()
+
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff for the PR."""
         path = self._path(owner, repo, "pullrequests", str(pr_number), "diff")
@@ -300,6 +305,32 @@ class BitbucketProvider(ProviderInterface):
         path = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
         self._post(path, {"content": {"raw": body}})
 
+    def _clear_participant_state(self, path: str, label: str, pr_number: int) -> None:
+        """DELETE an approve or request-changes endpoint; 404 means already clear (safe).
+
+        Used to clean up the prior participant state before writing a new one when the
+        agent re-runs on an updated PR and the decision flips direction.
+        """
+        try:
+            self._delete(path)
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code if exc.response is not None else None
+            if code == 404:
+                return  # Not in that state - nothing to clear
+            logger.warning(
+                "Bitbucket Cloud clear %s failed (HTTP %s) for PR %s",
+                label,
+                code,
+                pr_number,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Bitbucket Cloud clear %s failed for PR %s: %s",
+                label,
+                pr_number,
+                exc,
+            )
+
     def submit_review_decision(
         self,
         owner: str,
@@ -312,17 +343,24 @@ class BitbucketProvider(ProviderInterface):
     ) -> None:
         """Approve or request changes (Bitbucket Cloud 2.0).
 
-        ``POST {base}/approve`` and ``POST {base}/request-changes`` (``REQUEST_CHANGES`` uses the
-        latter) do not accept review rationale in the JSON body. We then post the runner summary
-        to ``pullrequests/<id>/comments`` (:meth:`post_pr_summary_comment`), using
-        ``effective_review_body(body)`` for ``content.raw`` (see ``review_decision_common``).
+        ``POST {base}/approve`` and ``POST {base}/request-changes`` do not accept a review
+        rationale in the JSON body. We post the runner summary to
+        ``pullrequests/<id>/comments`` (:meth:`post_pr_summary_comment`) using
+        ``effective_review_body(body)`` (see ``review_decision_common``).
         ``head_sha`` is unused.
+
+        Before writing the new state the opposite endpoint is cleared first
+        (``DELETE /request-changes`` before approving; ``DELETE /approve`` before requesting
+        changes) so that a re-run on an updated PR cannot leave the bot simultaneously in both
+        states.  A 404 on the DELETE is silently ignored (already clear).
         """
         _ = head_sha
         base = self._path(owner, repo, "pullrequests", str(pr_number))
         if decision == "APPROVE":
+            self._clear_participant_state(f"{base}/request-changes", "request-changes", pr_number)
             self._post(f"{base}/approve", {})
         else:
+            self._clear_participant_state(f"{base}/approve", "approve", pr_number)
             self._post(f"{base}/request-changes", {})
         self.post_pr_summary_comment(owner, repo, pr_number, effective_review_body(body))
 
