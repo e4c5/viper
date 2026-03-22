@@ -22,6 +22,13 @@ app = typer.Typer()
 OWNER_REPO_PATTERN = r"^[a-zA-Z0-9_.-]+$"
 
 
+def _typer_bool(value: bool | object, *, default: bool = False) -> bool:
+    """Coerce Typer defaults to bool when ``review()`` is called outside Typer (no injection)."""
+    if isinstance(value, OptionInfo):
+        return default
+    return bool(value)
+
+
 def _normalize_review_decision_options(
     review_decision_enabled: bool | None,
     review_decision_high_threshold: int | None,
@@ -161,6 +168,10 @@ def review(
             review_decision_medium_threshold,
         )
     )
+    dry_run = _typer_bool(dry_run)
+    print_findings = _typer_bool(print_findings)
+    fail_on_critical = _typer_bool(fail_on_critical)
+    review_decision_only = _typer_bool(review_decision_only)
 
     owner_f, repo_f, pr_num, head_sha_val = _cli_resolve_owner_repo_pr(owner, repo, pr, head_sha)
     _cli_validate_inputs(

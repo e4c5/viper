@@ -68,6 +68,13 @@ def test_reply_dismissal_verdict_from_llm_brace_substring():
     assert v.verdict == "agreed"
 
 
+def test_reply_dismissal_verdict_with_extra_braces_before_object():
+    text = 'Note {not json} then {"verdict": "agreed", "reply_text": ""}'
+    v = reply_dismissal_verdict_from_llm_text(text)
+    assert v is not None
+    assert v.verdict == "agreed"
+
+
 def test_reply_dismissal_verdict_invalid_returns_none():
     assert reply_dismissal_verdict_from_llm_text("not json") is None
     assert reply_dismissal_verdict_from_llm_text('{"verdict": "disagreed"}') is None

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import typer
 
 # Typer raises click.exceptions.Exit
 try:
@@ -73,6 +74,28 @@ def test_cli_invalid_owner_repo_pattern_exits_1():
     with pytest.raises(ClickExit) as exc_info:
         review(owner="o", repo="repo@at", pr=1, head_sha="abc", dry_run=True)
     assert exc_info.value.exit_code == 1
+
+
+def test_cli_review_decision_only_optioninfo_not_truthy_for_head_sha():
+    """Direct ``review()`` calls must not treat Typer's default OptionInfo as decision-only."""
+    with (
+        patch.dict(os.environ, {"SCM_HEAD_SHA": ""}, clear=False),
+        patch("code_review.__main__.get_code_review_app_config") as mock_app,
+        patch("code_review.__main__.run_review") as mock_run,
+    ):
+        mock_app.return_value = SimpleNamespace(review_decision_only=False)
+        mock_run.return_value = []
+        with pytest.raises(ClickExit) as exc_info:
+            review(
+                owner="o",
+                repo="r",
+                pr=1,
+                head_sha="",
+                dry_run=False,
+                review_decision_only=typer.Option(False, "--review-decision-only"),
+            )
+        assert exc_info.value.exit_code == 1
+        mock_run.assert_not_called()
 
 
 def test_cli_head_sha_required_when_not_dry_run_exits_1():

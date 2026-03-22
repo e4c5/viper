@@ -54,9 +54,9 @@ def _init_prometheus() -> bool:
         _prometheus_registry = False
         return False
     try:
-        from prometheus_client import Counter, Histogram, Registry
+        from prometheus_client import CollectorRegistry, Counter, Histogram
 
-        _prometheus_registry = Registry()
+        _prometheus_registry = CollectorRegistry()
         _prometheus_run_counter = Counter(
             "code_review_runs_total",
             "Total code review runs",

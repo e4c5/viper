@@ -104,12 +104,19 @@ def _parse_verdict_json_object(text: str) -> dict | None:
                 return val
         except json.JSONDecodeError:
             continue
-    start = s.find("{")
-    end = s.rfind("}")
-    if start != -1 and end > start:
+    return _first_json_object_via_raw_decode(s)
+
+
+def _first_json_object_via_raw_decode(s: str) -> dict | None:
+    """First complete JSON object starting at any ``{`` (avoids first/last-brace slice errors)."""
+    dec = json.JSONDecoder()
+    for i, c in enumerate(s):
+        if c != "{":
+            continue
         try:
-            val = json.loads(s[start : end + 1])
-            return val if isinstance(val, dict) else None
+            val, _ = dec.raw_decode(s, i)
         except json.JSONDecodeError:
-            return None
+            continue
+        if isinstance(val, dict):
+            return val
     return None

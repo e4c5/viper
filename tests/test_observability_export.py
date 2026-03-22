@@ -1,6 +1,7 @@
 """Tests for optional Prometheus/OpenTelemetry export (Phase 4.3)."""
 
 import importlib
+import re
 
 import pytest
 
@@ -68,11 +69,20 @@ def test_record_reply_dismissal_outcome_increments_when_prometheus_enabled(monke
     importlib.reload(observability_module)
     try:
         observability_module.record_reply_dismissal_outcome("agreed")
+        observability_module.record_reply_dismissal_outcome("agreed")
         observability_module.record_reply_dismissal_outcome("disagreed")
         reg = observability_module.get_prometheus_registry()
         assert reg is not None
         out = generate_latest(reg).decode()
-        assert "code_review_reply_dismissal_total" in out
+        # Per-label values (not just metric name) prove .labels(...).inc() ran correctly.
+        assert re.search(
+            r'code_review_reply_dismissal_total\{outcome="agreed"\}\s+2(?:\.0)?\b',
+            out,
+        )
+        assert re.search(
+            r'code_review_reply_dismissal_total\{outcome="disagreed"\}\s+1(?:\.0)?\b',
+            out,
+        )
     finally:
         monkeypatch.delenv("CODE_REVIEW_METRICS", raising=False)
         importlib.reload(observability_module)
