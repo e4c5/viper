@@ -102,8 +102,8 @@ The table below maps **UI/API concepts** to **when merge can be blocked**, point
 ## 5. Operational checklist
 
 1. **Pick the SCM** row above and enable the **branch / merge-check** settings your policy needs.
-2. **Token permissions:** The bot must be allowed to **submit reviews** where you rely on `APPROVE` / `REQUEST_CHANGES` (GitHub/Gitea today).
-3. **Bypass policy:** Decide whether admins may override; configure **no bypass** on GitHub, **administrators must follow rules** on Gitea, or equivalent on Atlassian/GitLab.
+2. **Token permissions:** The integration user’s token must be allowed to **submit** the review outcome you depend on — **`APPROVE` / `REQUEST_CHANGES`** (or each SCM’s native equivalent) — on every provider you use (e.g. **GitHub, Gitea, GitLab, Bitbucket Cloud, Bitbucket Server**). That includes REST scopes for review/approval/participant APIs; on GitLab, MR notes for request-changes; on Bitbucket Server, permission to update the token user’s participant state when **`SCM_BITBUCKET_SERVER_USER_SLUG`** is set. Too-narrow scopes can leave inline comments working while decisions fail.
+3. **Bypass policy:** Decide whether privileged users may merge despite failed reviews or checks, and set that explicitly per SCM — e.g. GitHub **do not allow bypassing** protected-branch rules; Gitea **administrators must follow branch protection rules**; GitLab **prevent merge when you request changes** (tier/settings) and maintainer bypass where applicable; Bitbucket Cloud **prevent merge with unresolved merge checks** vs warn-only (plan-dependent); Bitbucket Server merge checks and who may override them (project/permission settings). Use §3 for your provider’s knobs.
 4. **Tune thresholds:** `SCM_REVIEW_DECISION_HIGH_THRESHOLD` and `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD` control how aggressive `REQUEST_CHANGES` is; start conservative in production.
 5. **Dry run:** Use `--dry-run` to verify counts and logs without posting or submitting decisions.
 
