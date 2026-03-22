@@ -102,11 +102,15 @@ Confirmed gaps:
 1. **No comment-driven trigger path**. The bundled Jenkins pipeline only allows push-style PR actions. Resolving a thread, deleting a comment, or replying to a finding does not currently invoke any decision-only logic.
 2. **No decision-only orchestration path**. The code only has the full review flow. There is no runner branch that skips the code-review agent and only recomputes the gate.
 3. **No “only if bot is blocking” optimization**. There is no provider API to ask whether the bot currently has an active blocking state on the PR/MR.
-4. **No reply classification support**. “Replied to” does not affect the gate today unless the SCM itself marks the thread resolved/outdated or removes the underlying item from the provider API.
+4. **No transition handling for accepted replies, deleted comments, or outdated threads**. Today there is no dedicated decision-only path for the cases where a blocking review item should stop counting because:
+   - a human reply is accepted by the reply-dismissal flow
+   - the underlying review comment or thread is deleted by someone with sufficient access
+   - the SCM marks the thread outdated / no longer applicable
+   In all three cases, the required follow-up is the same: recompute the gate from current SCM state and decide whether the bot should transition back to `APPROVE`.
 5. **Head SHA and side-effect handling are underspecified for comment-only runs**. A decision-only path will need a safe answer for:
    - missing or stale `head_sha`
    - whether omit-marker PR summary comments should be skipped
-   - whether idempotency for comment-driven runs is SHA-based, comment-id-based, or both
+   - whether idempotency for comment-driven runs is SHA-based, comment-id-based, deletion-event-based, or a combination
 
 ---
 
@@ -131,6 +135,7 @@ Do **not** pass a growing pile of loosely related CLI flags. Add a small typed e
 ReviewDecisionEventContext
 - event_name
 - event_action
+- event_kind = reply_added | comment_deleted | thread_outdated | thread_resolved | scheduled | other
 - comment_id
 - thread_id
 - actor_login / actor_id
@@ -162,7 +167,7 @@ Do **not** reuse `_post_findings_and_summary(...)` for decision-only runs. That 
 A decision-only path should normally do only:
 
 1. gather context
-2. optionally classify a reply
+2. decide whether this is a pure state-change recomputation (`comment_deleted`, `thread_outdated`, `thread_resolved`) or a reply-classification case
 3. recompute counts
 4. submit or skip the review decision
 5. optionally post a reply-classification follow-up when the verdict is `disagreed`
@@ -249,7 +254,8 @@ This phase is low risk and should happen before any new mode is introduced.
 Notes:
 
 - One event per new comment is the common case. The event should ideally identify the specific `comment_id` that triggered the run.
-- Scheduled or batch runs can omit `comment_id` and fall back to “latest relevant human reply on each candidate thread”.
+- Delete/outdated/resolved events should be modeled as the same class of trigger as reply events: they should invoke decision-only recomputation even though they do not require LLM classification.
+- Scheduled or batch runs can omit `comment_id` and fall back to SCM state inspection plus “latest relevant human reply on each candidate thread” where classification is needed.
 
 ### Phase D — “Only if bot is blocking” provider API
 
@@ -269,7 +275,7 @@ Notes:
 
 This should land before reply-dismissal so comment-driven runs stay cheap when the bot is not currently blocking anything.
 
-### Phase E — Reply threads + LLM dismissal classification
+### Phase E — Reply, delete, and outdated-thread transitions
 
 Use a **separate agent** from the code review agent.
 
@@ -280,6 +286,7 @@ Use a **separate agent** from the code review agent.
   - subsequent human replies
   - author metadata
   - timestamps / ordering
+  - enough SCM state to tell whether a previously blocking item has been deleted, resolved, or marked outdated
 - Recommended first implementations:
   - **GitHub**: thread comments from GraphQL
   - **GitLab**: discussion notes
@@ -310,14 +317,20 @@ Use a **separate agent** from the code review agent.
   - run classification once
   - if `agreed`, exclude that thread from the gate counts for this recomputation
   - if `disagreed`, keep the thread in counts and pass `reply_text` to the SCM posting layer
+- On a delete / outdated / resolved webhook:
+  - do **not** run reply classification
+  - recompute the gate from current SCM state after the item disappears from, or is excluded by, the provider's unresolved-item view
+  - if counts now fall below threshold, transition the bot back to `APPROVE`
 - On batch/scheduled runs:
   - classify only candidate threads that have new human replies after the bot comment
+  - treat deleted or outdated items as ordinary state removals from the unresolved set
   - cap the number of LLM calls per run
 
 #### E.4 Operational behavior
 
 - Ignore bot-authored comments for dismissal attempts.
 - Log the verdict for auditability.
+- Log delete / outdated / resolved recomputation paths distinctly from reply-classification paths.
 - In dry-run mode, log the would-be `reply_text` instead of posting it.
 - Keep prompt stance pragmatic rather than adversarial.
 
@@ -371,10 +384,11 @@ Use a **separate agent** from the code review agent.
 6. [ ] Add a bot-identity abstraction to providers so later work can reliably distinguish bot comments/reviews from human replies.
 7. [ ] Add a tri-state provider API for “is the bot currently blocking this PR/MR?” and use it to short-circuit decision-only runs when safe.
 8. [ ] Update Jenkins and other trigger docs/examples so comment/discussion events can invoke review-decision-only runs.
-9. [ ] Implement provider fetchers for reply-thread context, starting with GitHub and GitLab.
-10. [ ] Add the reply-dismissal agent, schema validation, and runner integration for single-reply classification.
-11. [ ] Add optional SCM follow-up posting for `disagreed` verdicts, with dry-run logging and rate limits.
-12. [ ] Update companion docs and observability so the new behavior, provider limitations, and fallback paths are visible and accurate.
+9. [ ] Extend provider event/context handling so review-item deletion, thread resolution, and thread outdated transitions also trigger decision-only recomputation.
+10. [ ] Implement provider fetchers for reply-thread context and deleted/outdated-item detection, starting with GitHub and GitLab.
+11. [ ] Add the reply-dismissal agent, schema validation, and runner integration for single-reply classification.
+12. [ ] Add optional SCM follow-up posting for `disagreed` verdicts, with dry-run logging and rate limits.
+13. [ ] Update companion docs and observability so the new behavior, provider limitations, and fallback paths are visible and accurate.
 
 ---
 
