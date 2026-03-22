@@ -3,8 +3,6 @@
 import logging
 from typing import Any
 
-import httpx
-
 from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.base import (
     FileInfo,
@@ -18,6 +16,13 @@ from code_review.providers.base import (
     _log_pr_info_warning,
     normalize_diff_anchor_path,
     pr_info_from_api_dict,
+)
+from code_review.providers.http_shortcuts import (
+    http_delete,
+    http_get_bytes,
+    http_get_json_or_text,
+    http_post_json,
+    http_put_json,
 )
 from code_review.providers.review_decision_common import delete_soft_fail, effective_review_body
 from code_review.providers.safety import truncate_repo_content
@@ -54,35 +59,19 @@ class BitbucketProvider(ProviderInterface):
         return True
 
     def _get(self, path: str) -> Any:
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.get(path, headers=self._headers())
-            r.raise_for_status()
-            if "application/json" in (r.headers.get("content-type") or ""):
-                return r.json()
-            return r.text
+        return http_get_json_or_text(path, headers=self._headers(), timeout=self._timeout)
 
     def _get_raw_bytes(self, path: str) -> bytes:
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.get(path, headers=self._headers())
-            r.raise_for_status()
-            return r.content
+        return http_get_bytes(path, headers=self._headers(), timeout=self._timeout)
 
     def _post(self, path: str, json: dict) -> Any:
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.post(path, headers=self._headers(), json=json)
-            r.raise_for_status()
-            return r.json() if r.content else None
+        return http_post_json(path, json, headers=self._headers(), timeout=self._timeout)
 
     def _put(self, path: str, json: dict) -> Any:
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.put(path, headers=self._headers(), json=json)
-            r.raise_for_status()
-            return r.json() if r.content else None
+        return http_put_json(path, json, headers=self._headers(), timeout=self._timeout)
 
     def _delete(self, path: str) -> None:
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.delete(path, headers=self._headers())
-            r.raise_for_status()
+        http_delete(path, headers=self._headers(), timeout=self._timeout)
 
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff for the PR."""

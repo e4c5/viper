@@ -12,7 +12,7 @@ def test_get_provider_gitlab():
     assert isinstance(p, GitLabProvider)
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_get_pr_diff(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = [
@@ -43,7 +43,7 @@ def test_get_file_content(mock_client):
     assert content == "print('hello')"
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_get_pr_files(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = [
@@ -74,7 +74,7 @@ def test_get_pr_files(mock_client):
     assert files[1].status == "added"
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_post_review_comments(mock_client):
     # First call: get MR for diff_refs
     mr_resp = MagicMock()
@@ -107,7 +107,7 @@ def test_post_review_comments(mock_client):
     assert payload["position"].get("new_line") == 10
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_post_review_comments_with_suggested_patch(mock_client):
     # First call: get MR for diff_refs
     mr_resp = MagicMock()
@@ -144,7 +144,7 @@ def test_post_review_comments_with_suggested_patch(mock_client):
     assert "replacement_code();" in body
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_get_existing_review_comments(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = [
@@ -183,7 +183,7 @@ def test_get_existing_review_comments(mock_client):
     assert comments[1].id == "2" and comments[1].resolved is True
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_get_unresolved_review_items_skips_resolved_discussions(mock_client):
     """Quality gate uses discussion-level resolved; one thread row per discussion."""
     mock_resp = MagicMock()
@@ -237,7 +237,7 @@ def _json_get_response(payload):
     return m
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_get_unresolved_review_items_paginates_discussions(mock_client):
     """Quality gate must follow GitLab discussions pagination (page/per_page)."""
     note = {
@@ -283,7 +283,7 @@ def test_get_unresolved_review_items_paginates_discussions(mock_client):
     assert any("page=2" in u for u in urls)
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_post_pr_summary_comment(mock_client):
     mock_post = MagicMock()
     mock_post.raise_for_status = MagicMock()
@@ -297,7 +297,7 @@ def test_post_pr_summary_comment(mock_client):
     assert call_args[1]["json"]["body"] == "Summary body"
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_get_pr_info(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
@@ -314,7 +314,7 @@ def test_get_pr_info(mock_client):
     assert "skip-review" in info.labels
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_submit_review_decision_approve(mock_client):
     mock_post = MagicMock()
     mock_post.raise_for_status = MagicMock()
@@ -328,7 +328,7 @@ def test_submit_review_decision_approve(mock_client):
     assert call_args[1]["json"] == {"sha": "deadbeef"}
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_submit_review_decision_request_changes_note(mock_client):
     mock_post = MagicMock()
     mock_post.raise_for_status = MagicMock()
@@ -348,7 +348,7 @@ def test_gitlab_capabilities_support_review_decisions():
     assert p.capabilities().supports_review_decisions is True
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_submit_review_decision_request_changes_unapproves_first(mock_client):
     """REQUEST_CHANGES must DELETE /approve before posting the note (re-run scenario).
 
@@ -377,7 +377,7 @@ def test_submit_review_decision_request_changes_unapproves_first(mock_client):
     assert "/merge_requests/7/notes" in http.post.call_args[0][0]
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_submit_review_decision_request_changes_ignores_404_unapprove(mock_client):
     """A 404 from DELETE /approve (bot had not approved) must be silently ignored."""
     import httpx as real_httpx
@@ -399,7 +399,7 @@ def test_submit_review_decision_request_changes_ignores_404_unapprove(mock_clien
     assert "/merge_requests/7/notes" in http.post.call_args[0][0]
 
 
-@patch("code_review.providers.gitlab.httpx.Client")
+@patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_submit_review_decision_approve_does_not_delete(mock_client):
     """APPROVE must NOT call DELETE /approve (no prior state to clean up on approve path)."""
     mock_post_resp = MagicMock()
