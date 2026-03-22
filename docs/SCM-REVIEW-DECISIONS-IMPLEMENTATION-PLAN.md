@@ -12,8 +12,8 @@ Follow **single responsibility**, established patterns, and **reuse** shared inf
 
 ### 0.1 Confirmed in the current code base
 
-- Review-decision config already exists in `SCMConfig` (`review_decision_enabled`, `review_decision_high_threshold`, `review_decision_medium_threshold`) and is also exposed as CLI overrides in [`src/code_review/__main__.py`](/home/raditha/workspace/python/code-review/viper/src/code_review/__main__.py).
-- Full-review submission already works through `_quality_gate_high_medium_counts`, `_compute_review_decision_from_counts`, and `_maybe_submit_review_decision` in [`src/code_review/runner.py`](/home/raditha/workspace/python/code-review/viper/src/code_review/runner.py).
+- Review-decision config already exists in `SCMConfig` (`review_decision_enabled`, `review_decision_high_threshold`, `review_decision_medium_threshold`) and is also exposed as CLI overrides in [`src/code_review/__main__.py`](../src/code_review/__main__.py).
+- Full-review submission already works through `_quality_gate_high_medium_counts`, `_compute_review_decision_from_counts`, and `_maybe_submit_review_decision` in [`src/code_review/runner.py`](../src/code_review/runner.py).
 - The current submission call site is `ReviewOrchestrator._post_findings_and_summary(...)`, after inline posting and after the omit-marker PR summary path used by Bitbucket providers.
 - Provider support for `submit_review_decision(...)` exists for GitHub, Gitea, GitLab, Bitbucket Cloud, and Bitbucket Server/DC (Bitbucket Server/DC only when `SCM_BITBUCKET_SERVER_USER_SLUG` is configured).
 - Provider-specific quality-gate aggregation exists today:
@@ -22,7 +22,7 @@ Follow **single responsibility**, established patterns, and **reuse** shared inf
   - GitLab: unresolved discussions (`resolved=false`) at thread level.
   - Bitbucket Cloud: open PR tasks only.
   - Bitbucket Server/DC: unresolved inline comments plus open PR tasks.
-- Tests already cover the implemented baseline in [`tests/test_runner.py`](/home/raditha/workspace/python/code-review/viper/tests/test_runner.py), [`tests/config/test_config.py`](/home/raditha/workspace/python/code-review/viper/tests/config/test_config.py), [`tests/providers/test_review_decision_common.py`](/home/raditha/workspace/python/code-review/viper/tests/providers/test_review_decision_common.py), and provider-specific test modules.
+- Tests already cover the implemented baseline in [`tests/test_runner.py`](../tests/test_runner.py), [`tests/config/test_config.py`](../tests/config/test_config.py), [`tests/providers/test_review_decision_common.py`](../tests/providers/test_review_decision_common.py), and provider-specific test modules.
 
 ### 0.2 Confirmed gaps
 
@@ -71,7 +71,7 @@ Adding a **new** SCM still means: implement `submit_review_decision`, set `suppo
 No interface exists yet for:
 
 - current bot blocking state
-- current bot identity
+- bot attribution identity (Viper’s review/comment author — see §5.3)
 - comment-webhook event context
 - thread/reply classification input
 
@@ -134,7 +134,7 @@ Do **not** pass a growing pile of loosely related CLI flags. Add a small typed e
 ```text
 ReviewDecisionEventContext
 - event_name
-- event_action
+- event_action (e.g. created, edited, deleted — SCM-specific; use with comment_id for idempotency when hosts redeliver on edit)
 - event_kind = reply_added | comment_deleted | thread_outdated | thread_resolved | scheduled | other
 - comment_id
 - thread_id
@@ -143,17 +143,19 @@ ReviewDecisionEventContext
 - source = full_review | webhook_comment | webhook_thread | scheduled
 ```
 
-This gives the orchestrator one stable input surface for comment-webhook re-evaluation and keeps provider-specific payload parsing outside the core runner.
+This gives the orchestrator one stable input surface for comment-webhook re-evaluation and keeps provider-specific payload parsing outside the core runner. Include **`event_action`** (or equivalent) so **created vs edited** comment payloads can be deduped or reclassified consistently where the SCM emits both.
 
 ### 5.3 Add a bot-identity abstraction before Phase C/D
 
 Both “only if bot is blocking” and reply-dismissal classification need a reliable answer to “which comments/reviews belong to the bot?”. Add this explicitly instead of scattering username matching logic through providers.
 
+**Semantic distinction:** the abstraction must return the SCM identity used to attribute **Viper’s** posted comments and submitted reviews (login, id, slug, app id — whatever the provider uses for “is this comment/review ours?”). That is **not** necessarily the same object as “who does the token’s `/user` (or equivalent) endpoint return?” unless the host conflates them; document per provider.
+
 Recommended shape:
 
-- `ProviderInterface.get_current_actor_identity(...)` or equivalent
-- optional config override for servers where the API identity is ambiguous
-- shared helper for “is bot authored?” checks
+- `ProviderInterface.get_bot_attribution_identity(...)` (name TBD) returning a small typed value comparable to comment/review author fields
+- optional config override for servers where the API identity is ambiguous (e.g. GitHub App id vs username)
+- shared helper for “is bot-authored?” checks
 
 ### 5.4 Keep review-decision-only mode side-effect-light
 
@@ -256,6 +258,8 @@ Notes:
 - One event per new comment is the common case. The event should ideally identify the specific `comment_id` that triggered the run.
 - Delete/outdated/resolved events should be modeled as the same class of trigger as reply events: they should invoke decision-only recomputation even though they do not require LLM classification.
 - Scheduled or batch runs can omit `comment_id` and fall back to SCM state inspection plus “latest relevant human reply on each candidate thread” where classification is needed.
+
+**Rollout note:** **Phase B** (decision-only) and **Phase C** (event plumbing / webhooks) will often ship **before Phase D** (blocking-state API). Until D exists, comment-driven runs should **always** recompute the gate when invoked — there is **no** “skip because bot is not blocking” short-circuit yet. Phase D adds that optimization without changing B/C contracts.
 
 ### Phase D — “Only if bot is blocking” provider API
 
@@ -381,7 +385,7 @@ Use a **separate agent** from the code review agent.
 3. [ ] Introduce a provider-neutral `ReviewDecisionEventContext` model and thread it through `ReviewOrchestrator`.
 4. [ ] Add a review-decision-only mode in CLI and config, implemented inside the orchestrator and intentionally skipping agent execution, inline posting, stale-resolution, and omit-marker PR summary comments.
 5. [ ] Define how decision-only runs obtain `head_sha` when the triggering event does not provide one, and implement provider support if a fetch is required.
-6. [ ] Add a bot-identity abstraction to providers so later work can reliably distinguish bot comments/reviews from human replies.
+6. [ ] Add a bot-attribution identity abstraction to providers (`get_bot_attribution_identity` or equivalent per §5.3) so later work can reliably distinguish Viper’s comments/reviews from human replies.
 7. [ ] Add a tri-state provider API for “is the bot currently blocking this PR/MR?” and use it to short-circuit decision-only runs when safe.
 8. [ ] Update Jenkins and other trigger docs/examples so comment/discussion events can invoke review-decision-only runs.
 9. [ ] Extend provider event/context handling so review-item deletion, thread resolution, and thread outdated transitions also trigger decision-only recomputation.
