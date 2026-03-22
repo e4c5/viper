@@ -359,6 +359,29 @@ If your image is not public, log in before `docker pull`:
 
 Then pull your private image tag as usual.
 
+### 7.5 Comment-triggered review decision refresh
+
+To re-run **only** the quality gate and PR review decision after discussion activity (no LLM), trigger a workflow on events such as `issue_comment` or `pull_request_review_comment` and run the agent with `--review-decision-only` plus `SCM_REVIEW_DECISION_ENABLED=true`. `SCM_HEAD_SHA` may be empty; the runner resolves the current head from the GitHub API when needed.
+
+Optional `CODE_REVIEW_EVENT_*` variables add structured audit fields to logs; see [Configuration reference — §5.1](CONFIGURATION-REFERENCE.md).
+
+Example container invocation (adapt `SCM_PR_NUM` / `SCM_HEAD_SHA` to your event shape):
+
+```yaml
+- run: |
+    docker run --rm \
+      -e SCM_PROVIDER -e SCM_URL -e SCM_TOKEN \
+      -e SCM_OWNER -e SCM_REPO -e SCM_PR_NUM \
+      -e SCM_REVIEW_DECISION_ENABLED=true \
+      -e CODE_REVIEW_EVENT_NAME="${{ github.event_name }}" \
+      -e CODE_REVIEW_EVENT_ACTION="${{ github.event.action }}" \
+      -e CODE_REVIEW_EVENT_KIND=reply_added \
+      -e CODE_REVIEW_EVENT_SOURCE=webhook_comment \
+      "$IMAGE" review \
+      --owner "$SCM_OWNER" --repo "$SCM_REPO" --pr "$SCM_PR_NUM" \
+      --review-decision-only
+```
+
 ---
 
 ## 8. What the agent posts on GitHub

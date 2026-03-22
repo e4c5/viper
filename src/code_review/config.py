@@ -264,7 +264,8 @@ class CodeReviewAppConfig(BaseSettings):
         validation_alias="CODE_REVIEW_REVIEW_DECISION_ONLY",
         description=(
             "Skip the LLM and inline posting; only recompute quality-gate counts and "
-            "submit PR review decision when SCM_REVIEW_DECISION_ENABLED is true."
+            "submit PR review decision when SCM_REVIEW_DECISION_ENABLED is true. "
+            "Optional CODE_REVIEW_EVENT_* env vars attach webhook context for logging (see docs/CONFIGURATION-REFERENCE.md)."
         ),
     )
 

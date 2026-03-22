@@ -51,6 +51,10 @@ from code_review.providers.base import (
     UnresolvedReviewItem,
 )
 from code_review.schemas.findings import FindingV1
+from code_review.schemas.review_decision_event import (
+    ReviewDecisionEventContext,
+    review_decision_event_context_from_env,
+)
 from code_review.standards import detect_from_paths, get_review_standards
 
 APP_NAME = "code_review"
@@ -1244,6 +1248,7 @@ class ReviewOrchestrator:
         review_decision_high_threshold: int | None = None,
         review_decision_medium_threshold: int | None = None,
         review_decision_only: bool = False,
+        event_context: ReviewDecisionEventContext | None = None,
     ):
         self.owner = owner
         self.repo = repo
@@ -1255,6 +1260,7 @@ class ReviewOrchestrator:
         self._review_decision_high_threshold_override = review_decision_high_threshold
         self._review_decision_medium_threshold_override = review_decision_medium_threshold
         self._review_decision_only = review_decision_only
+        self._event_context = event_context
 
     def _load_config_and_provider(self):
         """Load SCM/LLM config and create the provider instance.
@@ -1990,14 +1996,29 @@ class ReviewOrchestrator:
         )
         print(f"Review-decision-only for PR: {pr_url}")
 
+        ctx = self._event_context
+        if ctx is not None and ctx.has_audit_fields():
+            logger.info(
+                "review_decision_event_context kind=%s source=%s name=%s action=%s "
+                "comment_id=%s thread_id=%s actor_login=%s",
+                ctx.event_kind,
+                ctx.source,
+                ctx.event_name,
+                ctx.event_action,
+                ctx.comment_id,
+                ctx.thread_id,
+                ctx.actor_login,
+            )
+
         skip_result = self._determine_skip_reason(
             provider, cfg, owner, repo, pr_number, trace_id, start_time, run_handle
         )
         if skip_result is not None:
             return skip_result
 
+        head_hint = (ctx.head_sha.strip() if ctx and ctx.head_sha else "") or (self.head_sha or "")
         head_sha = _resolve_head_sha_for_review_decision_submission(
-            provider, owner, repo, pr_number, self.head_sha
+            provider, owner, repo, pr_number, head_hint
         )
         if not head_sha and not dry_run:
             logger.warning(
@@ -2257,6 +2278,7 @@ def run_review(
     review_decision_high_threshold: int | None = None,
     review_decision_medium_threshold: int | None = None,
     review_decision_only: bool = False,
+    event_context: ReviewDecisionEventContext | None = None,
 ) -> list[FindingV1]:
     """
     Run the code review agent (findings-only mode). Fetches existing comments,
@@ -2269,7 +2291,13 @@ def run_review(
     When *review_decision_only* is True (or ``CODE_REVIEW_REVIEW_DECISION_ONLY`` is set),
     skips the agent, inline posting, and idempotency short-circuit; only recomputes the
     quality gate and submits a PR review decision when enabled in SCM config.
+
+    *event_context* may be supplied programmatically; when omitted, non-empty
+    ``CODE_REVIEW_EVENT_*`` environment variables are parsed into
+    :class:`~code_review.schemas.review_decision_event.ReviewDecisionEventContext`
+    (used for review-decision-only logging and head SHA hints).
     """
+    resolved_event = event_context or review_decision_event_context_from_env()
     orchestrator = ReviewOrchestrator(
         owner,
         repo,
@@ -2281,5 +2309,6 @@ def run_review(
         review_decision_high_threshold=review_decision_high_threshold,
         review_decision_medium_threshold=review_decision_medium_threshold,
         review_decision_only=review_decision_only,
+        event_context=resolved_event,
     )
     return orchestrator.run()

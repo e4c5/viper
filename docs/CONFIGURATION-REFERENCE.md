@@ -2,7 +2,7 @@
 
 Single place for **all environment variables** and related options used by the code review agent.
 
-**Source of truth in code:** `src/code_review/config.py` (Pydantic `BaseSettings`), plus a few ad-hoc reads in `runner.py`, `observability.py`, `logging_config.py`, `diff/fingerprint.py`, and `models.py`.
+**Source of truth in code:** `src/code_review/config.py` (Pydantic `BaseSettings`), schemas under `src/code_review/schemas/`, plus a few ad-hoc reads in `runner.py`, `observability.py`, `logging_config.py`, `diff/fingerprint.py`, and `models.py`.
 
 **Important:** The application does **not** load `.env` files automatically. Set variables in the process environment, CI secrets, or container env (or `source` a file yourself).
 
@@ -103,8 +103,31 @@ Loaded via `LLMConfig` (`env_prefix="LLM_"`).
 |----------|---------|-------------|
 | `CODE_REVIEW_LOG_LEVEL` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (case-insensitive). |
 | `CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT` | `true` | Include a PR commit-message block in the review prompt. |
+| `CODE_REVIEW_REVIEW_DECISION_ONLY` | `false` | When `true` / `1`, skip the LLM and inline posting; only recompute the quality gate and submit a PR review decision (requires `SCM_REVIEW_DECISION_ENABLED` for submission). Same effect as CLI `--review-decision-only`. |
 | `CODE_REVIEW_PRINT_RAW_RESPONSE` | *(unset)* | `1` / `true` / `TRUE` to log the raw LLM final response (debug). |
 | `CODE_REVIEW_SIGNING_KEY` | *(unset)* | If set, HMAC-signs fingerprint markers in posted comments (see §8). |
+
+### 5.1 Review-decision webhook context (`CODE_REVIEW_EVENT_*`)
+
+Optional. When any of these is non-empty, the runner builds a `ReviewDecisionEventContext` (see `src/code_review/schemas/review_decision_event.py`) for **review-decision-only** runs: structured logging and optional `head_sha` hint (overrides `SCM_HEAD_SHA` / `--head-sha` when set). Map from your webhook payload in CI (Generic Webhook Trigger, GitHub Actions `env`, etc.).
+
+| Variable | Description |
+|----------|-------------|
+| `CODE_REVIEW_EVENT_NAME` | SCM event name (e.g. GitHub `issue_comment`). |
+| `CODE_REVIEW_EVENT_ACTION` | Sub-action: `created`, `edited`, `deleted`, … |
+| `CODE_REVIEW_EVENT_KIND` | `reply_added` \| `comment_deleted` \| `thread_outdated` \| `thread_resolved` \| `scheduled` \| `other` (invalid values → `other`). |
+| `CODE_REVIEW_EVENT_COMMENT_ID` | Comment id as string. |
+| `CODE_REVIEW_EVENT_THREAD_ID` | Thread / discussion id. |
+| `CODE_REVIEW_EVENT_ACTOR_LOGIN` | Actor username / login. |
+| `CODE_REVIEW_EVENT_ACTOR_ID` | Actor id as string. |
+| `CODE_REVIEW_EVENT_HEAD_SHA` | PR head from payload (optional; used before API lookup). |
+| `CODE_REVIEW_EVENT_SOURCE` | `full_review` \| `webhook_comment` \| `webhook_thread` \| `scheduled` (invalid → `full_review`). |
+
+### 5.2 Jenkins bundled pipeline (`docker/jenkins/Jenkinsfile`)
+
+| Variable | Description |
+|----------|-------------|
+| `CODE_REVIEW_JENKINS_DECISION_ONLY_ACTIONS` | Comma-separated list of `PR_ACTION` values that should run **`code-review --review-decision-only`** instead of a full review (e.g. `issue_comment,pull_request_review_comment`). When matched, `SCM_HEAD_SHA` may be omitted (resolved via SCM API). Enable `SCM_REVIEW_DECISION_ENABLED` on the job so the decision is submitted. |
 
 ---
 

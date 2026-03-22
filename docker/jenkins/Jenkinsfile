@@ -6,6 +6,12 @@
 // Optional review decisions (global/folder/job env): SCM_REVIEW_DECISION_ENABLED, SCM_REVIEW_DECISION_HIGH_THRESHOLD,
 // SCM_REVIEW_DECISION_MEDIUM_THRESHOLD, SCM_BITBUCKET_SERVER_USER_SLUG (Bitbucket Server/DC only for submit).
 // Optional: CODE_REVIEW_LOG_LEVEL on the agent (e.g. DEBUG); default INFO if unset.
+// Comment / thread webhooks → review-decision-only (no LLM): set job or folder env
+//   CODE_REVIEW_JENKINS_DECISION_ONLY_ACTIONS to a comma-separated list of PR_ACTION values that your
+//   Generic Webhook Trigger maps from the payload (e.g. GitHub: issue_comment,pull_request_review_comment).
+//   When PR_ACTION matches, this pipeline runs `code-review --review-decision-only`; SCM_HEAD_SHA may be
+//   empty (resolved via API). Set SCM_REVIEW_DECISION_ENABLED on the job so submission runs.
+//   Optional: map payload fields into CODE_REVIEW_EVENT_* for audit logs (see docs/CONFIGURATION-REFERENCE.md).
 //
 // Self-contained; no load. Pipeline script from SCM (Script Path: docker/jenkins/Jenkinsfile) or paste inline.
 
@@ -66,7 +72,13 @@ pipeline {
                     def credId = 'SCM_TOKEN'
                     def unresolvedMarker = isBitbucket ? '$.pullRequest' : '$.pull_request'
 
-                    if (prAction) {
+                    def decisionOnlyCsv = env.CODE_REVIEW_JENKINS_DECISION_ONLY_ACTIONS?.trim() ?: ''
+                    def decisionOnlyActions = decisionOnlyCsv
+                        ? decisionOnlyCsv.split(',').collect { it.trim() }.findAll { it }
+                        : []
+                    def runDecisionOnly = prAction ? decisionOnlyActions.contains(prAction) : false
+
+                    if (prAction && !runDecisionOnly) {
                         def allowed = isBitbucket ? prAction.startsWith('pr:') : allowedActions.contains(prAction)
                         if (!allowed) {
                             currentBuild.description = "Skipped PR action: ${prAction}"
@@ -88,8 +100,12 @@ pipeline {
                     if (!scmPrNum || scmPrNum.contains(unresolvedMarker)) {
                         error('SCM_PR_NUM not resolved. Check Generic Webhook Trigger JSONPath.')
                     }
-                    if (!scmHeadSha || scmHeadSha.contains(unresolvedMarker)) {
-                        error('SCM_HEAD_SHA not resolved. Check Generic Webhook Trigger JSONPath.')
+                    if (!runDecisionOnly) {
+                        if (!scmHeadSha || scmHeadSha.contains(unresolvedMarker)) {
+                            error('SCM_HEAD_SHA not resolved. Check Generic Webhook Trigger JSONPath.')
+                        }
+                    } else if (!scmHeadSha || scmHeadSha.contains(unresolvedMarker)) {
+                        scmHeadSha = ''
                     }
 
                     def useInlineAgent = env.USE_INLINE_AGENT == 'true' || env.USE_INLINE_AGENT == '1'
@@ -118,10 +134,15 @@ pipeline {
                             "REVIEW_LLM_MODEL=${llmModel}",
                             "REVIEW_CODE_REVIEW_LOG_LEVEL=${codeReviewLogLevel}",
                             "USE_INLINE_AGENT=${useInlineAgent}",
+                            "REVIEW_RUN_DECISION_ONLY=${runDecisionOnly ? '1' : '0'}",
                         ]) {
                             sh '''
                                 set -eu
                                 set -o pipefail 2>/dev/null || true
+                                RD_EXTRA=""
+                                if [ "${REVIEW_RUN_DECISION_ONLY:-0}" = "1" ]; then
+                                    RD_EXTRA=" --review-decision-only"
+                                fi
                                 if [ "$USE_INLINE_AGENT" = "true" ] || [ "$USE_INLINE_AGENT" = "1" ]; then
                                     export SCM_PROVIDER="$REVIEW_SCM_PROVIDER" SCM_URL="$REVIEW_SCM_URL" SCM_TOKEN="$SCM_TOKEN"
                                     export SCM_BITBUCKET_SERVER_USER_SLUG="${REVIEW_SCM_BITBUCKET_SERVER_USER_SLUG:-}"
@@ -130,7 +151,7 @@ pipeline {
                                     [ -n "${REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD:-}" ] && export SCM_REVIEW_DECISION_MEDIUM_THRESHOLD="$REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"
                                     export LLM_PROVIDER="$REVIEW_LLM_PROVIDER" LLM_MODEL="$REVIEW_LLM_MODEL" LLM_API_KEY="${LLM_API_KEY:-}"
                                     export CODE_REVIEW_LOG_LEVEL="$REVIEW_CODE_REVIEW_LOG_LEVEL"
-                                    code-review --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA" --print-findings
+                                    code-review --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA"$RD_EXTRA --print-findings
                                 else
                                     runtime="$CONTAINER_RUNTIME"
                                     if [ -z "$runtime" ] || ! command -v "$runtime" >/dev/null 2>&1; then
@@ -157,7 +178,7 @@ pipeline {
                                         -e PYTHONUNBUFFERED=1 \
                                         -e CODE_REVIEW_LOG_LEVEL="$REVIEW_CODE_REVIEW_LOG_LEVEL" \
                                         $RD_ENV \
-                                        "$REVIEW_IMAGE" --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA" --print-findings \
+                                        "$REVIEW_IMAGE" --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA"$RD_EXTRA --print-findings \
                                     || { echo "HINT: Podman issues? Set USE_INLINE_AGENT=true (docs/QUICKSTART.md)."; exit 1; }
                                 fi
                             '''
