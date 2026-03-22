@@ -94,6 +94,10 @@ class ProviderCapabilities(BaseModel):
     - omit_fingerprint_marker_in_body: when True, do not add the HTML comment marker to
       the comment body at all (avoids stray XML in UIs that display it). Dedup still uses
       body_hash; fingerprint cannot be read back from existing comments.
+    - embed_agent_marker_as_commonmark_linkref: when True, append the agent marker as an
+      unused CommonMark link reference definition instead of an HTML comment. Bitbucket
+      Data Center/Server escapes HTML so ``<!-- -->`` is visible; link reference
+      definitions produce no rendered output when unreferenced.
     - supports_review_decisions: provider supports PR-level review decisions
       (APPROVE / REQUEST_CHANGES).
     """
@@ -104,6 +108,7 @@ class ProviderCapabilities(BaseModel):
     markup_hides_html_comment: bool = True
     markup_supports_collapsible: bool = True
     omit_fingerprint_marker_in_body: bool = False
+    embed_agent_marker_as_commonmark_linkref: bool = False
     supports_review_decisions: bool = False
 
 

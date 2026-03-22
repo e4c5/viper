@@ -93,6 +93,7 @@ def test_run_review_skips_when_omit_marker_pr_summary_contains_run_id(
         resolvable_comments=False,
         supports_suggestions=False,
         omit_fingerprint_marker_in_body=True,
+        embed_agent_marker_as_commonmark_linkref=True,
     )
     provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
     provider.get_pr_diff.return_value = "diff"
@@ -111,6 +112,7 @@ def test_run_review_skips_when_omit_marker_pr_summary_contains_run_id(
         AGENT_VERSION,
         run_id=run_id,
         marker_at_end=True,
+        use_commonmark_linkref=True,
     )
     provider.get_existing_review_comments.return_value = [
         MagicMock(

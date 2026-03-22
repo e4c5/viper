@@ -13,6 +13,38 @@ _MARKER_RE = re.compile(
 )
 _KEY_RE = re.compile(r"(fingerprint|version|run)=([^;]+)")
 
+# Bitbucket Data Center/Server: HTML is escaped in Markdown, so <!-- --> shows as literal
+# text. An *unused* CommonMark link reference definition produces no rendered output.
+LINKREF_MARKER_LABEL = "__code_review_agent__"
+_LINKREF_MARKER_RE = re.compile(
+    r"^\["
+    + re.escape(LINKREF_MARKER_LABEL)
+    + r"\]:\s+\S+\s+\"((?:[^\"\\]|\\.)*)\"\s*$",
+    re.MULTILINE,
+)
+
+
+def _escape_commonmark_link_title(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _unescape_commonmark_link_title(s: str) -> str:
+    out: list[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        if s[i] == "\\" and i + 1 < n:
+            out.append(s[i + 1])
+            i += 2
+            continue
+        out.append(s[i])
+        i += 1
+    return "".join(out)
+
+
+def _format_marker_as_commonmark_linkref(payload: str) -> str:
+    return f'[{LINKREF_MARKER_LABEL}]: ./ "{_escape_commonmark_link_title(payload)}"'
+
 _SIGNING_KEY_ENV = "CODE_REVIEW_SIGNING_KEY"
 
 
@@ -84,11 +116,18 @@ def format_comment_body_with_marker(
     version: str,
     run_id: str | None = None,
     marker_at_end: bool = False,
+    *,
+    use_commonmark_linkref: bool = False,
 ) -> str:
     """Add hidden marker to comment body for dedupe and idempotency.
-    When marker_at_end is True (e.g. Bitbucket), append the marker so the visible
-    part of the comment is not prefixed by raw HTML; parse_marker_from_comment_body
-    finds the marker anywhere in the body."""
+
+    Default: HTML comment ``<!-- code-review-agent:... -->``. When *use_commonmark_linkref*
+    is True (Bitbucket DC/Server), use an unused CommonMark link reference definition
+    instead — HTML is escaped there, so comments would otherwise show raw ``<!--``.
+
+    When *marker_at_end* is True, the machine-readable marker follows the visible *body*.
+    *parse_marker_from_comment_body* finds either form anywhere in the text.
+    """
     parts = [f"fingerprint={fingerprint}", f"version={version}"]
     if run_id is not None:
         parts.append(f"run={run_id}")
@@ -96,6 +135,17 @@ def format_comment_body_with_marker(
     sig = _sign_marker(payload)
     if sig:
         payload = payload + f";sig={sig}"
+
+    if use_commonmark_linkref:
+        ref_line = _format_marker_as_commonmark_linkref(payload)
+        if marker_at_end:
+            if not body.strip():
+                return ref_line
+            return body + "\n\n" + ref_line
+        if not body.strip():
+            return ref_line
+        return ref_line + "\n\n" + body
+
     marker = COMMENT_MARKER_PREFIX + payload + COMMENT_MARKER_SUFFIX
     if marker_at_end:
         return body + "\n\n" + marker
@@ -140,6 +190,10 @@ def parse_marker_from_comment_body(body: str) -> dict[str, str | None]:
     Parse code-review-agent marker from comment body.
     Returns dict with keys fingerprint, version, run (values None if absent).
     Ignores markers with invalid HMAC signatures when a signing key is configured.
+
+    Supports the HTML comment form and the CommonMark link-reference form used on
+    Bitbucket Data Center/Server (see *use_commonmark_linkref* in
+    :func:`format_comment_body_with_marker`).
     """
     out: dict[str, str | None] = {
         "fingerprint": None,
@@ -147,9 +201,13 @@ def parse_marker_from_comment_body(body: str) -> dict[str, str | None]:
         "run": None,
     }
     m = _MARKER_RE.search(body)
-    if not m:
-        return out
-    inner = m.group(1)
+    if m:
+        inner = m.group(1)
+    else:
+        lm = _LINKREF_MARKER_RE.search(body)
+        if not lm:
+            return out
+        inner = _unescape_commonmark_link_title(lm.group(1))
     fields, sig_val = _parse_marker_payload_segments(inner)
     if not _marker_hmac_signature_valid(fields, sig_val):
         return out

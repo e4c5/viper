@@ -717,5 +717,6 @@ class BitbucketServerProvider(ProviderInterface):
             markup_hides_html_comment=False,
             markup_supports_collapsible=False,
             omit_fingerprint_marker_in_body=True,
+            embed_agent_marker_as_commonmark_linkref=True,
             supports_review_decisions=bool(self._participant_user_slug),
         )

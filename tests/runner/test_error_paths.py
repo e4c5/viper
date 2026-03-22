@@ -5,8 +5,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 from litellm import AuthenticationError
 
+from code_review.diff.fingerprint import parse_marker_from_comment_body
 from code_review.providers.base import FileInfo, ProviderCapabilities, RateLimitError
 from tests.conftest import runner_run_async_returning
+
+
+def _pr_summary_body_has_run_marker(body: str) -> bool:
+    """True if body parses a code-review-agent marker with a run id (HTML or linkref)."""
+    return parse_marker_from_comment_body(str(body)).get("run") is not None
 
 
 def _exercise_error_path(
@@ -322,6 +328,7 @@ def test_run_marker_comment_posted_for_omit_marker_providers(
             resolvable_comments=False,
             supports_suggestions=False,
             omit_fingerprint_marker_in_body=True,
+            embed_agent_marker_as_commonmark_linkref=True,
         )
         provider.post_review_comments = MagicMock(side_effect=RuntimeError("409 Conflict"))
         provider.post_pr_summary_comment = MagicMock()
@@ -343,7 +350,7 @@ def test_run_marker_comment_posted_for_omit_marker_providers(
         (c[0][3] if c[0] else c[1].get("body", ""))
         for c in provider.post_pr_summary_comment.call_args_list
     ]
-    marker_bodies = [b for b in bodies if "code-review-agent:" in str(b) and "run=" in str(b)]
+    marker_bodies = [b for b in bodies if _pr_summary_body_has_run_marker(b)]
     assert marker_bodies, "expected a PR comment body with idempotency marker"
     assert any("Viper" in str(b) for b in marker_bodies)
     assert any("inline comment" in str(b).lower() for b in marker_bodies)
@@ -404,6 +411,7 @@ def test_run_marker_pr_summary_posted_when_inline_succeeds_for_omit_marker_provi
             resolvable_comments=False,
             supports_suggestions=False,
             omit_fingerprint_marker_in_body=True,
+            embed_agent_marker_as_commonmark_linkref=True,
         )
         provider.post_review_comments = MagicMock()
         provider.post_pr_summary_comment = MagicMock()
@@ -423,7 +431,7 @@ def test_run_marker_pr_summary_posted_when_inline_succeeds_for_omit_marker_provi
         (c[0][3] if c[0] else c[1].get("body", ""))
         for c in provider.post_pr_summary_comment.call_args_list
     ]
-    marker_bodies = [b for b in bodies if "code-review-agent:" in str(b) and "run=" in str(b)]
+    marker_bodies = [b for b in bodies if _pr_summary_body_has_run_marker(b)]
     assert marker_bodies, "expected PR summary with idempotency marker after successful inline post"
     assert any("Viper" in str(b) for b in marker_bodies)
     assert any("posted" in str(b).lower() for b in marker_bodies)

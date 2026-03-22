@@ -843,12 +843,14 @@ def _post_omit_marker_pr_summary_comment(
         pr_number=pr_number,
         to_post=to_post,
     )
+    use_linkref = getattr(caps, "embed_agent_marker_as_commonmark_linkref", None) is True
     body = format_comment_body_with_marker(
         visible,
         "",
         AGENT_VERSION,
         run_id=run_id,
         marker_at_end=not caps.markup_hides_html_comment,
+        use_commonmark_linkref=use_linkref,
     )
     try:
         provider.post_pr_summary_comment(owner, repo, pr_number, body)

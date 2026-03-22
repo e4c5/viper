@@ -78,7 +78,25 @@ def test_parse_marker_from_comment_body():
     assert out["fingerprint"] == "abc"
     assert out["version"] == "0.1.0"
     assert out["run"] == "key1"
-    out2 = parse_marker_from_comment_body("No marker here.")
-    assert out2["fingerprint"] is None
-    assert out2["version"] is None
-    assert out2["run"] is None
+
+
+def test_format_and_parse_commonmark_linkref_marker():
+    """Bitbucket DC/Server: unused link reference is not rendered; still round-trips."""
+    body = format_comment_body_with_marker(
+        "Visible **text**.",
+        "fpz",
+        "0.1.0",
+        run_id="gitea/o/r/pr/1/head/sha/agent/0.1.0/config/abc",
+        marker_at_end=True,
+        use_commonmark_linkref=True,
+    )
+    assert body.startswith("Visible **text**.")
+    assert "[__code_review_agent__]:" in body
+    assert "<!--" not in body
+    out = parse_marker_from_comment_body(body)
+    assert out["fingerprint"] == "fpz"
+    assert out["version"] == "0.1.0"
+    assert out["run"] == "gitea/o/r/pr/1/head/sha/agent/0.1.0/config/abc"
+
+    empty = parse_marker_from_comment_body("no marker")
+    assert empty["run"] is None
