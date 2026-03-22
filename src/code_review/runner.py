@@ -1019,8 +1019,40 @@ def _resolve_head_sha_for_review_decision_submission(
         return ""
     resolved = (getattr(pr_info, "head_sha", None) or "").strip()
     if resolved:
-        logger.info("Resolved PR head_sha from provider for review decision (prefix=%s)", resolved[:12])
+        logger.info(
+            "Resolved PR head_sha from provider for review decision (prefix=%s)",
+            resolved[:12],
+        )
     return resolved
+
+
+def _log_review_decision_event_if_present(ctx: ReviewDecisionEventContext | None) -> None:
+    """Emit one info line when webhook/CI event metadata is present (decision-only runs)."""
+    if ctx is None or not ctx.has_audit_fields():
+        return
+    logger.info(
+        "review_decision_event_context kind=%s source=%s name=%s action=%s "
+        "comment_id=%s thread_id=%s actor_login=%s",
+        ctx.event_kind,
+        ctx.source,
+        ctx.event_name,
+        ctx.event_action,
+        ctx.comment_id,
+        ctx.thread_id,
+        ctx.actor_login,
+    )
+
+
+def _head_sha_hint_for_decision_only(
+    ctx: ReviewDecisionEventContext | None,
+    cli_head_sha: str,
+) -> str:
+    """Prefer explicit head from event payload, then CLI/env head, before provider lookup."""
+    if ctx is not None:
+        from_event = (ctx.head_sha or "").strip()
+        if from_event:
+            return from_event
+    return (cli_head_sha or "").strip()
 
 
 def _maybe_submit_review_decision(
@@ -1996,19 +2028,7 @@ class ReviewOrchestrator:
         )
         print(f"Review-decision-only for PR: {pr_url}")
 
-        ctx = self._event_context
-        if ctx is not None and ctx.has_audit_fields():
-            logger.info(
-                "review_decision_event_context kind=%s source=%s name=%s action=%s "
-                "comment_id=%s thread_id=%s actor_login=%s",
-                ctx.event_kind,
-                ctx.source,
-                ctx.event_name,
-                ctx.event_action,
-                ctx.comment_id,
-                ctx.thread_id,
-                ctx.actor_login,
-            )
+        _log_review_decision_event_if_present(self._event_context)
 
         skip_result = self._determine_skip_reason(
             provider, cfg, owner, repo, pr_number, trace_id, start_time, run_handle
@@ -2016,7 +2036,7 @@ class ReviewOrchestrator:
         if skip_result is not None:
             return skip_result
 
-        head_hint = (ctx.head_sha.strip() if ctx and ctx.head_sha else "") or (self.head_sha or "")
+        head_hint = _head_sha_hint_for_decision_only(self._event_context, self.head_sha)
         head_sha = _resolve_head_sha_for_review_decision_submission(
             provider, owner, repo, pr_number, head_hint
         )

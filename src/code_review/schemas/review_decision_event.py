@@ -7,7 +7,7 @@ this normalized shape via :func:`review_decision_event_context_from_env` or prog
 from __future__ import annotations
 
 import os
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -27,17 +27,8 @@ ReviewDecisionEventSource = Literal[
     "scheduled",
 ]
 
-_VALID_KINDS = frozenset(
-    (
-        "reply_added",
-        "comment_deleted",
-        "thread_outdated",
-        "thread_resolved",
-        "scheduled",
-        "other",
-    )
-)
-_VALID_SOURCES = frozenset(("full_review", "webhook_comment", "webhook_thread", "scheduled"))
+_VALID_KINDS: frozenset[str] = frozenset(get_args(ReviewDecisionEventKind))
+_VALID_SOURCES: frozenset[str] = frozenset(get_args(ReviewDecisionEventSource))
 
 _ENV_FIELDS: tuple[tuple[str, str], ...] = (
     ("CODE_REVIEW_EVENT_NAME", "event_name"),
@@ -72,7 +63,9 @@ class ReviewDecisionEventContext(BaseModel):
     actor_id: str = ""
     head_sha: str = Field(
         default="",
-        description="Optional PR head from payload; takes precedence over CLI/SCM_HEAD_SHA for decision-only.",
+        description=(
+            "Optional PR head from payload; wins over CLI / SCM_HEAD_SHA in decision-only runs."
+        ),
     )
     source: ReviewDecisionEventSource = Field(
         default="full_review",
@@ -93,17 +86,20 @@ class ReviewDecisionEventContext(BaseModel):
 
     def has_audit_fields(self) -> bool:
         """True when any non-default identifying field is set (for structured logging)."""
-        return bool(
-            self.event_name.strip()
-            or self.event_action.strip()
-            or self.comment_id.strip()
-            or self.thread_id.strip()
-            or self.actor_login.strip()
-            or self.actor_id.strip()
-            or self.head_sha.strip()
-            or self.event_kind != "other"
-            or self.source != "full_review"
-        )
+        if self.event_kind != "other" or self.source != "full_review":
+            return True
+        for value in (
+            self.event_name,
+            self.event_action,
+            self.comment_id,
+            self.thread_id,
+            self.actor_login,
+            self.actor_id,
+            self.head_sha,
+        ):
+            if value.strip():
+                return True
+        return False
 
 
 def review_decision_event_context_from_env() -> ReviewDecisionEventContext | None:
