@@ -84,6 +84,8 @@ For **Bitbucket Data Center**: see [Bitbucket Data Center](BITBUCKET-DATACENTER.
 
 LLM (optional): set `LLM_PROVIDER` and `LLM_MODEL` to override defaults (e.g. `LLM_PROVIDER=gemini`, `LLM_MODEL=gemini-2.5-flash`). The pipeline uses the single credential `LLM_API_KEY` for whichever provider you choose.
 
+**Auto PR review decisions** (optional): set the same global/folder/job env vars the app reads (see [Configuration reference](CONFIGURATION-REFERENCE.md#2-scm-scm_)): `SCM_REVIEW_DECISION_ENABLED` (e.g. `true`), `SCM_REVIEW_DECISION_HIGH_THRESHOLD`, `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD`, and for **Bitbucket Server/DC only** `SCM_BITBUCKET_SERVER_USER_SLUG`. The Jenkinsfile forwards these into the agent container or inline `code-review` run; omit a variable in Jenkins to keep the app default for that setting.
+
 ---
 
 ## 4. Webhooks so PRs trigger the job

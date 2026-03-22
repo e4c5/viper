@@ -3,6 +3,8 @@
 //   folder that contains the job (folder → Configure → Environment variables). Do not use job
 //   parameter defaults—they get overwritten when the script is loaded from SCM.
 // Credentials: ID "SCM_TOKEN" always; ID "LLM_API_KEY" required for non-ollama providers.
+// Optional review decisions (global/folder/job env): SCM_REVIEW_DECISION_ENABLED, SCM_REVIEW_DECISION_HIGH_THRESHOLD,
+// SCM_REVIEW_DECISION_MEDIUM_THRESHOLD, SCM_BITBUCKET_SERVER_USER_SLUG (Bitbucket Server/DC only for submit).
 //
 // Self-contained; no load. Pipeline script from SCM (Script Path: docker/jenkins/Jenkinsfile) or paste inline.
 
@@ -42,6 +44,12 @@ pipeline {
                     def llmProvider = params.LLM_PROVIDER ?: env.LLM_PROVIDER
                     def llmModel = params.LLM_MODEL ?: env.LLM_MODEL
                     def containerRuntime = env.CONTAINER_RUNTIME ?: 'docker'
+                    // Optional Bitbucket Server/DC: username slug of SCM_TOKEN user (review decisions); from global/folder/job env
+                    def bbServerUserSlug = env.SCM_BITBUCKET_SERVER_USER_SLUG ?: ''
+                    // Optional review decision gate (omit env vars in Jenkins to keep app defaults)
+                    def reviewDecisionEnabled = env.SCM_REVIEW_DECISION_ENABLED ?: ''
+                    def reviewDecisionHigh = env.SCM_REVIEW_DECISION_HIGH_THRESHOLD ?: ''
+                    def reviewDecisionMedium = env.SCM_REVIEW_DECISION_MEDIUM_THRESHOLD ?: ''
 
                     def scmProvider = env.SCM_PROVIDER ?: 'gitea'
                     // Bitbucket Data Center sends eventKey like pr:opened; infer provider if not set
@@ -100,6 +108,10 @@ pipeline {
                             "REVIEW_SCM_HEAD_SHA=${scmHeadSha}",
                             "REVIEW_SCM_PROVIDER=${scmProvider}",
                             "REVIEW_SCM_URL=${scmUrl}",
+                            "REVIEW_SCM_BITBUCKET_SERVER_USER_SLUG=${bbServerUserSlug}",
+                            "REVIEW_SCM_REVIEW_DECISION_ENABLED=${reviewDecisionEnabled}",
+                            "REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD=${reviewDecisionHigh}",
+                            "REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD=${reviewDecisionMedium}",
                             "REVIEW_LLM_PROVIDER=${llmProvider}",
                             "REVIEW_LLM_MODEL=${llmModel}",
                             "USE_INLINE_AGENT=${useInlineAgent}",
@@ -109,6 +121,10 @@ pipeline {
                                 set -o pipefail 2>/dev/null || true
                                 if [ "$USE_INLINE_AGENT" = "true" ] || [ "$USE_INLINE_AGENT" = "1" ]; then
                                     export SCM_PROVIDER="$REVIEW_SCM_PROVIDER" SCM_URL="$REVIEW_SCM_URL" SCM_TOKEN="$SCM_TOKEN"
+                                    export SCM_BITBUCKET_SERVER_USER_SLUG="${REVIEW_SCM_BITBUCKET_SERVER_USER_SLUG:-}"
+                                    [ -n "${REVIEW_SCM_REVIEW_DECISION_ENABLED:-}" ] && export SCM_REVIEW_DECISION_ENABLED="$REVIEW_SCM_REVIEW_DECISION_ENABLED"
+                                    [ -n "${REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD:-}" ] && export SCM_REVIEW_DECISION_HIGH_THRESHOLD="$REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD"
+                                    [ -n "${REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD:-}" ] && export SCM_REVIEW_DECISION_MEDIUM_THRESHOLD="$REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"
                                     export LLM_PROVIDER="$REVIEW_LLM_PROVIDER" LLM_MODEL="$REVIEW_LLM_MODEL" LLM_API_KEY="${LLM_API_KEY:-}"
                                     export CODE_REVIEW_LOG_LEVEL=INFO
                                     code-review --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA" --print-findings
@@ -119,10 +135,15 @@ pipeline {
                                         elif command -v podman >/dev/null 2>&1; then runtime=podman
                                         else echo "ERROR: No container runtime. Set CONTAINER_RUNTIME or USE_INLINE_AGENT=true (docs/QUICKSTART.md)."; exit 1; fi
                                     fi
+                                    RD_ENV=""
+                                    [ -n "${REVIEW_SCM_REVIEW_DECISION_ENABLED:-}" ] && RD_ENV="$RD_ENV -e SCM_REVIEW_DECISION_ENABLED=$REVIEW_SCM_REVIEW_DECISION_ENABLED"
+                                    [ -n "${REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD:-}" ] && RD_ENV="$RD_ENV -e SCM_REVIEW_DECISION_HIGH_THRESHOLD=$REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD"
+                                    [ -n "${REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD:-}" ] && RD_ENV="$RD_ENV -e SCM_REVIEW_DECISION_MEDIUM_THRESHOLD=$REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"
                                     "$runtime" run --rm --network "$REVIEW_NETWORK" \
                                         -e SCM_PROVIDER="$REVIEW_SCM_PROVIDER" \
                                         -e SCM_URL="$REVIEW_SCM_URL" \
                                         -e SCM_TOKEN="$SCM_TOKEN" \
+                                        -e SCM_BITBUCKET_SERVER_USER_SLUG="${REVIEW_SCM_BITBUCKET_SERVER_USER_SLUG:-}" \
                                         -e SCM_OWNER="$REVIEW_SCM_OWNER" \
                                         -e SCM_REPO="$REVIEW_SCM_REPO" \
                                         -e SCM_PR_NUM="$REVIEW_SCM_PR_NUM" \
@@ -132,6 +153,7 @@ pipeline {
                                         -e LLM_API_KEY="${LLM_API_KEY:-}" \
                                         -e PYTHONUNBUFFERED=1 \
                                         -e CODE_REVIEW_LOG_LEVEL=INFO \
+                                        $RD_ENV \
                                         "$REVIEW_IMAGE" --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA" --print-findings \
                                     || { echo "HINT: Podman issues? Set USE_INLINE_AGENT=true (docs/QUICKSTART.md)."; exit 1; }
                                 fi

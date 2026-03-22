@@ -20,7 +20,7 @@ All commands below are run as **your normal user**, not root, unless explicitly 
 
 ## 2. Configure rootless Podman
 
-Rootless Podman uses **user namespaces**. Your user needs subordinate UID/GID ranges and Podman must be migrated to use them.
+Rootless Podman relies on **user namespaces**. Your user needs subordinate UID/GID ranges and Podman must be setup to use them.
 
 From the host:
 
