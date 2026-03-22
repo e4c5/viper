@@ -1,6 +1,7 @@
 """Tests for ReplyDismissalVerdictV1."""
 
 import pytest
+from pydantic import ValidationError
 
 from code_review.schemas.reply_dismissal import ReplyDismissalVerdictV1
 
@@ -23,3 +24,14 @@ def test_extra_keys_ignored():
         {"verdict": "agreed", "reply_text": "", "noise": 1}
     )
     assert v.verdict == "agreed"
+
+
+def test_version_literal_rejects_other_strings():
+    v = ReplyDismissalVerdictV1.model_validate(
+        {"version": "1", "verdict": "agreed", "reply_text": ""}
+    )
+    assert v.version == "1"
+    with pytest.raises(ValidationError):
+        ReplyDismissalVerdictV1.model_validate(
+            {"version": "2", "verdict": "agreed", "reply_text": ""}
+        )

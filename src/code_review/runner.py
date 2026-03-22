@@ -1285,6 +1285,46 @@ def _run_agent_and_collect_response(
     return asyncio.run(_collect_response_async(runner, session_service, session_id, content))
 
 
+def _normalize_scm_identity_fragment(value: str) -> str:
+    """Lowercase and strip braces/spaces for comparing SCM user/uuid strings."""
+    return (value or "").strip().lower().replace("{", "").replace("}", "")
+
+
+def _reply_added_event_authored_by_bot(
+    event: ReviewDecisionEventContext, bot: BotAttributionIdentity
+) -> bool:
+    """True when event actor fields identify the same user as the review token (bot)."""
+    if not bot.is_resolved():
+        return False
+    actor_login = (event.actor_login or "").strip()
+    actor_id = (event.actor_id or "").strip()
+    if not actor_login and not actor_id:
+        return False
+
+    bot_login = (bot.login or "").strip()
+    if bot_login and actor_login and actor_login.lower() == bot_login.lower():
+        return True
+
+    bot_id_str = (bot.id_str or "").strip()
+    if bot_id_str and actor_id and actor_id == bot_id_str:
+        return True
+
+    bot_slug = (bot.slug or "").strip()
+    if bot_slug and actor_login and actor_login.lower() == bot_slug.lower():
+        return True
+
+    bot_uuid = _normalize_scm_identity_fragment(bot.uuid)
+    actor_uuid = _normalize_scm_identity_fragment(actor_id)
+    if bot_uuid and actor_uuid and bot_uuid == actor_uuid:
+        return True
+
+    actor_login_uuid = _normalize_scm_identity_fragment(actor_login)
+    if bot_uuid and actor_login_uuid and bot_uuid == actor_login_uuid:
+        return True
+
+    return False
+
+
 def _format_reply_dismissal_user_message(
     ctx: ReviewThreadDismissalContext,
     bot: BotAttributionIdentity,
@@ -2151,70 +2191,83 @@ class ReviewOrchestrator:
             and self._event_context.event_kind == "reply_added"
             and (self._event_context.comment_id or "").strip()
         ):
-            caps_rd = provider.capabilities()
-            if not caps_rd.supports_review_thread_dismissal_context:
-                observability.record_reply_dismissal_outcome("skipped_no_capability")
-            else:
-                dctx = provider.get_review_thread_dismissal_context(
-                    owner,
-                    repo,
-                    pr_number,
-                    self._event_context.comment_id.strip(),
+            bot_id = provider.get_bot_attribution_identity(owner, repo, pr_number)
+            if _reply_added_event_authored_by_bot(self._event_context, bot_id):
+                observability.record_reply_dismissal_outcome("skipped_bot_author")
+                logger.info(
+                    "Reply-dismissal skipped: reply_added actor matches bot "
+                    "(actor_login=%r actor_id=%r)",
+                    (self._event_context.actor_login or "").strip(),
+                    (self._event_context.actor_id or "").strip(),
                 )
-                if dctx is None or len(dctx.entries) < 2:
-                    observability.record_reply_dismissal_outcome("skipped_insufficient_thread")
+            else:
+                caps_rd = provider.capabilities()
+                if not caps_rd.supports_review_thread_dismissal_context:
+                    observability.record_reply_dismissal_outcome("skipped_no_capability")
                 else:
-                    bot_id = provider.get_bot_attribution_identity(owner, repo, pr_number)
-                    user_msg = _format_reply_dismissal_user_message(dctx, bot_id)
-                    llm_failed = False
-                    try:
-                        raw_verdict = _run_reply_dismissal_llm(user_msg)
-                    except Exception as e:
-                        logger.warning("Reply-dismissal LLM run failed: %s", e)
-                        observability.record_reply_dismissal_outcome("llm_error")
-                        llm_failed = True
-                        raw_verdict = ""
-                    if not llm_failed:
-                        verdict = reply_dismissal_verdict_from_llm_text(raw_verdict)
-                        if verdict is None:
-                            observability.record_reply_dismissal_outcome("parse_failed")
-                        else:
-                            logger.info(
-                                "reply_dismissal_verdict trace_id=%s verdict=%s pr=%s/%s#%s",
-                                trace_id,
-                                verdict.verdict,
-                                owner,
-                                repo,
-                                pr_number,
-                            )
-                            if verdict.verdict == "agreed":
-                                observability.record_reply_dismissal_outcome("agreed")
-                                excluded_gate = frozenset({dctx.gate_exclusion_stable_id})
+                    dctx = provider.get_review_thread_dismissal_context(
+                        owner,
+                        repo,
+                        pr_number,
+                        self._event_context.comment_id.strip(),
+                    )
+                    if dctx is None or len(dctx.entries) < 2:
+                        observability.record_reply_dismissal_outcome(
+                            "skipped_insufficient_thread"
+                        )
+                    else:
+                        user_msg = _format_reply_dismissal_user_message(dctx, bot_id)
+                        llm_failed = False
+                        try:
+                            raw_verdict = _run_reply_dismissal_llm(user_msg)
+                        except Exception as e:
+                            logger.warning("Reply-dismissal LLM run failed: %s", e)
+                            observability.record_reply_dismissal_outcome("llm_error")
+                            llm_failed = True
+                            raw_verdict = ""
+                        if not llm_failed:
+                            verdict = reply_dismissal_verdict_from_llm_text(raw_verdict)
+                            if verdict is None:
+                                observability.record_reply_dismissal_outcome("parse_failed")
+                            else:
                                 logger.info(
-                                    "Reply-dismissal agreed; excluding gate stable_id=%s",
-                                    dctx.gate_exclusion_stable_id,
+                                    "reply_dismissal_verdict trace_id=%s verdict=%s pr=%s/%s#%s",
+                                    trace_id,
+                                    verdict.verdict,
+                                    owner,
+                                    repo,
+                                    pr_number,
                                 )
-                            elif verdict.verdict == "disagreed":
-                                observability.record_reply_dismissal_outcome("disagreed")
-                                if caps_rd.supports_review_thread_reply:
-                                    if dry_run:
-                                        truncated = (verdict.reply_text or "")[:500]
-                                        logger.info(
-                                            "Dry-run: would post review-thread reply "
-                                            "(truncated): %s",
-                                            truncated,
-                                        )
-                                    else:
-                                        try:
-                                            provider.post_review_thread_reply(
-                                                owner,
-                                                repo,
-                                                pr_number,
-                                                self._event_context.comment_id.strip(),
-                                                verdict.reply_text,
+                                if verdict.verdict == "agreed":
+                                    observability.record_reply_dismissal_outcome("agreed")
+                                    excluded_gate = frozenset({dctx.gate_exclusion_stable_id})
+                                    logger.info(
+                                        "Reply-dismissal agreed; excluding gate stable_id=%s",
+                                        dctx.gate_exclusion_stable_id,
+                                    )
+                                elif verdict.verdict == "disagreed":
+                                    observability.record_reply_dismissal_outcome("disagreed")
+                                    if caps_rd.supports_review_thread_reply:
+                                        if dry_run:
+                                            truncated = (verdict.reply_text or "")[:500]
+                                            logger.info(
+                                                "Dry-run: would post review-thread reply "
+                                                "(truncated): %s",
+                                                truncated,
                                             )
-                                        except Exception as e:
-                                            logger.warning("post_review_thread_reply failed: %s", e)
+                                        else:
+                                            try:
+                                                provider.post_review_thread_reply(
+                                                    owner,
+                                                    repo,
+                                                    pr_number,
+                                                    self._event_context.comment_id.strip(),
+                                                    verdict.reply_text,
+                                                )
+                                            except Exception as e:
+                                                logger.warning(
+                                                    "post_review_thread_reply failed: %s", e
+                                                )
 
         gate_outcome = _compute_quality_gate_review_outcome(
             provider,

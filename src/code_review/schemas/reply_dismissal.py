@@ -12,7 +12,10 @@ class ReplyDismissalVerdictV1(BaseModel):
 
     model_config = {"extra": "ignore"}
 
-    version: str = Field(default="1", description="Schema version")
+    version: Literal["1"] = Field(
+        default="1",
+        description="Contract version; only '1' is supported.",
+    )
     verdict: Literal["agreed", "disagreed"] = Field(
         ...,
         description="agreed = thread may be excluded from gate; disagreed = keep blocking",
