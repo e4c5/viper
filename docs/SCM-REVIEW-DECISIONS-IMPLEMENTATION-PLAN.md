@@ -1,152 +1,160 @@
-# SCM review decisions — implementation status and gap plan
+# SCM review decisions — implementation plan
 
-This document is for **developers**: runner/config status, per-provider implementation for `SCM_REVIEW_DECISION_*`, and reference notes for the GitLab / Bitbucket work (Phases A–C, **complete**). User-facing merge semantics stay in [SCM review decisions and merge blocking](SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md).
-
----
-
-## 1. Runner and config (complete)
-
-| Area | Status | Location |
-|------|--------|----------|
-| Env / CLI overrides | Done | `SCMConfig` in `src/code_review/config.py`; `review` command in `src/code_review/__main__.py` |
-| Threshold logic | Done | `_compute_review_decision_from_counts` in `src/code_review/runner.py` |
-| Aggregated counts | Done | `_quality_gate_high_medium_counts` → `provider.get_unresolved_review_items_for_quality_gate` + `to_post` findings |
-| Submit gate | Done | `_maybe_submit_review_decision`: checks `review_decision_enabled`, `capabilities().supports_review_decisions`, `dry_run` |
-| Call site | Done | End of `_post_inline_comments` in `src/code_review/runner.py` (after inline post + optional run marker) |
-| Tests (runner) | Done | `tests/test_runner.py` (`test_run_review_*review_decision*` mocks) |
-
-No runner changes are **required** to add a new SCM: implement `submit_review_decision`, set `supports_review_decisions=True`, and add provider tests.
+This document is for **developers**: what exists today for `SCM_REVIEW_DECISION_*`, where it lives, and the **planned work** to re-evaluate approve vs needs-work when review threads change without a full agent run. User-facing merge semantics stay in [SCM review decisions and merge blocking](SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md).
 
 ---
 
-## 2. Interface (complete)
+## 1. Baseline: runner and config (done)
 
-| Item | Status | Location |
-|------|--------|----------|
-| `ReviewDecision` | Done | `Literal["APPROVE", "REQUEST_CHANGES"]` in `src/code_review/providers/base.py` |
-| `submit_review_decision(...)` | Done | Default raises `NotImplementedError`; GitHub, Gitea, GitLab, Bitbucket Cloud, Bitbucket Server (conditional) override |
-| `ProviderCapabilities.supports_review_decisions` | Done | Default `False`; `True` where submission is implemented (Bitbucket Server only when user slug configured) |
-| `get_unresolved_review_items_for_quality_gate` | Done | Default uses `get_existing_review_comments`; overrides for thread/task semantics |
+| Area | Location |
+|------|----------|
+| Env / CLI | `SCMConfig` in `src/code_review/config.py`; `review` in `src/code_review/__main__.py` |
+| Threshold logic | `_compute_review_decision_from_counts` in `src/code_review/runner.py` |
+| Aggregated counts | `_quality_gate_high_medium_counts` → `provider.get_unresolved_review_items_for_quality_gate` + `to_post` findings |
+| Submit | `_maybe_submit_review_decision` (checks `review_decision_enabled`, `capabilities().supports_review_decisions`, `dry_run`) |
+| Call site | End of `_post_findings_and_summary` in `src/code_review/runner.py` (after inline posts + optional omit-marker summary) |
+| Tests | `tests/test_runner.py` (`test_run_review_*review_decision*` mocks) |
 
----
-
-## 3. Per-provider status
-
-### 3.1 GitHub — **done**
-
-- **`submit_review_decision`**: `POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews` with `event` + optional `commit_id` (`src/code_review/providers/github.py`).
-- **Quality gate**: GraphQL `reviewThreads` → `UnresolvedReviewItem` (unresolved, non-outdated); on GraphQL failure returns `[]` (counts rely on this run’s `to_post` only).
-- **Tests**: `tests/providers/test_github.py` (`test_submit_review_decision`, capabilities).
-
-### 3.2 Gitea — **done**
-
-- **`submit_review_decision`**: Same shape as GitHub; `404`/`405`/`501` logged and swallowed (`src/code_review/providers/gitea.py`).
-- **Quality gate**: Default path from `get_existing_review_comments` (`resolved=false` when API exposes it).
-- **Tests**: `tests/providers/test_gitea.py`.
-
-### 3.3 GitLab — **done (submission)**
-
-- **Quality gate**: **Implemented** — MR discussions (`src/code_review/providers/gitlab.py`).
-- **`submit_review_decision`**: **Implemented** — `POST .../approve` (optional `sha`); `REQUEST_CHANGES` first calls `DELETE .../approve` (soft-fail on 404/403/405, so already-not-approved is safe) then posts an MR note + `/submit_review requested_changes` (GitLab may require a pending review for the quick action to apply). The unapprove step prevents the bot from being simultaneously approved and requesting changes after the PR is updated.
-
-### 3.4 Bitbucket Cloud — **done (submission)**
-
-- **Quality gate**: **Partial** — open PR tasks only (unchanged).
-- **`submit_review_decision`**: **Implemented** — `POST .../approve` and `.../request-changes`; the opposite endpoint is cleared first (`DELETE /request-changes` before approving; `DELETE /approve` before requesting changes) so state transitions are clean when the PR is re-evaluated; rationale text is posted as a PR-level comment because those endpoints omit `body`.
-
-### 3.5 Bitbucket Server / Data Center — **done (submission, conditional)**
-
-- **Quality gate**: **Implemented** — activities + tasks.
-- **`submit_review_decision`**: **Implemented** — `PUT .../participants/{slug}?version=...` with `APPROVED` / `NEEDS_WORK` when **`SCM_BITBUCKET_SERVER_USER_SLUG`** is set; **one retry on HTTP 409** after refetching PR version; `supports_review_decisions` is `True` only in that case.
+Adding a **new** SCM still means: implement `submit_review_decision`, set `supports_review_decisions=True` where applicable, implement or inherit `get_unresolved_review_items_for_quality_gate`, add tests.
 
 ---
 
-## 4. Plan to close the gap (Phases A–C — **complete**)
+## 2. Baseline: interface (done)
 
-GitLab, Bitbucket Cloud, and Bitbucket Server **submission** is implemented (see §3). Phases A–C below are kept as **implementation reference**: what was built, where it lives, and what to re-read when debugging customer installs. They are **not** an active TODO list unless §3 flags a new gap.
-
-Work for any **future** SCM remains **provider-only** (plus tests and docs). Keep `ReviewDecision` as the runner contract; map each SCM’s native model inside the provider.
-
-### Phase A — GitLab (**complete**)
-
-**Delivered**
-
-- **`submit_review_decision`** in `src/code_review/providers/gitlab.py`: `APPROVE` → `POST .../merge_requests/:iid/approve` (optional `sha` from `head_sha`); `REQUEST_CHANGES` → MR note including `/submit_review requested_changes` plus summary text (see `gitlab_note_with_submit_review_requested_changes` in `src/code_review/providers/review_decision_common.py`).
-- **`supports_review_decisions=True`** on `GitLabProvider.capabilities()`.
-- **Tests:** `tests/providers/test_gitlab.py` — `test_submit_review_decision_approve`, `test_submit_review_decision_request_changes_note`.
-
-**Reference (original risks, still relevant for support)**
-
-- GitLab tier / project settings may affect approvals and review submission; see [SCM review decisions and merge blocking](SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md) and [Merge request approvals API](https://docs.gitlab.com/ee/api/merge_request_approvals.html).
+| Item | Location |
+|------|----------|
+| `ReviewDecision` | `Literal["APPROVE", "REQUEST_CHANGES"]` in `src/code_review/providers/base.py` |
+| `submit_review_decision(...)` | Default raises `NotImplementedError`; GitHub, Gitea, GitLab, Bitbucket Cloud, Bitbucket Server (conditional) override |
+| `ProviderCapabilities.supports_review_decisions` | `True` only where submission is implemented (Bitbucket Server only when user slug configured) |
+| `get_unresolved_review_items_for_quality_gate` | Default uses `get_existing_review_comments`; overrides for thread/task semantics |
 
 ---
 
-### Phase B — Bitbucket Data Center / Server (**complete**)
+## 3. Baseline: per-provider behavior (done)
 
-**Delivered**
+| Provider | Submission | Quality gate (open high/medium signals) |
+|----------|------------|----------------------------------------|
+| **GitHub** | `POST .../pulls/{id}/reviews` | GraphQL `reviewThreads`: unresolved **and** non-outdated; GraphQL failure → `[]` (counts rely on this run’s `to_post` only) |
+| **Gitea** | GitHub-style; soft-fail if unsupported | Default path from `get_existing_review_comments` / `resolved` when API exposes it — **no** GraphQL thread/outdated model in-repo |
+| **GitLab** | `POST .../approve`; `REQUEST_CHANGES` clears approve then MR note + `/submit_review requested_changes` | MR discussions with `resolved: false` |
+| **Bitbucket Cloud** | approve / request-changes + DELETE opposite state first | **Partial** — open PR tasks (see README table) |
+| **Bitbucket Server** | `PUT .../participants/{slug}` when `SCM_BITBUCKET_SERVER_USER_SLUG` set | Activities + open tasks |
 
-- **`submit_review_decision`** in `src/code_review/providers/bitbucket_server.py`: `PUT .../pull-requests/:id/participants/{slug}?version=...` with `APPROVED` / `NEEDS_WORK`; **one retry on HTTP 409** after refetching PR `version` (optimistic locking).
-- **`supports_review_decisions`** is `True` only when **`SCM_BITBUCKET_SERVER_USER_SLUG`** is set (non-empty after trim in `SCMConfig`); runner passes it via `get_provider(..., bitbucket_server_user_slug=...)`.
-- **Tests:** `tests/providers/test_bitbucket_server.py` — `test_submit_review_decision_needs_work`, `test_submit_review_decision_retries_participant_put_on_409`, `test_submit_review_decision_requires_participant_slug`.
-
-**Reference**
-
-- API surface varies by **Bitbucket Server version**; see provider docstrings and [Bitbucket Server REST API](https://developer.atlassian.com/server/bitbucket/rest/v901/intro/#about).
-
----
-
-### Phase C — Bitbucket Cloud (**complete**)
-
-**Delivered**
-
-- **`submit_review_decision`** in `src/code_review/providers/bitbucket.py`: `POST .../pullrequests/:id/approve` and `.../request-changes`; Cloud endpoints omit review **body**, so the runner rationale is posted as a PR-level comment via **`post_pr_summary_comment`** using **`effective_review_body(body)`** (`review_decision_common`).
-- **`supports_review_decisions=True`** on `BitbucketProvider.capabilities()`.
-- **Tests:** `tests/providers/test_bitbucket.py` — `test_submit_review_decision_approve`, `test_submit_review_decision_request_changes`.
-
-**Reference**
-
-- Quality gate remains **partial** (tasks-focused); merge enforcement may depend on workspace **Premium** merge checks — see §3.4 and the merge-blocking doc.
+Tests: `tests/providers/test_github.py`, `test_gitea.py`, `test_gitlab.py`, `test_bitbucket.py`, `test_bitbucket_server.py`, `test_review_decision_common.py`.
 
 ---
 
-## 5. Cross-cutting checklist
+## 4. Problem: transitions back to APPROVE without a new push
 
-Use this when adding a **new** SCM. For GitLab / Bitbucket Cloud / Server, these were covered during Phases A–C.
+Today, `_quality_gate_high_medium_counts` and `_maybe_submit_review_decision` run only at the **end of a full review** (after the agent and posting). That is sufficient when authors **push** (new `head_sha`, Jenkins/GitHub Actions typically fire again): GitHub already excludes **outdated** threads; resolved discussions and deleted comments disappear from APIs on the next fetch.
 
-- [x] Token permissions documented (scopes for approve / review state) — see `docs/CONFIGURATION-REFERENCE.md` and merge-blocking doc.  
-- [x] Eligibility: bot user must count as reviewer/approver under customer SCM settings — product doc.  
-- [x] Dry run: runner skips HTTP in `_maybe_submit_review_decision`.  
-- [x] Observability: `_maybe_submit_review_decision` + provider logs; add debug where needed.  
-- [x] No change to `FindingV1` or agent JSON contract.
+Gaps:
 
----
-
-## 6. Optional future work (out of scope for minimal gap fill)
-
-These items were **not** required to finish Phases A–C; they remain possible follow-ups.
-
-- **Extend `ReviewDecision`** or capabilities if an SCM needs a third state (e.g. COMMENT-only review).  
-- **GitLab-only:** If REST cannot request changes on CE, consider GraphQL client module shared with future features.  
-- **Bitbucket Cloud quality gate:** Enrich counts from inline comments if API gains resolution state.  
-- **Integration tests:** Live GitLab / BB against dockerized SCM (heavy maintenance).
+1. **Triggers** — Bundled Jenkins allows PR actions such as `opened` / `reopened` / `synchronize` (and Bitbucket `pr:*`), not **comment-only** events. If someone **deletes** a comment, **resolves** a thread, or **replies** without pushing, the full runner does not run, so the bot may stay on REQUEST_CHANGES / needs-work even when counts would now pass.
+2. **“Replied to”** — Not implemented yet; **planned:** LLM classification of replies that dispute/dismiss the finding (see §5.1, Phase D). Until then, unresolved threads with replies still count unless resolved or outdated.
+3. **Optimization** — There is no API-backed check that the bot is **currently blocking** the PR before doing expensive or noisy work; the user requirement is to **only** recompute when the PR is already in rejected / needs-work (from the bot’s perspective).
 
 ---
 
-## 7. Related files (quick index)
+## 5. Product decisions
+
+### 5.1 “Replied to” — LLM classification (target behavior)
+
+For threads that still appear **open** in the SCM (unresolved, non-outdated) but have **user replies** after the review comment, we do **not** rely on simple heuristics (e.g. “any reply”). Instead:
+
+1. **Inputs** — For each candidate thread, pass the **original review text** (and severity if known, e.g. `[High]` / `[Medium]`) plus the **reply body** (or ordered chain of replies since the bot comment, if we include follow-ups).
+2. **LLM task** — Classify whether the user is **disputing or dismissing** the finding in a way that should **stop counting** it toward the merge gate. Examples of intents to detect (non-exhaustive): *feature not a bug*, *won’t fix*, *acceptable risk / ignorable for now*, *false positive / you got this wrong*, *out of scope for this PR*.
+3. **Effect** — If the model returns “dismissed” (or equivalent structured label), treat that thread as **not** contributing to open high/medium for `_quality_gate_high_medium_counts` — i.e. **reduce the outstanding count by one** for that thread (same net effect as excluding it from `UnresolvedReviewItem` aggregation for gate purposes).
+
+**Still to pin down**
+
+- **Structured output** — e.g. JSON schema: `{"verdict": "still_valid" | "dismissed", "reason_category": "...", "confidence": ...}` so the runner does not free-form parse.
+- **Who may dismiss** — Typically restrict to **PR author** and/or **maintainers** (map from SCM user ids); do not treat random drive-by replies as dismissing unless product says otherwise.
+- **Which reply** — Latest non-bot reply only vs full thread; whether multiple dismissals need agreement.
+- **Caching / idempotency** — Avoid re-calling the LLM on every gate run for the same `(thread_id, last_reply_id)`; optional persistence is a follow-up.
+- **Safety** — Obvious risk of gaming (“LGTM” to clear findings); the prompt should require **substantive** dispute/explanation, and we may require `dismissed` only when confidence is high or combine with human resolve later.
+
+### 5.2 When to skip work
+
+Exact rule for “only if blocking”: query bot review/participant state vs always recompute when `UNKNOWN` (see Phase C).
+
+---
+
+## 6. Technical plan (phased)
+
+### Phase A — Review-decision-only mode (runner + CLI)
+
+- Add a mode (CLI flag and/or env, e.g. `--review-decision-only` / `CODE_REVIEW_REVIEW_DECISION_ONLY`) that:
+  - Skips the **main code-review agent** (no full diff review / findings JSON).
+  - May still invoke the **configured LLM** if Phase D reply classification is enabled for that run (see below).
+  - Reuses `_quality_gate_high_medium_counts` (after any reply-based exclusions) and `_maybe_submit_review_decision` with `to_post=[]` unless we also surface net-new findings in some hybrid flow.
+- Refactor if needed so decision submission is not duplicated between the full path and this path.
+- `head_sha` handling: keep consistent with existing `submit_review_decision` per provider (GitHub/Gitea/GitLab use it in places).
+
+**Tests:** `MockProvider`: counts → `APPROVE` / `REQUEST_CHANGES`; patch LLM for reply classification when testing Phase D integration.
+
+### Phase B — SCM triggers for non-push activity
+
+- Document and optionally wire **webhooks** / CI filters so comment and discussion events can invoke Phase A:
+  - **GitHub:** e.g. `pull_request_review_comment`, `issue_comment`, optionally `pull_request_review`.
+  - **GitLab:** note / MR discussion events as appropriate.
+  - **Bitbucket:** comment / task events per API.
+- Update Jenkins / GitHub Actions docs with example filters; keep existing synchronize behavior for full reviews.
+
+### Phase C — “Only if bot is blocking” (optional provider API)
+
+- Add something like `get_bot_blocking_review_state(...) -> BLOCKING | NOT_BLOCKING | UNKNOWN` (names TBD) on `ProviderInterface` with defaults:
+  - **GitHub / Gitea:** infer from latest review by the bot user for this PR.
+  - **GitLab:** approval + requested-changes / review state (version-dependent).
+  - **Bitbucket Cloud:** request-changes vs approved for the bot.
+  - **Bitbucket Server:** participant `NEEDS_WORK` vs `APPROVED` for `SCM_BITBUCKET_SERVER_USER_SLUG`.
+- In review-decision-only mode: if **NOT_BLOCKING** and there are no new high/medium findings to post, **skip** unresolved aggregation and submission (per product confirmation). If **UNKNOWN**, prefer safe default (recompute) unless documented otherwise.
+
+### Phase D — Reply threads + LLM dismissal (per provider + model)
+
+1. **Data** — Extend thread/discussion fetching so we can pair **bot/review comment body** with **subsequent human replies** and author metadata:
+   - **GitHub:** GraphQL: comment list per thread with `author`, `createdAt`, body; identify bot vs human via login/app id (config: bot user id or pattern).
+   - **GitLab:** MR discussion `notes` ordered; filter by author and bot note detection.
+   - **Bitbucket Server / Cloud:** activity / note payloads where threading exists; Cloud may stay tasks-first until inline threads are rich enough.
+   - **Gitea:** confirm API; document gaps.
+
+2. **Gate integration** — After building the list of unresolved high/medium threads, for each thread that has at least one qualifying human reply **not yet classified**:
+   - Call a **small dedicated prompt** (or reuse model config with a separate system instruction) returning **structured JSON** per §5.1.
+   - If `dismissed`, **omit that thread** from the high/medium dedupe set (or subtract one from the per-thread contribution — one thread maps to at most one gate bump today).
+
+3. **Config** — Env flags e.g. enable reply classification, max threads per run, model override optional; tie to `LLM_*` credentials already used by the runner.
+
+4. **Operational** — Log verdict + category for audit; cap LLM calls per webhook to control cost; dry-run should log “would dismiss” without mutating SCM beyond review decision if applicable.
+
+### Phase E — Docs and observability
+
+- Extend [SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md](SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md) for the new flow.
+- Log clearly when a run is review-decision-only vs full; when submission is skipped due to “not blocking.”
+
+---
+
+## 7. Related files (index)
 
 | File | Role |
 |------|------|
-| `src/code_review/runner.py` | `_quality_gate_*`, `_maybe_submit_review_decision` |
-| `src/code_review/config.py` | `SCMConfig` including `review_decision_*`, `bitbucket_server_user_slug` |
+| `src/code_review/runner.py` | `_quality_gate_*`, `_maybe_submit_review_decision`, orchestration (future: reply-dismissal hook) |
+| `src/code_review/models.py` | `get_configured_model()` — reuse for reply-classification calls |
+| `src/code_review/config.py` | `review_decision_*`, `bitbucket_server_user_slug` |
 | `src/code_review/providers/base.py` | `ReviewDecision`, `submit_review_decision`, `get_unresolved_review_items_for_quality_gate` |
-| `src/code_review/providers/__init__.py` | `get_provider(..., *, bitbucket_server_user_slug=...)` |
-| `src/code_review/providers/review_decision_common.py` | Shared `effective_review_body`, GitHub-style JSON, GitLab note helper |
-| `src/code_review/providers/github.py` | Reference `submit_review_decision` |
-| `src/code_review/providers/gitea.py` | `submit_review_decision` + HTTP soft-fail on unsupported methods |
-| `src/code_review/providers/gitlab.py` | Quality gate + **`submit_review_decision`** (approve + MR note / quick action) |
-| `src/code_review/providers/bitbucket.py` | Partial task gate + **`submit_review_decision`** (approve / request-changes + summary comment) |
-| `src/code_review/providers/bitbucket_server.py` | Quality gate + **`submit_review_decision`** (participant PUT, conditional on user slug) |
+| `src/code_review/providers/review_decision_common.py` | Shared helpers for GitHub-style JSON, GitLab note, effective body |
+| `src/code_review/providers/github.py` | `submit_review_decision`, GraphQL quality gate |
+| `src/code_review/providers/gitea.py` | `submit_review_decision`, REST quality gate |
+| `src/code_review/providers/gitlab.py` | Quality gate + `submit_review_decision` |
+| `src/code_review/providers/bitbucket.py` | Task-heavy gate + `submit_review_decision` |
+| `src/code_review/providers/bitbucket_server.py` | Activities/tasks gate + participant `submit_review_decision` |
+| `docker/jenkins/Jenkinsfile` | PR action filters for full runs |
 | `tests/test_runner.py` | Decision orchestration |
-| `tests/providers/test_github.py`, `test_gitea.py` | GitHub/Gitea submission |
-| `tests/providers/test_gitlab.py`, `test_bitbucket.py`, `test_bitbucket_server.py` | GitLab / Bitbucket Cloud / Server submission |
-| `tests/providers/test_review_decision_common.py` | Shared review-decision helpers |
+| `tests/providers/test_*.py` | Per-provider submission and gate tests |
+
+---
+
+## 8. Optional follow-ups (unchanged from earlier notes)
+
+- Extend `ReviewDecision` or capabilities if an SCM needs a third native state beyond approve / request-changes.
+- **Bitbucket Cloud quality gate:** enrich from inline comments if the API exposes resolution reliably.
+- Heavy live SCM integration tests (high maintenance).
