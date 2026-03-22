@@ -198,6 +198,7 @@ Used only by Playwright scripts under `e2e_ui/` (see `docs/E2E-UI-JENKINS.md`).
 
 - **README:** `README.md` — quick start and high-level behaviour.
 - **SCM review decisions & merge blocking:** `docs/SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md` — per-host approve/needs-work semantics and branch settings.
+- **SCM review decisions (implementation):** `docs/SCM-REVIEW-DECISIONS-IMPLEMENTATION-PLAN.md` — code status and provider backlog.
 - **Developer guide:** `docs/DEVELOPER_GUIDE.md` — architecture, SCM/LLM tables, logging, testing.
 - **Context-aware:** `docs/CONTEXT-AWARE-USER-GUIDE.md`, `docs/CONTEXT-AWARE-DEVELOPER-GUIDE.md`, `docs/PGVECTOR-SCHEMA.md`.
 - **Example env file:** `.env.example` (not auto-loaded; copy/export manually).

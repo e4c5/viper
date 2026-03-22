@@ -54,7 +54,8 @@ Tests mirror `src/`: `tests/test_runner.py`, `tests/providers/`, `tests/runner/`
 ## Documentation
 
 - **README.md** — Quick start, config, Docker/CI, observability.
-- **docs/SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md** — Per-SCM approve / needs-work / merge checks vs `SCM_REVIEW_DECISION_*`; what the runner implements today.
+- **docs/SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md** — Per-SCM approve / needs-work / merge checks vs `SCM_REVIEW_DECISION_*`.
+- **docs/SCM-REVIEW-DECISIONS-IMPLEMENTATION-PLAN.md** — Code inventory for review decisions; gap backlog (GitLab, Bitbucket).
 - **docs/DEVELOPER_GUIDE.md** — Full implementation guide: architecture, flow, modules, config, extension points, testing.
 
 **ADK**: Runner builds an ADK Agent (model, instruction, tools from `agent/tools/`) and uses Runner + InMemorySessionService; it calls `Runner.run()` then parses the final response for a JSON array of findings. Tools delegate to the provider; the agent does not post or fetch comments.

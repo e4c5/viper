@@ -33,6 +33,8 @@ Counts are based on **aggregated open** high/medium signals (this run plus unres
 
 GitLab and both Bitbucket providers still post **inline comments** and participate in the **quality gate counts** where the implementation supports it; they simply do not push a native “approve / request changes” review object yet.
 
+For a **code-level inventory**, test coverage, and a phased implementation backlog (GitLab → Bitbucket Server → Bitbucket Cloud), see **[SCM review decisions — implementation plan](SCM-REVIEW-DECISIONS-IMPLEMENTATION-PLAN.md)**.
+
 ---
 
 ## 3. Per-SCM: native model, merge blocking, and configuration
@@ -109,6 +111,7 @@ The table below maps **UI/API concepts** to **when merge can be blocked**, point
 
 ## 6. Related reading
 
+- [SCM review decisions — implementation plan](SCM-REVIEW-DECISIONS-IMPLEMENTATION-PLAN.md) — what is implemented in code and backlog per provider
 - [Configuration reference](CONFIGURATION-REFERENCE.md) — `SCM_REVIEW_DECISION_*`
 - [Developer guide](DEVELOPER_GUIDE.md) — `ProviderInterface`, extension points
 - [Bitbucket Data Center (Jenkins)](BITBUCKET-DATACENTER.md) — webhook and env for `bitbucket_server`
