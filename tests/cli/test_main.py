@@ -56,7 +56,7 @@ def test_cli_uses_env_vars():
     ):
         with patch("code_review.__main__.run_review") as mock_run:
             mock_run.return_value = []
-            review(owner=None, repo=None, pr=None, head_sha=None)
+            review(owner=None, repo=None, pr=None, head_sha="")
             call_kw = mock_run.call_args[1]
             assert call_kw["owner"] == "env-owner"
             assert call_kw["repo"] == "env-repo"
@@ -105,13 +105,13 @@ def test_cli_app_invokable_as_main():
     """app() can be invoked (e.g. when run as __main__) and responds to --help."""
     from code_review.__main__ import app
 
-    # Typer app with --help exits 0; we just ensure it doesn't raise
-    try:
+    with pytest.raises((ClickExit, SystemExit)) as exc_info:
         app(["--help"])
-    except ClickExit as e:
-        assert e.exit_code == 0
-    except SystemExit as e:
-        assert e.code == 0
+    ex = exc_info.value
+    code = getattr(ex, "exit_code", None)
+    if code is None:
+        code = getattr(ex, "code", None)
+    assert code == 0
 
 
 def test_cli_review_decision_options_passed_to_run_review():

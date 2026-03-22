@@ -242,7 +242,7 @@ def test_submit_review_decision_request_changes(mock_client):
     urls = [posts.call_args_list[i][0][0] for i in range(2)]
     assert any(u.endswith("/pullrequests/9/request-changes") for u in urls)
     comment_call = next(c for c in posts.call_args_list if "/pullrequests/9/comments" in c[0][0])
-    assert comment_call[1]["json"]["content"]["raw"] == "please fix"
+    assert comment_call[1]["json"]["content"]["raw"] == effective_review_body("please fix")
 
 
 @patch("code_review.providers.http_shortcuts.httpx.Client")

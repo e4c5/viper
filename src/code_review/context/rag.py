@@ -15,8 +15,14 @@ logger = logging.getLogger(__name__)
 
 
 def _choice_message_text(choice: object) -> str:
-    msg = choice["message"] if isinstance(choice, dict) else getattr(choice, "message", None)
-    content = msg["content"] if isinstance(msg, dict) else getattr(msg, "content", None)
+    if isinstance(choice, dict):
+        msg = choice.get("message")
+    else:
+        msg = getattr(choice, "message", None)
+    if isinstance(msg, dict):
+        content = msg.get("content")
+    else:
+        content = getattr(msg, "content", None)
     if isinstance(content, list):
         content = " ".join(
             block["text"]

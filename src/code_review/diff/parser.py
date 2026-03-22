@@ -1,7 +1,8 @@
 """Parse unified diff format for line positions."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from re import Match
 
 # Module-level constant avoids the regex pattern lookup cost on every call.
 _HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
@@ -19,87 +20,90 @@ class DiffHunk:
     lines: list[tuple[str, int | None, int | None]]  # (content, old_line, new_line)
 
 
+@dataclass
+class _UnifiedDiffParseState:
+    """Mutable state while scanning a unified diff (keeps ``parse_unified_diff`` shallow)."""
+
+    hunks: list[DiffHunk] = field(default_factory=list)
+    current_path: str = ""
+    current_old_start: int = 0
+    current_old_count: int = 0
+    current_new_start: int = 0
+    current_new_count: int = 0
+    current_lines: list[tuple[str, int | None, int | None]] = field(default_factory=list)
+    old_ln: int = 0
+    new_ln: int = 0
+
+    def flush_current_hunk(self) -> None:
+        if self.current_path and self.current_lines:
+            self.hunks.append(
+                DiffHunk(
+                    path=self.current_path,
+                    old_start=self.current_old_start,
+                    old_count=self.current_old_count,
+                    new_start=self.current_new_start,
+                    new_count=self.current_new_count,
+                    lines=self.current_lines,
+                )
+            )
+        self.current_lines = []
+
+    def on_diff_git_line(self, line: str) -> None:
+        self.flush_current_hunk()
+        parts = line.split()
+        if len(parts) >= 4:
+            self.current_path = parts[3].removeprefix("b/")
+
+    def on_plus_minus_header_line(self, line: str) -> None:
+        if line.startswith("+++ b/"):
+            self.current_path = line[6:].strip()
+
+    def on_hunk_header_line(self, m: Match[str]) -> None:
+        self.flush_current_hunk()
+        self.current_old_start = int(m.group(1))
+        self.current_old_count = int(m.group(2) or 1)
+        self.current_new_start = int(m.group(3))
+        self.current_new_count = int(m.group(4) or 1)
+        self.old_ln = self.current_old_start
+        self.new_ln = self.current_new_start
+
+    def on_hunk_body_line(self, line: str) -> None:
+        if not self.current_path:
+            return
+        prefix = line[0] if line else " "
+        rest = line[1:] if len(line) > 1 else ""
+        if prefix == " ":
+            self.current_lines.append((rest, self.old_ln, self.new_ln))
+            self.old_ln += 1
+            self.new_ln += 1
+        elif prefix == "+":
+            self.current_lines.append((rest, None, self.new_ln))
+            self.new_ln += 1
+        elif prefix == "-":
+            self.current_lines.append((rest, self.old_ln, None))
+            self.old_ln += 1
+        elif prefix == "\\":
+            self.current_lines.append((rest, None, None))
+
+
 def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
     """
     Parse unified diff text into a list of DiffHunk.
     Each hunk contains lines with (content, old_line, new_line).
     old_line/new_line are None for context lines in add/remove-only hunks.
     """
-
-    def _flush_current_hunk() -> None:
-        nonlocal current_lines, current_path, current_old_start, current_old_count
-        nonlocal current_new_start, current_new_count
-        if current_path and current_lines:
-            hunks.append(
-                DiffHunk(
-                    path=current_path,
-                    old_start=current_old_start,
-                    old_count=current_old_count,
-                    new_start=current_new_start,
-                    new_count=current_new_count,
-                    lines=current_lines,
-                )
-            )
-            current_lines = []
-
-    hunks: list[DiffHunk] = []
-    current_path = ""
-    current_old_start = 0
-    current_old_count = 0
-    current_new_start = 0
-    current_new_count = 0
-    current_lines: list[tuple[str, int | None, int | None]] = []
-    old_ln = 0
-    new_ln = 0
-
+    st = _UnifiedDiffParseState()
     for line in diff_text.splitlines():
         if line.startswith("diff --git "):
-            _flush_current_hunk()
-            # Parse path: "diff --git a/foo.py b/foo.py" -> use new file path (b/)
-            parts = line.split()
-            if len(parts) >= 4:
-                current_path = parts[3].removeprefix("b/")
-            continue
-
-        if line.startswith("--- ") or line.startswith("+++ "):
-            # Header lines can update the path for non-git diffs; the existing
-            # current_path is kept when appropriate.
-            if line.startswith("+++ b/"):
-                current_path = line[6:].strip()
-            continue
-
-        m = _HUNK_HEADER_RE.match(line)
-        if m:
-            _flush_current_hunk()
-            current_old_start = int(m.group(1))
-            current_old_count = int(m.group(2) or 1)
-            current_new_start = int(m.group(3))
-            current_new_count = int(m.group(4) or 1)
-            old_ln = current_old_start
-            new_ln = current_new_start
-            continue
-
-        if not current_path:
-            continue
-
-        prefix = line[0] if line else " "
-        rest = line[1:] if len(line) > 1 else ""
-        if prefix == " ":
-            current_lines.append((rest, old_ln, new_ln))
-            old_ln += 1
-            new_ln += 1
-        elif prefix == "+":
-            current_lines.append((rest, None, new_ln))
-            new_ln += 1
-        elif prefix == "-":
-            current_lines.append((rest, old_ln, None))
-            old_ln += 1
-        elif prefix == "\\":
-            current_lines.append((rest, None, None))
-
-    _flush_current_hunk()
-
-    return hunks
+            st.on_diff_git_line(line)
+        elif line.startswith("--- ") or line.startswith("+++ "):
+            st.on_plus_minus_header_line(line)
+        elif m := _HUNK_HEADER_RE.match(line):
+            st.on_hunk_header_line(m)
+        else:
+            st.on_hunk_body_line(line)
+    st.flush_current_hunk()
+    return st.hunks
 
 
 def iter_new_lines(diff_text: str):

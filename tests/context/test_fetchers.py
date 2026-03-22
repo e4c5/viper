@@ -431,23 +431,23 @@ def test_adf_to_plain_nested_doc():
 def _make_fetch_cfg(**overrides):
     from code_review.context.fetchers import FetchReferenceConfig
 
-    defaults = dict(
-        github_api_base="https://api.github.com",
-        github_token="tok",
-        gitlab_api_base="https://gitlab.com/api/v4",
-        gitlab_token="tok",
-        jira_base="https://jira.example.com",
-        jira_email="u@e.com",
-        jira_token="tok",
-        confluence_base="https://wiki.example.com",
-        confluence_email="u@e.com",
-        confluence_token="tok",
-        ctx_github_enabled=True,
-        ctx_gitlab_enabled=True,
-        ctx_jira_enabled=True,
-        ctx_confluence_enabled=True,
-        jira_extra_fields=(),
-    )
+    defaults = {
+        "github_api_base": "https://api.github.com",
+        "github_token": "tok",
+        "gitlab_api_base": "https://gitlab.com/api/v4",
+        "gitlab_token": "tok",
+        "jira_base": "https://jira.example.com",
+        "jira_email": "u@e.com",
+        "jira_token": "tok",
+        "confluence_base": "https://wiki.example.com",
+        "confluence_email": "u@e.com",
+        "confluence_token": "tok",
+        "ctx_github_enabled": True,
+        "ctx_gitlab_enabled": True,
+        "ctx_jira_enabled": True,
+        "ctx_confluence_enabled": True,
+        "jira_extra_fields": (),
+    }
     defaults.update(overrides)
     return FetchReferenceConfig(**defaults)
 

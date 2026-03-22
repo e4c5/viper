@@ -102,6 +102,39 @@ def format_comment_body_with_marker(
     return marker + "\n\n" + body
 
 
+def _parse_marker_payload_segments(payload: str) -> tuple[dict[str, str], str | None]:
+    segments = [seg for seg in payload.split(";") if seg]
+    fields: dict[str, str] = {}
+    sig_val: str | None = None
+    for seg in segments:
+        if "=" not in seg:
+            continue
+        k, v = seg.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        if k == "sig":
+            sig_val = v
+        elif k in ("fingerprint", "version", "run"):
+            fields[k] = v
+    return fields, sig_val
+
+
+def _marker_hmac_signature_valid(fields: dict[str, str], sig_val: str | None) -> bool:
+    key = _get_signing_key()
+    if not key:
+        return True
+    payload_parts: list[str] = []
+    if "fingerprint" in fields:
+        payload_parts.append(f"fingerprint={fields['fingerprint']}")
+    if "version" in fields:
+        payload_parts.append(f"version={fields['version']}")
+    if "run" in fields:
+        payload_parts.append(f"run={fields['run']}")
+    payload = ";".join(payload_parts)
+    expected = _sign_marker(payload)
+    return bool(sig_val and expected and hmac.compare_digest(sig_val, expected))
+
+
 def parse_marker_from_comment_body(body: str) -> dict[str, str | None]:
     """
     Parse code-review-agent marker from comment body.
@@ -117,42 +150,9 @@ def parse_marker_from_comment_body(body: str) -> dict[str, str | None]:
     if not m:
         return out
     inner = m.group(1)
-
-    def _parse_payload(payload: str) -> tuple[dict[str, str], str | None]:
-        segments = [seg for seg in payload.split(";") if seg]
-        fields: dict[str, str] = {}
-        sig_val: str | None = None
-        for seg in segments:
-            if "=" not in seg:
-                continue
-            k, v = seg.split("=", 1)
-            k = k.strip()
-            v = v.strip()
-            if k == "sig":
-                sig_val = v
-            elif k in ("fingerprint", "version", "run"):
-                fields[k] = v
-        return fields, sig_val
-
-    def _is_signature_valid(fields: dict[str, str], sig_val: str | None) -> bool:
-        key = _get_signing_key()
-        if not key:
-            return True
-        payload_parts: list[str] = []
-        if "fingerprint" in fields:
-            payload_parts.append(f"fingerprint={fields['fingerprint']}")
-        if "version" in fields:
-            payload_parts.append(f"version={fields['version']}")
-        if "run" in fields:
-            payload_parts.append(f"run={fields['run']}")
-        payload = ";".join(payload_parts)
-        expected = _sign_marker(payload)
-        return bool(sig_val and expected and hmac.compare_digest(sig_val, expected))
-
-    fields, sig_val = _parse_payload(inner)
-    if not _is_signature_valid(fields, sig_val):
+    fields, sig_val = _parse_marker_payload_segments(inner)
+    if not _marker_hmac_signature_valid(fields, sig_val):
         return out
-
     for field in out:
         if field in fields:
             out[field] = fields[field]

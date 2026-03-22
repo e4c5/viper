@@ -15,6 +15,9 @@ import pytest
 
 from tests.conftest import runner_run_async_returning
 
+# Local Docker E2E default; override with E2E_GITEA_ADMIN_PASSWORD.
+_E2E_GITEA_DEFAULT_PASSWORD = "e2e-admin-pass"  # NOSONAR S2068 — test fixture only
+
 
 def _ensure_admin_and_token() -> str:
     """Ensure an admin user exists in the Gitea E2E instance and return a fresh token.
@@ -23,7 +26,7 @@ def _ensure_admin_and_token() -> str:
     admin user (idempotent) and generate a token via the gitea CLI.
     """
     username = os.environ.get("E2E_GITEA_ADMIN_USER", "e2e-admin")
-    password = os.environ.get("E2E_GITEA_ADMIN_PASSWORD", "e2e-admin-pass")
+    password = os.environ.get("E2E_GITEA_ADMIN_PASSWORD", _E2E_GITEA_DEFAULT_PASSWORD)
     email = os.environ.get("E2E_GITEA_ADMIN_EMAIL", "e2e-admin@example.com")
     container = os.environ.get("E2E_GITEA_CONTAINER", "code-review-e2e-gitea")
 
