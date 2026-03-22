@@ -19,7 +19,7 @@ from code_review.providers.base import (
     normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
-from code_review.providers.review_decision_common import effective_review_body
+from code_review.providers.review_decision_common import delete_soft_fail, effective_review_body
 from code_review.providers.safety import truncate_repo_content
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
@@ -305,32 +305,6 @@ class BitbucketProvider(ProviderInterface):
         path = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
         self._post(path, {"content": {"raw": body}})
 
-    def _clear_participant_state(self, path: str, label: str, pr_number: int) -> None:
-        """DELETE an approve or request-changes endpoint; 404 means already clear (safe).
-
-        Used to clean up the prior participant state before writing a new one when the
-        agent re-runs on an updated PR and the decision flips direction.
-        """
-        try:
-            self._delete(path)
-        except httpx.HTTPStatusError as exc:
-            code = exc.response.status_code if exc.response is not None else None
-            if code == 404:
-                return  # Not in that state - nothing to clear
-            logger.warning(
-                "Bitbucket Cloud clear %s failed (HTTP %s) for PR %s",
-                label,
-                code,
-                pr_number,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Bitbucket Cloud clear %s failed for PR %s: %s",
-                label,
-                pr_number,
-                exc,
-            )
-
     def submit_review_decision(
         self,
         owner: str,
@@ -357,10 +331,18 @@ class BitbucketProvider(ProviderInterface):
         _ = head_sha
         base = self._path(owner, repo, "pullrequests", str(pr_number))
         if decision == "APPROVE":
-            self._clear_participant_state(f"{base}/request-changes", "request-changes", pr_number)
+            delete_soft_fail(
+                self._delete,
+                f"{base}/request-changes",
+                log_label=f"Bitbucket Cloud clear request-changes for PR {pr_number}",
+            )
             self._post(f"{base}/approve", {})
         else:
-            self._clear_participant_state(f"{base}/approve", "approve", pr_number)
+            delete_soft_fail(
+                self._delete,
+                f"{base}/approve",
+                log_label=f"Bitbucket Cloud clear approve for PR {pr_number}",
+            )
             self._post(f"{base}/request-changes", {})
         self.post_pr_summary_comment(owner, repo, pr_number, effective_review_body(body))
 

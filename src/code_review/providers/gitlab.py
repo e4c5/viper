@@ -24,6 +24,7 @@ from code_review.providers.base import (
     pr_info_from_api_dict,
 )
 from code_review.providers.review_decision_common import (
+    delete_soft_fail,
     gitlab_note_with_submit_review_requested_changes,
 )
 from code_review.providers.safety import truncate_repo_content
@@ -346,35 +347,6 @@ class GitLabProvider(ProviderInterface):
             {"body": body},
         )
 
-    def _unapprove_if_present(self, owner: str, repo: str, pr_number: int) -> None:
-        """Remove the token user's approval if it exists (soft-fail on 404/403/405).
-
-        Called before submitting REQUEST_CHANGES so the bot cannot be simultaneously
-        approved and requesting changes after a PR is updated with new problematic commits.
-        """
-        base = self._path(owner, repo, "merge_requests", str(pr_number))
-        try:
-            self._delete(f"{base}/approve")
-        except httpx.HTTPStatusError as exc:
-            code = exc.response.status_code if exc.response is not None else None
-            if code in (403, 404, 405):
-                return
-            logger.warning(
-                "GitLab unapprove failed (HTTP %s) owner=%s repo=%s pr=%s",
-                code,
-                owner,
-                repo,
-                pr_number,
-            )
-        except Exception as exc:
-            logger.warning(
-                "GitLab unapprove failed owner=%s repo=%s pr=%s: %s",
-                owner,
-                repo,
-                pr_number,
-                exc,
-            )
-
     def submit_review_decision(
         self,
         owner: str,
@@ -402,7 +374,12 @@ class GitLabProvider(ProviderInterface):
             return
         # Remove any prior bot approval before requesting changes so the MR is not left
         # in the contradictory "approved + request changes" state when the PR is re-reviewed.
-        self._unapprove_if_present(owner, repo, pr_number)
+        delete_soft_fail(
+            self._delete,
+            f"{base}/approve",
+            safe_codes=frozenset({403, 404, 405}),
+            log_label=f"GitLab unapprove owner={owner} repo={repo} pr={pr_number}",
+        )
         note = gitlab_note_with_submit_review_requested_changes(body)
         self._post(f"{base}/notes", {"body": note})
 
