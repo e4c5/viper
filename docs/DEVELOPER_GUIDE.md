@@ -331,9 +331,10 @@ Compare with and without this env var; if you get findings only with `LLM_DIFF_B
 ### 7.1 Adding a New SCM Provider
 
 1. Implement **ProviderInterface** in a new module under `providers/` (e.g. `providers/my_scm.py`). Implement: `get_pr_diff`, `get_pr_diff_for_file`, `get_file_content`, `get_file_lines`, `get_pr_files`, `post_review_comments`, `get_existing_review_comments`, `post_pr_summary_comment`, `get_pr_info`, `capabilities()`.
-2. In `providers/__init__.py`, extend **get_provider(name, base_url, token)** to return your provider when `name == "my_scm"` and add it to `__all__`.
-3. Extend **SCMConfig.provider** in `config.py` to include `"my_scm"` (e.g. `Literal[..., "my_scm"]`).
-4. Add tests under `tests/providers/test_my_scm.py` with mocked HTTP.
+2. Optionally implement **submit_review_decision** and set **ProviderCapabilities.supports_review_decisions=True** if the SCM exposes an equivalent to GitHub’s `APPROVE` / `REQUEST_CHANGES` review submission and you want `SCM_REVIEW_DECISION_ENABLED` to run end-to-end. See **GitHub** and **Gitea** providers for reference; see [SCM review decisions and merge blocking](SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md) for product-specific APIs and merge gating.
+3. In `providers/__init__.py`, extend **get_provider(name, base_url, token)** to return your provider when `name == "my_scm"` and add it to `__all__`.
+4. Extend **SCMConfig.provider** in `config.py` to include `"my_scm"` (e.g. `Literal[..., "my_scm"]`).
+5. Add tests under `tests/providers/test_my_scm.py` with mocked HTTP.
 
 ### 7.2 Adding or Changing an LLM Backend
 

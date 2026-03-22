@@ -60,6 +60,8 @@ Loaded via `SCMConfig` (`env_prefix="SCM_"`). Field names map to env vars in **U
 | `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD` | `3` | Request changes when open medium-severity count ≥ this. |
 | `SCM_ALLOWED_HOSTS` | — | Optional comma-separated allowlist of SCM hosts; `SCM_URL` must match. |
 
+**Review decisions vs merge blocking:** Only some providers implement automatic submission; whether `APPROVE` / `REQUEST_CHANGES` actually prevents merging depends on branch protection or merge checks on the SCM. See [SCM review decisions and merge blocking](SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md).
+
 CLI flags (`--owner`, `--repo`, `--pr`, `--head-sha`) override or fill these when unset.
 
 ---
@@ -195,6 +197,7 @@ Used only by Playwright scripts under `e2e_ui/` (see `docs/E2E-UI-JENKINS.md`).
 ## 11. Further reading
 
 - **README:** `README.md` — quick start and high-level behaviour.
+- **SCM review decisions & merge blocking:** `docs/SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md` — per-host approve/needs-work semantics and branch settings.
 - **Developer guide:** `docs/DEVELOPER_GUIDE.md` — architecture, SCM/LLM tables, logging, testing.
 - **Context-aware:** `docs/CONTEXT-AWARE-USER-GUIDE.md`, `docs/CONTEXT-AWARE-DEVELOPER-GUIDE.md`, `docs/PGVECTOR-SCHEMA.md`.
 - **Example env file:** `.env.example` (not auto-loaded; copy/export manually).
