@@ -618,11 +618,14 @@ class BitbucketServerProvider(ProviderInterface):
             err_text,
         )
         version2 = self._pull_request_version(owner, repo, pr_number)
-        if version2 is not None and version2 != version:
-            if self._bbs_try_participant_put_after_refetch(
+        if (
+            version2 is not None
+            and version2 != version
+            and self._bbs_try_participant_put_after_refetch(
                 owner, repo, pr_number, participant_path, payload, version2
-            ):
-                return
+            )
+        ):
+            return
         try:
             self._bbs_participant_put(participant_path, payload, -1)
         except httpx.HTTPStatusError as exc3:
