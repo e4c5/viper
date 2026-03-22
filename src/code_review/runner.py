@@ -284,6 +284,45 @@ def _validate_suggested_patches(
     return result
 
 
+# Model sometimes emits stream-of-consciousness findings then retracts them in the same message.
+_SELF_RETRACTION_MESSAGE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Phrase-based only: avoid matching domain words like "retract" in "retract the transaction".
+    re.compile(r"\b(?:i\s+)?will\s+retract\b", re.I),
+    re.compile(r"\bi\s+retract\b", re.I),
+    re.compile(r"\bretract(?:ed|ing)?\s+this\s+finding\b", re.I),
+    re.compile(r"\bretract\s+this\b", re.I),
+    re.compile(r"false\s+positive", re.I),
+    re.compile(r"\bwithdraw\s+(?:this\s+)?finding\b", re.I),
+    re.compile(r"\bdisregard\s+this\b", re.I),
+    re.compile(r"\bignore\s+this\s+(?:finding|comment)\b", re.I),
+    re.compile(r"\bno\s+longer\s+(?:believe|think)\b", re.I),
+)
+
+
+def _finding_message_looks_self_retracted(message: str) -> bool:
+    """True when the model walked back or disowned the issue inside the same message."""
+    if not message or not str(message).strip():
+        return False
+    return any(p.search(message) for p in _SELF_RETRACTION_MESSAGE_PATTERNS)
+
+
+def _filter_self_retracted_finding_messages(findings: list[FindingV1]) -> list[FindingV1]:
+    """Drop findings whose message text retracts or negates the issue (non-actionable noise)."""
+    if not findings:
+        return findings
+    kept: list[FindingV1] = []
+    for f in findings:
+        if _finding_message_looks_self_retracted(f.message):
+            logger.info(
+                "Dropping finding with self-retracted or withdrawn message text: %s:%d",
+                f.path,
+                f.line,
+            )
+            continue
+        kept.append(f)
+    return kept
+
+
 # Default search radius for anchor-based line relocation (lines above & below finding.line).
 _ANCHOR_RELOCATION_WINDOW = 20
 
@@ -1679,7 +1718,9 @@ class ReviewOrchestrator:
         # naming a visible line (so the line-visibility guard above passes).  Without
         # this guard, the patch would be rendered as a suggestion block replacing the
         # wrong code.  Stripping it degrades gracefully to a plain inline comment.
-        return _validate_suggested_patches(line_filtered, full_diff)
+        patched = _validate_suggested_patches(line_filtered, full_diff)
+        # Drop findings where the model argued itself out of the issue in the same message.
+        return _filter_self_retracted_finding_messages(patched)
 
     @staticmethod
     def _build_pr_url(cfg, owner: str, repo: str, pr_number: int) -> str:

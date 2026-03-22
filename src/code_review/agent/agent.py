@@ -49,6 +49,14 @@ Optional fields: end_line, category (e.g. "Correctness", "Security", "Performanc
 "Maintainability", "Tests", "Style"), anchor, fingerprint_hint,
 suggested_patch, agent_fix_prompt.
 
+IMPORTANT — Finding messages (decisive, no self-retraction):
+- Each `message` must state one clear, actionable problem and (when helpful) the fix. Keep it short.
+- Do not stream internal reasoning: no "wait / however / actually" chains, no arguing both sides,
+  and no concluding that the code is fine after raising a concern in the same finding.
+- If you decide there is no real issue after reasoning, omit that finding entirely from the JSON
+  array. Do not emit a finding whose message retracts itself, says "false positive", or takes
+  back the issue.
+
 IMPORTANT — anchor field (strongly recommended):
 - Always include an `anchor` field containing a distinctive code snippet (a substring)
   from the exact line where the issue occurs. The anchor is used by the runner to
