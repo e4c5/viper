@@ -52,6 +52,15 @@ def test_reply_dismissal_verdict_from_llm_fenced():
     assert "null check" in v.reply_text
 
 
+def test_reply_dismissal_verdict_from_llm_fenced_no_language_tag():
+    text = """```
+{"verdict": "agreed", "reply_text": ""}
+```"""
+    v = reply_dismissal_verdict_from_llm_text(text)
+    assert v is not None
+    assert v.verdict == "agreed"
+
+
 def test_reply_dismissal_verdict_from_llm_brace_substring():
     text = 'Prefix {"verdict": "agreed", "reply_text": ""} suffix'
     v = reply_dismissal_verdict_from_llm_text(text)

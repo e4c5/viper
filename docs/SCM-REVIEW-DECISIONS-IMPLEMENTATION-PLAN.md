@@ -28,7 +28,6 @@ Follow **single responsibility**, established patterns, and **reuse** shared inf
 
 **Still open (by design / follow-up)**
 
-- **No in-repo webhook receiver** — CI must map SCM payloads to `CODE_REVIEW_EVENT_*` and invoke `code-review --review-decision-only`.
 - **Reply-dismissal thread context and thread replies** are implemented only for **GitHub** and **GitLab** (`supports_review_thread_dismissal_context` / `supports_review_thread_reply`). Gitea, Bitbucket Cloud, and Bitbucket Server/DC expose bot identity where applicable but not dismissal context or replies yet.
 - **Batch/scheduled** reply-dismissal (cap LLM calls per run, classify only new replies) is not implemented; `scheduled` event kind recomputes the gate from SCM only.
 
@@ -391,7 +390,7 @@ Use a **separate agent** from the code review agent.
 
 **How to use this list:** check boxes track **repository** work. Keep this section updated when phases land so it stays the rollout ledger.
 
-**Status (2026-03-22):** Items **1–13** are **done** for the scoped implementation below. Follow-ups: in-repo webhook receiver (still external), batch reply-dismissal + LLM caps, thread dismissal on Gitea / Bitbucket providers, and optional rate limits on `post_review_thread_reply`.
+**Status (2026-03-22):** Items **1–13** are **done** for the scoped implementation below. Follow-ups: batch reply-dismissal + LLM caps, thread dismissal on Gitea / Bitbucket providers, and optional rate limits on `post_review_thread_reply`.
 
 1. [x] Extract a shared runner helper for `high_count`, `medium_count`, `decision`, and `reason`, and reuse it from both `_maybe_submit_review_decision(...)` and `_optional_quality_gate_summary_suffix(...)`.
 2. [x] Add tests for the shared helper so future review modes do not drift in threshold or dedupe behavior.
@@ -401,7 +400,7 @@ Use a **separate agent** from the code review agent.
 6. [x] Add a bot-attribution identity abstraction to providers (`get_bot_attribution_identity` → `BotAttributionIdentity` per §5.3).
 7. [x] Add a tri-state provider API for “is the bot currently blocking this PR/MR?” and use it to short-circuit decision-only runs when safe.
 8. [x] Update Jenkins and other trigger docs/examples so comment/discussion events can invoke review-decision-only runs.
-9. [x] Event kinds `comment_deleted`, `thread_resolved`, `thread_outdated`, `scheduled` drive decision-only gate recomputation (CI maps webhooks → `CODE_REVIEW_EVENT_*`); no first-party webhook server in-repo.
+9. [x] Event kinds `comment_deleted`, `thread_resolved`, `thread_outdated`, `scheduled` drive decision-only gate recomputation (CI maps webhook payloads → `CODE_REVIEW_EVENT_*`).
 10. [x] Provider fetchers for reply-thread context on **GitHub** and **GitLab**; delete/resolved/outdated reflected via existing unresolved-item aggregation (no separate detection API).
 11. [x] Reply-dismissal agent, schema validation, and runner integration for a single `reply_added` + `comment_id` path (`CODE_REVIEW_REPLY_DISMISSAL_ENABLED`).
 12. [x] SCM follow-up for `disagreed` on **GitHub** and **GitLab** (`post_review_thread_reply`); dry-run logs truncated body; rate limits not implemented (optional follow-up).

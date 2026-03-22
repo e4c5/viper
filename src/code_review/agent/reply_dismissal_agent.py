@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import TYPE_CHECKING
 
 from code_review.config import get_llm_config
@@ -68,11 +67,35 @@ def reply_dismissal_verdict_from_llm_text(text: str) -> ReplyDismissalVerdictV1 
         return None
 
 
+def _first_markdown_fence_body(s: str) -> str | None:
+    """Return inner text of the first fenced code block (linear scan; avoids ReDoS from regex)."""
+    fence = "```"
+    start_fence = s.find(fence)
+    if start_fence == -1:
+        return None
+    i = start_fence + len(fence)
+    n = len(s)
+    while i < n and s[i].isspace():
+        i += 1
+    if i + 4 <= n and s[i : i + 4].lower() == "json":
+        j = i + 4
+        if j == n or s[j].isspace() or s[j] == "{":
+            i = j
+            while i < n and s[i].isspace():
+                i += 1
+    end_fence = s.find(fence, i)
+    if end_fence == -1:
+        return None
+    return s[i:end_fence]
+
+
 def _parse_verdict_json_object(text: str) -> dict | None:
     """Extract a JSON object from model output (optional ```json fence)."""
     s = text.strip()
-    m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", s)
-    chunks = [m.group(1).strip()] if m else []
+    chunks: list[str] = []
+    fenced = _first_markdown_fence_body(s)
+    if fenced is not None:
+        chunks.append(fenced.strip())
     chunks.append(s)
     for chunk in chunks:
         try:
