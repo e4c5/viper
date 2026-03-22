@@ -39,6 +39,7 @@ _prometheus_run_counter: Any = None
 _prometheus_duration_histogram: Any = None
 _prometheus_findings_counter: Any = None
 _prometheus_posts_counter: Any = None
+_prometheus_reply_dismissal_counter: Any = None
 _otel_tracer: Any = None
 _otel_tracer_provider: Any = None
 
@@ -46,6 +47,7 @@ _otel_tracer_provider: Any = None
 def _init_prometheus() -> bool:
     global _prometheus_registry, _prometheus_run_counter, _prometheus_duration_histogram
     global _prometheus_findings_counter, _prometheus_posts_counter
+    global _prometheus_reply_dismissal_counter
     if _prometheus_registry is not None:
         return _prometheus_registry is not False
     if not PROMETHEUS_ENABLED:
@@ -75,6 +77,12 @@ def _init_prometheus() -> bool:
         _prometheus_posts_counter = Counter(
             "code_review_posts_total",
             "Total comments posted",
+            registry=_prometheus_registry,
+        )
+        _prometheus_reply_dismissal_counter = Counter(
+            "code_review_reply_dismissal_total",
+            "Reply-dismissal outcomes in review-decision-only runs",
+            ["outcome"],
             registry=_prometheus_registry,
         )
         return True
@@ -208,3 +216,17 @@ def get_prometheus_registry():
         return None
     _init_prometheus()
     return _prometheus_registry if _prometheus_registry not in (None, False) else None
+
+
+def record_reply_dismissal_outcome(outcome: str) -> None:
+    """Increment reply-dismissal counter when Prometheus is enabled (no-op otherwise).
+
+    ``outcome`` is a stable label: agreed, disagreed, parse_failed, llm_error,
+    skipped_no_capability, skipped_insufficient_thread.
+    """
+    if not _init_prometheus():
+        return
+    try:
+        _prometheus_reply_dismissal_counter.labels(outcome=outcome).inc()
+    except Exception as e:
+        logger.debug("Prometheus reply-dismissal record failed: %s", e)

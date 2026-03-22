@@ -4,9 +4,10 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from code_review.diff.parser import parse_unified_diff
+from code_review.schemas.review_thread_dismissal import ReviewThreadDismissalContext
 
 
 def _log_pr_info_warning(
@@ -102,6 +103,11 @@ class ProviderCapabilities(BaseModel):
       (APPROVE / REQUEST_CHANGES).
     - supports_bot_blocking_state_query: provider can report whether the token user
       currently has an active request-changes / needs-work style block (Phase D).
+    - supports_bot_attribution_identity_query: provider can return token/bot SCM identity
+      (login, id, etc.) for matching comments and reviews (Phase E / §5.3).
+    - supports_review_thread_dismissal_context: provider can load ordered thread comments
+      for reply-dismissal classification (Phase E.1).
+    - supports_review_thread_reply: provider can post a reply on an existing review comment.
     """
 
     resolvable_comments: bool = False
@@ -113,11 +119,39 @@ class ProviderCapabilities(BaseModel):
     embed_agent_marker_as_commonmark_linkref: bool = False
     supports_review_decisions: bool = False
     supports_bot_blocking_state_query: bool = False
+    supports_bot_attribution_identity_query: bool = False
+    supports_review_thread_dismissal_context: bool = False
+    supports_review_thread_reply: bool = False
 
 
 ReviewDecision = Literal["APPROVE", "REQUEST_CHANGES"]
 
 BotBlockingState = Literal["BLOCKING", "NOT_BLOCKING", "UNKNOWN"]
+
+
+class BotAttributionIdentity(BaseModel):
+    """SCM identity for the token user / bot used to attribute Viper reviews and comments."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    login: str = Field(
+        default="",
+        description="Normalized lowercase username/login when the API exposes it",
+    )
+    id_str: str = Field(default="", description="Numeric or opaque user id as string")
+    slug: str = Field(default="", description="Bitbucket Server user slug when applicable")
+    uuid: str = Field(
+        default="",
+        description="Bitbucket Cloud uuid (with or without braces) when applicable",
+    )
+
+    def is_resolved(self) -> bool:
+        return bool(
+            (self.login or "").strip()
+            or (self.id_str or "").strip()
+            or (self.slug or "").strip()
+            or (self.uuid or "").strip()
+        )
 
 
 class FileInfo(BaseModel):
@@ -500,6 +534,33 @@ class ProviderInterface(ABC):
             supports_suggestions=False,
             supports_multiline_suggestions=False,
         )
+
+    def get_bot_attribution_identity(
+        self, owner: str, repo: str, pr_number: int
+    ) -> BotAttributionIdentity:
+        """Return SCM identity for the authenticated user (token) when available."""
+        return BotAttributionIdentity()
+
+    def get_review_thread_dismissal_context(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        triggered_comment_id: str,
+    ) -> ReviewThreadDismissalContext | None:
+        """Load ordered thread comments for reply-dismissal; None if unsupported or not found."""
+        return None
+
+    def post_review_thread_reply(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        reply_to_comment_id: str,
+        body: str,
+    ) -> None:
+        """Post a reply on an existing PR review comment (e.g. disagreed dismissal text)."""
+        raise NotImplementedError("post_review_thread_reply not implemented for this provider")
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """

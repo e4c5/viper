@@ -44,7 +44,11 @@ When PR authors push new commits to address comments, the agent re-runs automati
 
 All providers still post **inline comments** and participate in the **quality gate counts** as documented in the README.
 
-For a **code-level inventory**, test coverage, and a phased implementation backlog (GitLab → Bitbucket Server → Bitbucket Cloud), see **[SCM review decisions — implementation plan](SCM-REVIEW-DECISIONS-IMPLEMENTATION-PLAN.md)**.
+### Review-decision-only, reply-dismissal, and thread events
+
+In **review-decision-only** mode (`CODE_REVIEW_REVIEW_DECISION_ONLY` or `--review-decision-only`), the runner recomputes open high/medium counts from the provider and may submit `APPROVE` / `REQUEST_CHANGES` without running the main review agent. Optional **`CODE_REVIEW_REPLY_DISMISSAL_ENABLED`**: for `CODE_REVIEW_EVENT_KIND=reply_added` with a review **comment id**, GitHub and GitLab can load the thread, run a small tool-free LLM to classify the human reply as **agreed** (exclude that thread from the gate for this run) or **disagreed** (post a follow-up on the thread when supported). For **`comment_deleted`**, **`thread_resolved`**, **`thread_outdated`**, or **`scheduled`**, map those kinds in `CODE_REVIEW_EVENT_*` and invoke the same decision-only job: the gate reflects current SCM state only (no reply-dismissal call). See [Configuration reference](CONFIGURATION-REFERENCE.md) §5 and §5.1.
+
+For a **code-level inventory**, test coverage, and the implementation plan checklist, see **[SCM review decisions — implementation plan](SCM-REVIEW-DECISIONS-IMPLEMENTATION-PLAN.md)**.
 
 ---
 

@@ -13,6 +13,7 @@ from code_review.formatters.comment import (
     render_suggestion_block,
 )
 from code_review.providers.base import (
+    BotAttributionIdentity,
     BotBlockingState,
     FileInfo,
     InlineComment,
@@ -31,6 +32,10 @@ from code_review.providers.base import (
 from code_review.providers.bot_blocking_common import blocking_state_from_github_style_reviews
 from code_review.providers.review_decision_common import github_style_pull_review_json
 from code_review.providers.safety import truncate_repo_content
+from code_review.schemas.review_thread_dismissal import (
+    ReviewThreadDismissalContext,
+    ReviewThreadDismissalEntry,
+)
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 DEFAULT_BASE_URL = "https://api.github.com"
@@ -132,6 +137,33 @@ class GitHubProvider(ProviderInterface):
                   body
                   path
                   line
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    _DISMISSAL_THREADS_GQL = """
+    query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              id
+              isResolved
+              isOutdated
+              comments(first: 50) {
+                nodes {
+                  databaseId
+                  body
+                  path
+                  line
+                  createdAt
+                  author { login }
                 }
               }
             }
@@ -400,6 +432,127 @@ class GitHubProvider(ProviderInterface):
         reviews = self._github_list_pull_reviews(owner, repo, pr_number)
         return blocking_state_from_github_style_reviews(reviews, token_login_lower=login)
 
+    def get_bot_attribution_identity(
+        self, owner: str, repo: str, pr_number: int
+    ) -> BotAttributionIdentity:
+        try:
+            data = self._get("/user")
+            if isinstance(data, dict):
+                login = str(data.get("login") or "").strip().lower()
+                uid = str(data.get("id") or "").strip()
+                return BotAttributionIdentity(login=login, id_str=uid)
+        except Exception as e:
+            logger.warning("GitHub get_bot_attribution_identity failed: %s", e)
+        return BotAttributionIdentity()
+
+    def _github_build_dismissal_context_from_thread_node(
+        self, node: dict[str, Any]
+    ) -> ReviewThreadDismissalContext | None:
+        tid = str(node.get("id") or "")
+        if not tid:
+            return None
+        comments_wrap = node.get("comments") or {}
+        cnodes = comments_wrap.get("nodes") if isinstance(comments_wrap, dict) else None
+        if not isinstance(cnodes, list):
+            return None
+        entries: list[ReviewThreadDismissalEntry] = []
+        for c in cnodes:
+            if not isinstance(c, dict):
+                continue
+            auth = c.get("author") if isinstance(c.get("author"), dict) else {}
+            login = str((auth or {}).get("login") or "")
+            entries.append(
+                ReviewThreadDismissalEntry(
+                    comment_id=str(c.get("databaseId") or ""),
+                    author_login=login,
+                    body=str(c.get("body") or ""),
+                    created_at=str(c.get("createdAt") or ""),
+                )
+            )
+        if not entries:
+            return None
+        return ReviewThreadDismissalContext(
+            gate_exclusion_stable_id=f"github:thread:{tid}",
+            entries=entries,
+        )
+
+    def get_review_thread_dismissal_context(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        triggered_comment_id: str,
+    ) -> ReviewThreadDismissalContext | None:
+        """Find the review thread containing the given comment ``databaseId``."""
+        raw = (triggered_comment_id or "").strip()
+        if not raw:
+            return None
+        try:
+            want_id = int(raw)
+        except ValueError:
+            return None
+        cursor: str | None = None
+        seen_end_cursors: set[str] = set()
+        max_pages = 500
+        try:
+            for _ in range(max_pages):
+                variables: dict[str, Any] = {
+                    "owner": owner,
+                    "name": repo,
+                    "number": int(pr_number),
+                    "cursor": cursor,
+                }
+                data = self._graphql(self._DISMISSAL_THREADS_GQL, variables)
+                rt = self._github_graphql_review_threads_container(data)
+                if rt is None:
+                    break
+                for node in rt.get("nodes") or []:
+                    if not isinstance(node, dict):
+                        continue
+                    comments_wrap = node.get("comments") or {}
+                    cnodes = (
+                        comments_wrap.get("nodes") if isinstance(comments_wrap, dict) else None
+                    )
+                    if not isinstance(cnodes, list):
+                        continue
+                    for c in cnodes:
+                        if not isinstance(c, dict):
+                            continue
+                        if int(c.get("databaseId") or 0) == want_id:
+                            return self._github_build_dismissal_context_from_thread_node(node)
+                cursor = self._github_review_threads_advance_cursor(
+                    rt, seen_end_cursors, owner, repo, pr_number
+                )
+                if cursor is None:
+                    break
+        except Exception as e:
+            logger.warning(
+                "GitHub get_review_thread_dismissal_context failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
+        return None
+
+    def post_review_thread_reply(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        reply_to_comment_id: str,
+        body: str,
+    ) -> None:
+        try:
+            rid = int((reply_to_comment_id or "").strip())
+        except ValueError as e:
+            raise ValueError("GitHub reply_to_comment_id must be numeric") from e
+        self._post(
+            f"/repos/{owner}/{repo}/pulls/{pr_number}/comments",
+            {"body": body, "in_reply_to": rid},
+        )
+
     def submit_review_decision(
         self,
         owner: str,
@@ -454,4 +607,7 @@ class GitHubProvider(ProviderInterface):
             supports_multiline_suggestions=True,
             supports_review_decisions=True,
             supports_bot_blocking_state_query=True,
+            supports_bot_attribution_identity_query=True,
+            supports_review_thread_dismissal_context=True,
+            supports_review_thread_reply=True,
         )

@@ -9,6 +9,7 @@ import httpx
 from code_review.diff.parser import parse_unified_diff
 from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.base import (
+    BotAttributionIdentity,
     BotBlockingState,
     FileInfo,
     InlineComment,
@@ -778,6 +779,14 @@ class BitbucketServerProvider(ProviderInterface):
             return "NOT_BLOCKING"
         return "NOT_BLOCKING"
 
+    def get_bot_attribution_identity(
+        self, owner: str, repo: str, pr_number: int
+    ) -> BotAttributionIdentity:
+        slug = (self._participant_user_slug or "").strip().lower()
+        if slug:
+            return BotAttributionIdentity(slug=slug)
+        return BotAttributionIdentity()
+
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title and description for skip-review. Labels from Server may vary."""
         try:
@@ -817,4 +826,5 @@ class BitbucketServerProvider(ProviderInterface):
             embed_agent_marker_as_commonmark_linkref=True,
             supports_review_decisions=bool(self._participant_user_slug),
             supports_bot_blocking_state_query=bool(self._participant_user_slug),
+            supports_bot_attribution_identity_query=bool(self._participant_user_slug),
         )

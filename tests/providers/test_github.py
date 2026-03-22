@@ -323,3 +323,71 @@ def test_get_unresolved_review_items_graphql_failure_returns_empty(mock_client):
     items = p.get_unresolved_review_items_for_quality_gate("o", "r", 1)
     assert items == []
     mock_client.return_value.__enter__.return_value.get.assert_not_called()
+
+
+@patch("code_review.providers.github.GitHubProvider._graphql")
+def test_get_review_thread_dismissal_context_finds_thread(mock_gql):
+    mock_gql.return_value = {
+        "repository": {
+            "pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [
+                        {
+                            "id": "PRRT_kwDOABC",
+                            "isResolved": False,
+                            "isOutdated": False,
+                            "comments": {
+                                "nodes": [
+                                    {
+                                        "databaseId": 100,
+                                        "body": "[High] x",
+                                        "path": "a.py",
+                                        "line": 1,
+                                        "createdAt": "t1",
+                                        "author": {"login": "bot"},
+                                    },
+                                    {
+                                        "databaseId": 200,
+                                        "body": "fixed",
+                                        "path": "a.py",
+                                        "line": 1,
+                                        "createdAt": "t2",
+                                        "author": {"login": "dev"},
+                                    },
+                                ]
+                            },
+                        }
+                    ],
+                }
+            }
+        }
+    }
+    p = GitHubProvider("https://api.github.com", "tok")
+    ctx = p.get_review_thread_dismissal_context("o", "r", 1, "200")
+    assert ctx is not None
+    assert ctx.gate_exclusion_stable_id == "github:thread:PRRT_kwDOABC"
+    assert len(ctx.entries) == 2
+
+
+@patch("code_review.providers.github.httpx.Client")
+def test_get_bot_attribution_identity_github(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {"login": "MyBot", "id": 42}
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    bid = p.get_bot_attribution_identity("o", "r", 1)
+    assert bid.login == "mybot"
+    assert bid.id_str == "42"
+
+
+@patch.object(GitHubProvider, "_post")
+def test_post_review_thread_reply_github(mock_post):
+    p = GitHubProvider("https://api.github.com", "tok")
+    p.post_review_thread_reply("o", "r", 1, "99", "hello")
+    mock_post.assert_called_once_with(
+        "/repos/o/r/pulls/1/comments",
+        {"body": "hello", "in_reply_to": 99},
+    )

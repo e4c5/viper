@@ -12,6 +12,7 @@
 //   When PR_ACTION matches, this pipeline runs `code-review --review-decision-only`; SCM_HEAD_SHA may be
 //   empty (resolved via API). Set SCM_REVIEW_DECISION_ENABLED on the job so submission runs.
 //   Optional: map payload fields into CODE_REVIEW_EVENT_* for audit logs (see docs/CONFIGURATION-REFERENCE.md).
+//   Optional: CODE_REVIEW_REPLY_DISMISSAL_ENABLED=true on GitHub/GitLab for reply_added events (LLM + gate exclusion / thread reply).
 //
 // Self-contained; no load. Pipeline script from SCM (Script Path: docker/jenkins/Jenkinsfile) or paste inline.
 

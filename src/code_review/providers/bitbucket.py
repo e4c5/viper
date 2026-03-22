@@ -5,6 +5,7 @@ from typing import Any
 
 from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.base import (
+    BotAttributionIdentity,
     BotBlockingState,
     FileInfo,
     InlineComment,
@@ -334,6 +335,19 @@ class BitbucketProvider(ProviderInterface):
             return "UNKNOWN"
         return "NOT_BLOCKING"
 
+    def get_bot_attribution_identity(
+        self, owner: str, repo: str, pr_number: int
+    ) -> BotAttributionIdentity:
+        try:
+            me = self._get(f"{self._base_url}/user")
+            if isinstance(me, dict):
+                uid = str(me.get("uuid") or "").strip()
+                login = str(me.get("username") or "").strip().lower()
+                return BotAttributionIdentity(login=login, uuid=uid)
+        except Exception as e:
+            logger.warning("Bitbucket Cloud get_bot_attribution_identity failed: %s", e)
+        return BotAttributionIdentity()
+
     def submit_review_decision(
         self,
         owner: str,
@@ -465,4 +479,5 @@ class BitbucketProvider(ProviderInterface):
             embed_agent_marker_as_commonmark_linkref=True,
             supports_review_decisions=True,
             supports_bot_blocking_state_query=True,
+            supports_bot_attribution_identity_query=True,
         )

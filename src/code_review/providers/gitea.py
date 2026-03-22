@@ -9,6 +9,7 @@ import httpx
 from code_review.diff.position import get_diff_hunk_for_line
 from code_review.formatters.comment import render_suggestion_block
 from code_review.providers.base import (
+    BotAttributionIdentity,
     BotBlockingState,
     FileInfo,
     InlineComment,
@@ -256,6 +257,19 @@ class GiteaProvider(ProviderInterface):
             return "UNKNOWN"
         return blocking_state_from_github_style_reviews(reviews, token_login_lower=login)
 
+    def get_bot_attribution_identity(
+        self, owner: str, repo: str, pr_number: int
+    ) -> BotAttributionIdentity:
+        try:
+            data = self._get("/user")
+            if isinstance(data, dict):
+                login = str(data.get("login") or "").strip().lower()
+                uid = str(data.get("id") or "").strip()
+                return BotAttributionIdentity(login=login, id_str=uid)
+        except Exception as e:
+            logger.warning("Gitea get_bot_attribution_identity failed: %s", e)
+        return BotAttributionIdentity()
+
     def submit_review_decision(
         self,
         owner: str,
@@ -365,4 +379,5 @@ class GiteaProvider(ProviderInterface):
             supports_suggestions=True,
             supports_review_decisions=True,
             supports_bot_blocking_state_query=True,
+            supports_bot_attribution_identity_query=True,
         )

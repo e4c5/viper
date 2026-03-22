@@ -17,7 +17,7 @@ from litellm import AuthenticationError
 
 import code_review
 from code_review import observability
-from code_review.agent import create_review_agent
+from code_review.agent import create_review_agent, reply_dismissal_verdict_from_llm_text
 from code_review.config import (
     get_code_review_app_config,
     get_context_aware_config,
@@ -45,6 +45,7 @@ from code_review.formatters.comment import finding_to_comment_body
 from code_review.models import get_context_window
 from code_review.providers import get_provider
 from code_review.providers.base import (
+    BotAttributionIdentity,
     InlineComment,
     RateLimitError,
     ReviewDecision,
@@ -56,6 +57,7 @@ from code_review.schemas.review_decision_event import (
     event_allows_decision_only_skip_when_bot_not_blocking,
     review_decision_event_context_from_env,
 )
+from code_review.schemas.review_thread_dismissal import ReviewThreadDismissalContext
 from code_review.standards import detect_from_paths, get_review_standards
 
 APP_NAME = "code_review"
@@ -892,6 +894,8 @@ def _quality_gate_high_medium_counts(
     repo: str,
     pr_number: int,
     to_post: list[tuple[FindingV1, str]],
+    *,
+    excluded_stable_ids: frozenset[str] | None = None,
 ) -> tuple[int, int]:
     """Count distinct open high/medium signals: existing unresolved items plus net-new findings."""
     try:
@@ -907,6 +911,8 @@ def _quality_gate_high_medium_counts(
         items = []
     if not isinstance(items, list):
         items = []
+
+    skip_ids = excluded_stable_ids or frozenset()
 
     seen_keys: set[str] = set()
     high_count = 0
@@ -924,6 +930,8 @@ def _quality_gate_high_medium_counts(
 
     for raw in items:
         if not isinstance(raw, UnresolvedReviewItem):
+            continue
+        if raw.stable_id in skip_ids:
             continue
         sev = raw.inferred_severity
         if sev not in ("high", "medium"):
@@ -969,10 +977,17 @@ def _compute_quality_gate_review_outcome(
     pr_number: int,
     to_post: list[tuple[FindingV1, str]],
     cfg,
+    *,
+    excluded_gate_stable_ids: frozenset[str] | None = None,
 ) -> QualityGateReviewOutcome:
     """Combine provider unresolved items with planned posts; apply thresholds; build reason text."""
     high_count, medium_count = _quality_gate_high_medium_counts(
-        provider, owner, repo, pr_number, to_post
+        provider,
+        owner,
+        repo,
+        pr_number,
+        to_post,
+        excluded_stable_ids=excluded_gate_stable_ids,
     )
     high_threshold = int(getattr(cfg, "review_decision_high_threshold", 1))
     medium_threshold = int(getattr(cfg, "review_decision_medium_threshold", 3))
@@ -1264,6 +1279,45 @@ def _run_agent_and_collect_response(
 ) -> str:
     """Run agent once and return concatenated final response text (uses async API)."""
     return asyncio.run(_collect_response_async(runner, session_service, session_id, content))
+
+
+def _format_reply_dismissal_user_message(
+    ctx: ReviewThreadDismissalContext,
+    bot: BotAttributionIdentity,
+) -> str:
+    """Build the user message for the reply-dismissal agent."""
+    who = (bot.login or bot.slug or bot.id_str or bot.uuid or "").strip() or "(unknown)"
+    lines = [
+        "Classify this single pull-request review thread.",
+        f"Automated reviewer identity hint (token user): {who}",
+        "",
+        "Thread comments in chronological order:",
+    ]
+    for i, ent in enumerate(ctx.entries, start=1):
+        lines.append(f"--- Comment {i} ---")
+        lines.append(f"Author: {(ent.author_login or '').strip() or '(unknown)'}")
+        lines.append(ent.body or "")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _run_reply_dismissal_llm(user_message: str) -> str:
+    """Run the tool-free reply-dismissal agent once; return raw model text."""
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+
+    from code_review.agent.reply_dismissal_agent import create_reply_dismissal_agent
+
+    agent = create_reply_dismissal_agent()
+    session_service = InMemorySessionService()
+    runner = Runner(
+        agent=agent,
+        app_name=APP_NAME,
+        session_service=session_service,
+    )
+    session_id = f"reply-dismissal/{uuid.uuid4().hex[:12]}"
+    content = types.Content(role="user", parts=[types.Part(text=user_message)])
+    return _run_agent_and_collect_response(runner, session_service, session_id, content)
 
 
 class ReviewOrchestrator:
@@ -2034,6 +2088,18 @@ class ReviewOrchestrator:
 
         app_cfg = get_code_review_app_config()
         if (
+            self._event_context is not None
+            and self._event_context.has_audit_fields()
+            and self._event_context.event_kind
+            in ("comment_deleted", "thread_resolved", "thread_outdated", "scheduled")
+        ):
+            logger.info(
+                "Review-decision-only: event_kind=%s — recomputing gate from SCM state only "
+                "(no reply-dismissal LLM)",
+                self._event_context.event_kind,
+            )
+
+        if (
             app_cfg.review_decision_only_skip_if_bot_not_blocking
             and event_allows_decision_only_skip_when_bot_not_blocking(self._event_context)
         ):
@@ -2074,8 +2140,86 @@ class ReviewOrchestrator:
                 "submit_review_decision may omit commit id for some SCMs."
             )
 
+        excluded_gate: frozenset[str] = frozenset()
+        if (
+            app_cfg.reply_dismissal_enabled
+            and self._event_context is not None
+            and self._event_context.event_kind == "reply_added"
+            and (self._event_context.comment_id or "").strip()
+        ):
+            caps_rd = provider.capabilities()
+            if not caps_rd.supports_review_thread_dismissal_context:
+                observability.record_reply_dismissal_outcome("skipped_no_capability")
+            else:
+                dctx = provider.get_review_thread_dismissal_context(
+                    owner,
+                    repo,
+                    pr_number,
+                    self._event_context.comment_id.strip(),
+                )
+                if dctx is None or len(dctx.entries) < 2:
+                    observability.record_reply_dismissal_outcome("skipped_insufficient_thread")
+                else:
+                    bot_id = provider.get_bot_attribution_identity(owner, repo, pr_number)
+                    user_msg = _format_reply_dismissal_user_message(dctx, bot_id)
+                    llm_failed = False
+                    try:
+                        raw_verdict = _run_reply_dismissal_llm(user_msg)
+                    except Exception as e:
+                        logger.warning("Reply-dismissal LLM run failed: %s", e)
+                        observability.record_reply_dismissal_outcome("llm_error")
+                        llm_failed = True
+                        raw_verdict = ""
+                    if not llm_failed:
+                        verdict = reply_dismissal_verdict_from_llm_text(raw_verdict)
+                        if verdict is None:
+                            observability.record_reply_dismissal_outcome("parse_failed")
+                        else:
+                            logger.info(
+                                "reply_dismissal_verdict trace_id=%s verdict=%s pr=%s/%s#%s",
+                                trace_id,
+                                verdict.verdict,
+                                owner,
+                                repo,
+                                pr_number,
+                            )
+                            if verdict.verdict == "agreed":
+                                observability.record_reply_dismissal_outcome("agreed")
+                                excluded_gate = frozenset({dctx.gate_exclusion_stable_id})
+                                logger.info(
+                                    "Reply-dismissal agreed; excluding gate stable_id=%s",
+                                    dctx.gate_exclusion_stable_id,
+                                )
+                            elif verdict.verdict == "disagreed":
+                                observability.record_reply_dismissal_outcome("disagreed")
+                                if caps_rd.supports_review_thread_reply:
+                                    if dry_run:
+                                        truncated = (verdict.reply_text or "")[:500]
+                                        logger.info(
+                                            "Dry-run: would post review-thread reply "
+                                            "(truncated): %s",
+                                            truncated,
+                                        )
+                                    else:
+                                        try:
+                                            provider.post_review_thread_reply(
+                                                owner,
+                                                repo,
+                                                pr_number,
+                                                self._event_context.comment_id.strip(),
+                                                verdict.reply_text,
+                                            )
+                                        except Exception as e:
+                                            logger.warning("post_review_thread_reply failed: %s", e)
+
         gate_outcome = _compute_quality_gate_review_outcome(
-            provider, owner, repo, pr_number, [], cfg
+            provider,
+            owner,
+            repo,
+            pr_number,
+            [],
+            cfg,
+            excluded_gate_stable_ids=excluded_gate if excluded_gate else None,
         )
         _maybe_submit_review_decision(
             provider,

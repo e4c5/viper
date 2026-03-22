@@ -282,6 +282,16 @@ class CodeReviewAppConfig(BaseSettings):
             "No effect when event context is empty or for non-reply events."
         ),
     )
+    reply_dismissal_enabled: bool = Field(
+        default=False,
+        validation_alias="CODE_REVIEW_REPLY_DISMISSAL_ENABLED",
+        description=(
+            "Review-decision-only: when event_kind is reply_added and CODE_REVIEW_EVENT_COMMENT_ID "
+            "is set, run the reply-dismissal LLM on the thread (GitHub/GitLab when supported); "
+            "if agreed, exclude that thread from quality-gate counts; if disagreed, optionally "
+            "post a thread reply when the provider supports it."
+        ),
+    )
 
 
 def get_scm_config() -> SCMConfig:

@@ -12,6 +12,7 @@ from code_review.formatters.comment import (
     render_suggestion_block,
 )
 from code_review.providers.base import (
+    BotAttributionIdentity,
     BotBlockingState,
     FileInfo,
     InlineComment,
@@ -35,6 +36,10 @@ from code_review.providers.review_decision_common import (
     gitlab_note_with_submit_review_requested_changes,
 )
 from code_review.providers.safety import truncate_repo_content
+from code_review.schemas.review_thread_dismissal import (
+    ReviewThreadDismissalContext,
+    ReviewThreadDismissalEntry,
+)
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 logger = logging.getLogger(__name__)
@@ -476,6 +481,121 @@ class GitLabProvider(ProviderInterface):
             payload["title"] = title
         self._put(path, payload)
 
+    def get_bot_attribution_identity(
+        self, owner: str, repo: str, pr_number: int
+    ) -> BotAttributionIdentity:
+        try:
+            data = self._get(f"{self._base_url}/user")
+            if isinstance(data, dict):
+                login = str(data.get("username") or "").strip().lower()
+                uid = str(data.get("id") or "").strip()
+                return BotAttributionIdentity(login=login, id_str=uid)
+        except Exception as e:
+            logger.warning("GitLab get_bot_attribution_identity failed: %s", e)
+        return BotAttributionIdentity()
+
+    def _gitlab_discussion_id_for_note_id(
+        self, owner: str, repo: str, pr_number: int, note_id: str
+    ) -> str:
+        want = (note_id or "").strip()
+        if not want:
+            return ""
+        try:
+            data = self._get_mr_discussions_paginated(owner, repo, pr_number)
+        except Exception as e:
+            logger.warning(
+                "GitLab discussion lookup failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return ""
+        for disc in data:
+            if not isinstance(disc, dict):
+                continue
+            did = str(disc.get("id") or "")
+            for n in disc.get("notes") or []:
+                if isinstance(n, dict) and str(n.get("id") or "") == want:
+                    return did
+        return ""
+
+    def get_review_thread_dismissal_context(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        triggered_comment_id: str,
+    ) -> ReviewThreadDismissalContext | None:
+        want = (triggered_comment_id or "").strip()
+        if not want:
+            return None
+        try:
+            data = self._get_mr_discussions_paginated(owner, repo, pr_number)
+        except Exception as e:
+            logger.warning(
+                "GitLab get_review_thread_dismissal_context failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
+        for disc in data:
+            if not isinstance(disc, dict):
+                continue
+            did = str(disc.get("id") or "")
+            notes = disc.get("notes") or []
+            if not isinstance(notes, list):
+                continue
+            hit = False
+            for n in notes:
+                if isinstance(n, dict) and str(n.get("id") or "") == want:
+                    hit = True
+                    break
+            if not hit:
+                continue
+            entries: list[ReviewThreadDismissalEntry] = []
+            for n in notes:
+                if not isinstance(n, dict):
+                    continue
+                author = n.get("author") if isinstance(n.get("author"), dict) else {}
+                uname = str(author.get("username") or author.get("name") or "")
+                entries.append(
+                    ReviewThreadDismissalEntry(
+                        comment_id=str(n.get("id") or ""),
+                        author_login=uname,
+                        body=str(n.get("body") or ""),
+                        created_at=str(n.get("created_at") or ""),
+                    )
+                )
+            if len(entries) < 2:
+                return None
+            stable = f"gitlab:discussion:{did}" if did else f"gitlab:discussion:{pr_number}"
+            return ReviewThreadDismissalContext(
+                gate_exclusion_stable_id=stable,
+                entries=entries,
+            )
+        return None
+
+    def post_review_thread_reply(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        reply_to_comment_id: str,
+        body: str,
+    ) -> None:
+        disc_id = self._gitlab_discussion_id_for_note_id(
+            owner, repo, pr_number, reply_to_comment_id
+        )
+        if not disc_id:
+            raise ValueError(f"No GitLab discussion for note id {reply_to_comment_id!r}")
+        path = self._path(
+            owner, repo, "merge_requests", str(pr_number), "discussions", disc_id, "notes"
+        )
+        self._post(path, {"body": body})
+
     def capabilities(self) -> ProviderCapabilities:
         """
         Return provider capability flags for GitLab.
@@ -489,4 +609,7 @@ class GitLabProvider(ProviderInterface):
             supports_multiline_suggestions=True,
             supports_review_decisions=True,
             supports_bot_blocking_state_query=True,
+            supports_bot_attribution_identity_query=True,
+            supports_review_thread_dismissal_context=True,
+            supports_review_thread_reply=True,
         )

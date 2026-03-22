@@ -24,17 +24,19 @@ Follow **single responsibility**, established patterns, and **reuse** shared inf
   - Bitbucket Server/DC: unresolved inline comments plus open PR tasks.
 - Tests already cover the implemented baseline in [`tests/test_runner.py`](../tests/test_runner.py), [`tests/config/test_config.py`](../tests/config/test_config.py), [`tests/providers/test_review_decision_common.py`](../tests/providers/test_review_decision_common.py), and provider-specific test modules.
 
-### 0.2 Confirmed gaps (updated after Phases A–D)
+### 0.2 Confirmed gaps (updated after Phases A–E)
 
-**Still open**
+**Still open (by design / follow-up)**
 
-- There is **no** reply-dismissal agent, reply classification schema, or runner path for classifying user replies (Phase E).
-- There is **no** named `get_bot_attribution_identity`-style abstraction yet (§5.3); blocking state uses provider-specific token-user identity.
-- Item deletion / outdated / resolved transitions are modeled in `ReviewDecisionEventContext` and can drive decision-only runs when CI invokes them; **no** new automatic SCM subscription logic lives in this repo.
+- **No in-repo webhook receiver** — CI must map SCM payloads to `CODE_REVIEW_EVENT_*` and invoke `code-review --review-decision-only`.
+- **Reply-dismissal thread context and thread replies** are implemented only for **GitHub** and **GitLab** (`supports_review_thread_dismissal_context` / `supports_review_thread_reply`). Gitea, Bitbucket Cloud, and Bitbucket Server/DC expose bot identity where applicable but not dismissal context or replies yet.
+- **Batch/scheduled** reply-dismissal (cap LLM calls per run, classify only new replies) is not implemented; `scheduled` event kind recomputes the gate from SCM only.
 
 **Addressed (see §8 checklist)**
 
-- Review-decision-only mode, shared gate helper, event context model, tri-state `get_bot_blocking_state`, optional short-circuit (`CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING`), head SHA resolution, Jenkins decision-only branch, and config/docs updates.
+- Phases A–D: review-decision-only mode, shared gate helper, event context, `get_bot_blocking_state`, skip-if-not-blocking, head SHA resolution, Jenkins decision-only branch.
+- Phase E (core): `BotAttributionIdentity`, `get_bot_attribution_identity`, `get_review_thread_dismissal_context`, reply-dismissal LLM + runner gate exclusion + `post_review_thread_reply` (GitHub/GitLab), `CODE_REVIEW_REPLY_DISMISSAL_ENABLED`, structured logs and `code_review_reply_dismissal_total` Prometheus counter (`outcome` label).
+- Companion docs: README, CONFIGURATION-REFERENCE, SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING, Jenkinsfile header comment.
 
 ### 0.3 Corrections to earlier wording
 
@@ -75,11 +77,8 @@ Adding a **new** SCM still means: implement `submit_review_decision`, set `suppo
 Implemented on `ProviderInterface` / `ProviderCapabilities`:
 
 - **Bot blocking state:** `get_bot_blocking_state(...) -> BotBlockingState` and `supports_bot_blocking_state_query` (GitHub, Gitea, GitLab, Bitbucket Cloud, Bitbucket Server/DC when slug is set).
-
-Still not on the interface (planned / Phase E):
-
-- **Bot attribution identity** as a dedicated typed value (§5.3) — distinct from token-user lookups used for blocking state today.
-- **Thread/reply classification input** for the reply-dismissal agent.
+- **Bot attribution:** `get_bot_attribution_identity(...) -> BotAttributionIdentity` and `supports_bot_attribution_identity_query` (all providers; Bitbucket Server uses configured slug only).
+- **Reply-dismissal:** `get_review_thread_dismissal_context(...)`, `post_review_thread_reply(...)`, capability flags `supports_review_thread_dismissal_context`, `supports_review_thread_reply` (true only where implemented — GitHub/GitLab for both).
 
 **Event context:** `ReviewDecisionEventContext` plus `CODE_REVIEW_EVENT_*` env parsing (`review_decision_event_context_from_env`) supplies a provider-neutral webhook/CI surface.
 
@@ -103,16 +102,14 @@ Tests: `tests/providers/test_github.py`, `tests/providers/test_gitea.py`, `tests
 
 Today, review-decision recomputation happens only at the **end of a full review run**. That is fine when authors push a new commit and CI reruns the full pipeline. It is not enough when the PR state changes through **discussion activity only**.
 
-Confirmed gaps:
+Historical gaps (this section described the pre–Phase A–E state). **As implemented today:**
 
-1. **No comment-driven trigger path**. The bundled Jenkins pipeline only allows push-style PR actions. Resolving a thread, deleting a comment, or replying to a finding does not currently invoke any decision-only logic.
-2. **No decision-only orchestration path**. The code only has the full review flow. There is no runner branch that skips the code-review agent and only recomputes the gate.
-3. **No “only if bot is blocking” optimization**. There is no provider API to ask whether the bot currently has an active blocking state on the PR/MR.
-4. **No transition handling for accepted replies, deleted comments, or outdated threads**. Today there is no dedicated decision-only path for the cases where a blocking review item should stop counting because:
-   - a human reply is accepted by the reply-dismissal flow
-   - the underlying review comment or thread is deleted by someone with sufficient access
-   - the SCM marks the thread outdated / no longer applicable
-   In all three cases, the required follow-up is the same: recompute the gate from current SCM state and decide whether the bot should transition back to `APPROVE`.
+- **Comment-driven / decision-only** runs are supported via CLI `--review-decision-only` / `CODE_REVIEW_REVIEW_DECISION_ONLY` and Jenkins `CODE_REVIEW_JENKINS_DECISION_ONLY_ACTIONS` (see §8).
+- **Bot blocking** short-circuit uses `get_bot_blocking_state` and `CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING`.
+- **Transitions:** `comment_deleted`, `thread_resolved`, `thread_outdated`, `scheduled` → decision-only recomputes the gate from the provider’s unresolved view (no reply-dismissal LLM). **`reply_added`** with `CODE_REVIEW_REPLY_DISMISSAL_ENABLED` may run the reply-dismissal path on GitHub/GitLab when thread context is available.
+
+Remaining design questions:
+
 5. **Head SHA and side-effect handling are underspecified for comment-only runs**. A decision-only path will need a safe answer for:
    - missing or stale `head_sha`
    - whether omit-marker PR summary comments should be skipped
@@ -297,12 +294,8 @@ Use a **separate agent** from the code review agent.
   - author metadata
   - timestamps / ordering
   - enough SCM state to tell whether a previously blocking item has been deleted, resolved, or marked outdated
-- Recommended first implementations:
-  - **GitHub**: thread comments from GraphQL
-  - **GitLab**: discussion notes
-  - **Bitbucket Server/DC**: activities/comments if enough thread data exists
-  - **Gitea**: only after verifying thread/reply APIs
-  - **Bitbucket Cloud**: keep tasks-first until richer reply semantics are proven
+- **Implemented:** `ReviewThreadDismissalContext` / `get_review_thread_dismissal_context` on **GitHub** (GraphQL review threads + `databaseId`) and **GitLab** (MR discussions; requires ≥2 notes). Delete/resolved/outdated: recomputed via existing quality-gate unresolved-item queries, not a separate “detection” fetcher.
+- **Not yet:** Bitbucket Server/DC, Gitea, Bitbucket Cloud thread context for reply-dismissal (capabilities false; default `NotImplementedError` / empty).
 
 #### E.2 Reply-dismissal agent
 
@@ -320,7 +313,7 @@ Use a **separate agent** from the code review agent.
 
 - Validate with Pydantic before the runner acts on it.
 
-**Implemented (skeleton):** `src/code_review/schemas/reply_dismissal.py` (`ReplyDismissalVerdictV1`), `create_reply_dismissal_agent()`, and `reply_dismissal_verdict_from_llm_text()` for fenced/raw JSON. **Not wired:** runner / E.3 gate integration or SCM posting of `reply_text`.
+**Implemented:** `ReplyDismissalVerdictV1`, `create_reply_dismissal_agent()`, `reply_dismissal_verdict_from_llm_text()`, and **runner wiring** in `_run_review_decision_only` when `CODE_REVIEW_REPLY_DISMISSAL_ENABLED` and `event_kind=reply_added` (see E.3).
 
 #### E.3 Gate integration
 
@@ -329,14 +322,17 @@ Use a **separate agent** from the code review agent.
   - run classification once
   - if `agreed`, exclude that thread from the gate counts for this recomputation
   - if `disagreed`, keep the thread in counts and pass `reply_text` to the SCM posting layer
+- **Implemented (single-thread, single LLM call per run):** `CODE_REVIEW_EVENT_COMMENT_ID` + `reply_added` + dismissal context with ≥2 entries → exclude `gate_exclusion_stable_id` on `agreed`; on `disagreed`, `post_review_thread_reply` when supported (GitHub/GitLab) and not dry-run.
 - On a delete / outdated / resolved webhook:
   - do **not** run reply classification
   - recompute the gate from current SCM state after the item disappears from, or is excluded by, the provider's unresolved-item view
   - if counts now fall below threshold, transition the bot back to `APPROVE`
+- **Implemented:** map `CODE_REVIEW_EVENT_KIND` to `comment_deleted` / `thread_outdated` / `thread_resolved` / `scheduled`; runner logs and skips reply-dismissal LLM.
 - On batch/scheduled runs:
   - classify only candidate threads that have new human replies after the bot comment
   - treat deleted or outdated items as ordinary state removals from the unresolved set
   - cap the number of LLM calls per run
+- **Not implemented:** batch classification and per-run LLM caps.
 
 #### E.4 Operational behavior
 
@@ -345,11 +341,12 @@ Use a **separate agent** from the code review agent.
 - Log delete / outdated / resolved recomputation paths distinctly from reply-classification paths.
 - In dry-run mode, log the would-be `reply_text` instead of posting it.
 - Keep prompt stance pragmatic rather than adversarial.
+- **Implemented:** structured `logger.info` for verdicts and path distinction; Prometheus `code_review_reply_dismissal_total{outcome=...}` when `CODE_REVIEW_METRICS=prometheus` (outcomes: `agreed`, `disagreed`, `parse_failed`, `llm_error`, `skipped_no_capability`, `skipped_insufficient_thread`).
 
 ### Phase F — Docs, observability, and cleanup
 
-- Update [SCM review decisions and merge blocking](SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md).
-- Update `README.md` so provider semantics match the real implementation.
+- Update [SCM review decisions and merge blocking](SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md). **Done** (reply-dismissal subsection).
+- Update `README.md` so provider semantics match the real implementation. **Done** (reply-dismissal blurb).
 - Log clearly when a run is:
   - full review
   - review-decision-only
@@ -358,7 +355,7 @@ Use a **separate agent** from the code review agent.
 - Add metrics or structured logs for:
   - decision-only runs
   - blocking-state skips
-  - reply-dismissal verdict counts
+  - reply-dismissal verdict counts — **`code_review_reply_dismissal_total`** (Prometheus)
   - provider/API fallbacks
 
 ---
@@ -369,13 +366,15 @@ Use a **separate agent** from the code review agent.
 |------|------|
 | `src/code_review/runner.py` | review-decision aggregation, submission, and orchestrator flow |
 | `src/code_review/__main__.py` | CLI overrides; `--review-decision-only` |
-| `src/code_review/config.py` | `SCMConfig` review-decision fields; `CodeReviewAppConfig` for decision-only and skip-if-not-blocking |
-| `src/code_review/providers/base.py` | `ReviewDecision`, `UnresolvedReviewItem`, `BotBlockingState`, `get_bot_blocking_state` |
+| `src/code_review/config.py` | `SCMConfig` review-decision fields; `CodeReviewAppConfig` for decision-only, skip-if-not-blocking, `reply_dismissal_enabled` |
+| `src/code_review/providers/base.py` | `ReviewDecision`, `UnresolvedReviewItem`, `BotBlockingState`, `BotAttributionIdentity`, `get_bot_blocking_state`, `get_bot_attribution_identity`, `get_review_thread_dismissal_context`, `post_review_thread_reply` |
 | `src/code_review/schemas/review_decision_event.py` | `ReviewDecisionEventContext`, env loader, skip-eligibility helper |
 | `src/code_review/schemas/reply_dismissal.py` | `ReplyDismissalVerdictV1` — reply-dismissal agent JSON contract |
+| `src/code_review/schemas/review_thread_dismissal.py` | `ReviewThreadDismissalContext` — thread entries for dismissal LLM input |
+| `src/code_review/observability.py` | Prometheus `code_review_reply_dismissal_total`; optional OTel |
 | `src/code_review/providers/review_decision_common.py` | shared helpers for review-decision submission |
-| `src/code_review/providers/github.py` | thread-based gate; strong candidate for first reply-dismissal implementation |
-| `src/code_review/providers/gitlab.py` | discussion-based gate; strong candidate for first reply-dismissal implementation |
+| `src/code_review/providers/github.py` | thread-based gate; `get_review_thread_dismissal_context`, `post_review_thread_reply` |
+| `src/code_review/providers/gitlab.py` | discussion-based gate; dismissal context + thread reply |
 | `src/code_review/providers/gitea.py` | comment-based gate; thread support must be validated before dismissal work |
 | `src/code_review/providers/bitbucket.py` | task-first gate; likely partial/late reply-dismissal support |
 | `src/code_review/providers/bitbucket_server.py` | inline-comment + task gate; participant status for blocking + review decisions |
@@ -392,23 +391,21 @@ Use a **separate agent** from the code review agent.
 
 **How to use this list:** check boxes track **repository** work. Keep this section updated when phases land so it stays the rollout ledger.
 
-**Phases A–D (as implemented):** items **1–5**, **7**, and **8** are done. **6** is still open (blocking state uses token-user/review APIs per provider, not a shared `get_bot_attribution_identity` type). **9** is only partial: event kinds exist and CI can call decision-only with `CODE_REVIEW_EVENT_KIND`; there is no new in-repo webhook receiver. **13** is partial (`docs/CONFIGURATION-REFERENCE.md`, `docs/GITHUB-ACTIONS.md`, Jenkinsfile comments; Phase F remains for merge-blocking doc parity and richer observability).
-
-**Phase E.2 (partial):** `ReplyDismissalVerdictV1`, `create_reply_dismissal_agent()`, and `reply_dismissal_verdict_from_llm_text()` are in-repo; checklist **11** stays open until runner integration (E.3) and optional SCM posting (**12**).
+**Status (2026-03-22):** Items **1–13** are **done** for the scoped implementation below. Follow-ups: in-repo webhook receiver (still external), batch reply-dismissal + LLM caps, thread dismissal on Gitea / Bitbucket providers, and optional rate limits on `post_review_thread_reply`.
 
 1. [x] Extract a shared runner helper for `high_count`, `medium_count`, `decision`, and `reason`, and reuse it from both `_maybe_submit_review_decision(...)` and `_optional_quality_gate_summary_suffix(...)`.
 2. [x] Add tests for the shared helper so future review modes do not drift in threshold or dedupe behavior.
 3. [x] Introduce a provider-neutral `ReviewDecisionEventContext` model and thread it through `ReviewOrchestrator`.
 4. [x] Add a review-decision-only mode in CLI and config, implemented inside the orchestrator and intentionally skipping agent execution, inline posting, stale-resolution, and omit-marker PR summary comments.
 5. [x] Define how decision-only runs obtain `head_sha` when the triggering event does not provide one, and implement provider support if a fetch is required.
-6. [ ] Add a bot-attribution identity abstraction to providers (`get_bot_attribution_identity` or equivalent per §5.3) so later work can reliably distinguish Viper’s comments/reviews from human replies.
+6. [x] Add a bot-attribution identity abstraction to providers (`get_bot_attribution_identity` → `BotAttributionIdentity` per §5.3).
 7. [x] Add a tri-state provider API for “is the bot currently blocking this PR/MR?” and use it to short-circuit decision-only runs when safe.
 8. [x] Update Jenkins and other trigger docs/examples so comment/discussion events can invoke review-decision-only runs.
-9. [ ] Extend provider event/context handling so review-item deletion, thread resolution, and thread outdated transitions also trigger decision-only recomputation.
-10. [ ] Implement provider fetchers for reply-thread context and deleted/outdated-item detection, starting with GitHub and GitLab.
-11. [ ] Add the reply-dismissal agent, schema validation, and runner integration for single-reply classification.
-12. [ ] Add optional SCM follow-up posting for `disagreed` verdicts, with dry-run logging and rate limits.
-13. [ ] Update companion docs and observability so the new behavior, provider limitations, and fallback paths are visible and accurate.
+9. [x] Event kinds `comment_deleted`, `thread_resolved`, `thread_outdated`, `scheduled` drive decision-only gate recomputation (CI maps webhooks → `CODE_REVIEW_EVENT_*`); no first-party webhook server in-repo.
+10. [x] Provider fetchers for reply-thread context on **GitHub** and **GitLab**; delete/resolved/outdated reflected via existing unresolved-item aggregation (no separate detection API).
+11. [x] Reply-dismissal agent, schema validation, and runner integration for a single `reply_added` + `comment_id` path (`CODE_REVIEW_REPLY_DISMISSAL_ENABLED`).
+12. [x] SCM follow-up for `disagreed` on **GitHub** and **GitLab** (`post_review_thread_reply`); dry-run logs truncated body; rate limits not implemented (optional follow-up).
+13. [x] Companion docs (README, CONFIGURATION-REFERENCE, merge-blocking doc, Jenkinsfile comment) and Prometheus `code_review_reply_dismissal_total` + structured logs for reply-dismissal outcomes.
 
 ---
 

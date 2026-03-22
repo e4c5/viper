@@ -105,12 +105,15 @@ Loaded via `LLMConfig` (`env_prefix="LLM_"`).
 | `CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT` | `true` | Include a PR commit-message block in the review prompt. |
 | `CODE_REVIEW_REVIEW_DECISION_ONLY` | `false` | When `true` / `1`, skip the LLM and inline posting; only recompute the quality gate and submit a PR review decision (requires `SCM_REVIEW_DECISION_ENABLED` for submission). Same effect as CLI `--review-decision-only`. |
 | `CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING` | `false` | **Review-decision-only:** if non-empty `CODE_REVIEW_EVENT_*` is present and `CODE_REVIEW_EVENT_KIND` is `reply_added`, skip the run when the SCM provider reports the token user is **not** in a blocking review state (`NOT_BLOCKING`). Empty event context or other event kinds always recompute. Providers without `supports_bot_blocking_state_query` never skip on this path. |
+| `CODE_REVIEW_REPLY_DISMISSAL_ENABLED` | `false` | **Review-decision-only:** when `CODE_REVIEW_EVENT_KIND` is `reply_added` and `CODE_REVIEW_EVENT_COMMENT_ID` is set, run the reply-dismissal LLM on the review thread (GitHub + GitLab when `supports_review_thread_dismissal_context`). If the model returns `agreed`, that thread is excluded from quality-gate counts for this run. If `disagreed`, the runner posts a thread reply when the provider supports `supports_review_thread_reply` (unless `--dry-run`). |
 | `CODE_REVIEW_PRINT_RAW_RESPONSE` | *(unset)* | `1` / `true` / `TRUE` to log the raw LLM final response (debug). |
 | `CODE_REVIEW_SIGNING_KEY` | *(unset)* | If set, HMAC-signs fingerprint markers in posted comments (see §8). |
 
 ### 5.1 Review-decision webhook context (`CODE_REVIEW_EVENT_*`)
 
 Optional. When any of these is non-empty, the runner builds a `ReviewDecisionEventContext` (see `src/code_review/schemas/review_decision_event.py`) for **review-decision-only** runs: structured logging and optional `head_sha` hint (overrides `SCM_HEAD_SHA` / `--head-sha` when set). Map from your webhook payload in CI (Generic Webhook Trigger, GitHub Actions `env`, etc.).
+
+For **comment deleted**, **thread resolved**, or **thread outdated** webhooks, set `CODE_REVIEW_EVENT_KIND` accordingly and run review-decision-only: the gate is recomputed from current SCM state **without** the reply-dismissal LLM. Use `reply_added` when a human replied on a thread and you may enable `CODE_REVIEW_REPLY_DISMISSAL_ENABLED`.
 
 | Variable | Description |
 |----------|-------------|
@@ -181,6 +184,8 @@ From `observability.py`. Requires `pip install -e ".[observability]"` for Promet
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | — | OTLP traces endpoint (alternative). |
 
 Run counter includes label `context_aware` (`true` / `false`) when Prometheus is enabled.
+
+When Prometheus is enabled, **`code_review_reply_dismissal_total`** counts reply-dismissal paths in review-decision-only runs (label **`outcome`**: `agreed`, `disagreed`, `parse_failed`, `llm_error`, `skipped_no_capability`, `skipped_insufficient_thread`).
 
 ---
 

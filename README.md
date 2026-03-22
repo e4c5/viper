@@ -39,6 +39,8 @@ Copy `.env.example` to `.env` and fill in the values; that file documents every 
 
 **Auto review decision (optional)** — You can enable automatic PR review decisions on SCMs that support them. Set `SCM_REVIEW_DECISION_ENABLED=true` to submit `REQUEST_CHANGES` when **aggregated open** high/medium signals meet thresholds (`SCM_REVIEW_DECISION_HIGH_THRESHOLD`, `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD`), otherwise submit `APPROVE` (for example when only low/nit remain). Counts combine **net-new findings from this run** with **already-unresolved review items** from the SCM (deduped by fingerprint marker when present). Severity for existing threads is inferred from `[High]` / `[Medium]` / … in comment text where possible. **Merge blocking** depends on each host’s branch protection or merge checks, not on the API call alone; see **[SCM review decisions and merge blocking](docs/SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md)** for GitHub, Gitea, GitLab, Bitbucket Cloud, and Bitbucket Data Center.
 
+**Reply-dismissal (optional, review-decision-only)** — When you run **`--review-decision-only`** with webhook context (`CODE_REVIEW_EVENT_*`) and set **`CODE_REVIEW_REPLY_DISMISSAL_ENABLED=true`**, a reply on a review thread can be classified so **agreed** threads are excluded from the quality gate for that run; **disagreed** may post a follow-up on **GitHub** or **GitLab** only. See [Configuration reference](docs/CONFIGURATION-REFERENCE.md) §5.
+
 Per-SCM “open” semantics:
 
 | SCM | What counts as unresolved for the gate |

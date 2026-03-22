@@ -196,3 +196,9 @@ def test_code_review_app_skip_if_bot_not_blocking_from_env():
     ):
         cfg = CodeReviewAppConfig()
         assert cfg.review_decision_only_skip_if_bot_not_blocking is True
+
+
+def test_code_review_app_reply_dismissal_enabled_from_env():
+    with patch.dict(os.environ, {"CODE_REVIEW_REPLY_DISMISSAL_ENABLED": "true"}, clear=False):
+        cfg = CodeReviewAppConfig()
+        assert cfg.reply_dismissal_enabled is True
