@@ -2,6 +2,8 @@
 
 When your SCM is **Bitbucket Data Center** (or Server), use this guide. You create one pipeline job that uses the same `Jenkinsfile` as for Gitea/GitHub/GitLab, but with a Bitbucket-specific credential ID and webhook payload mapping.
 
+For comment-triggered **review-decision-only** runs in Jenkins, see [Jenkins: review-decision-only on comment activity](JENKINS-REVIEW-DECISION-ONLY.md) in addition to this guide.
+
 ---
 
 ## Overview

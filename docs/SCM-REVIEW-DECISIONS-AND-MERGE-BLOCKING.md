@@ -64,60 +64,42 @@ For **deleted comments**, **resolved** or **outdated** threads, **scheduled** jo
 
 ## 2. Setup
 
-Environment variables and CLI equivalents for everything below are summarized in the [Configuration reference](CONFIGURATION-REFERENCE.md).
+This section covers the two supported ways to run comment-driven recalculation without duplicating configuration or CI setup details from other guides.
 
-### 2.1 Enable review decisions in Viper
+For variables and flags, see the [Configuration reference](CONFIGURATION-REFERENCE.md). For job creation and webhook wiring, see [GitHub Actions](GITHUB-ACTIONS.md), [Jenkins (existing)](JENKINS-EXISTING.md), and [Bitbucket Data Center](BITBUCKET-DATACENTER.md). Merge blocking still depends on your SCM’s native branch protection or merge-check configuration.
 
-| Setting | Purpose |
-|---------|---------|
-| **`SCM_REVIEW_DECISION_ENABLED=true`** | Turn on submission of **`APPROVE`** / **`REQUEST_CHANGES`**. |
-| **`SCM_REVIEW_DECISION_HIGH_THRESHOLD`** / **`SCM_REVIEW_DECISION_MEDIUM_THRESHOLD`** | When to submit **`REQUEST_CHANGES`** vs **`APPROVE`**. Start conservative in production. |
-| **`SCM_BITBUCKET_SERVER_USER_SLUG`** | **Bitbucket Server / DC only:** username slug of the token user. Required for review decisions on that provider; if unset, submission is skipped. |
+### 2.1 Recommended: a separate comment-events job
 
-CLI overrides exist for some of these; see [Configuration reference](CONFIGURATION-REFERENCE.md).
+Create a second workflow or pipeline job for **discussion-only** events such as replies, deletions, resolves, outdated threads, or scheduled recalculation. Keep the original full-review job for new commits unchanged.
 
-### 2.2 Which providers submit decisions
+For Jenkins, prefer putting the full-review job and the comment-events job in the same folder. That keeps the two pipelines easy to track while still sharing the folder-level configuration.
 
-| `SCM_PROVIDER` | Submits bot approve / request-changes? |
-|----------------|----------------------------------------|
-| **`github`** | Yes |
-| **`gitea`** | Yes (server must support the review API) |
-| **`gitlab`** | Yes (approve API + MR note / review flow for request-changes) |
-| **`bitbucket`** (Cloud) | Yes |
-| **`bitbucket_server`** | Yes when **`SCM_BITBUCKET_SERVER_USER_SLUG`** is set |
+The comment-events job should run **review-decision-only** mode, pass webhook context through **`CODE_REVIEW_EVENT_*`**, and enable **`SCM_REVIEW_DECISION_ENABLED`** so the quality gate can be recomputed without running the full review agent. If reply-dismissal is required for human replies, also enable **`CODE_REVIEW_REPLY_DISMISSAL_ENABLED`** on this job.
 
-If submission is disabled or unsupported, inline comments can still work while decisions do not.
+This approach keeps full reviews and comment-only recalculation in separate Jenkins jobs, which makes it easier to track volume and behavior for each path independently.
 
-### 2.3 Configure merge blocking on each host
+Use the existing setup guides for the concrete wiring:
 
-Use native docs for the exact UI. Below: what to turn on so Viper’s outcomes can **block merge** when you want that.
+- [Configuration reference](CONFIGURATION-REFERENCE.md), especially review-decision-only and webhook context
+- [Jenkins: review-decision-only on comment activity](JENKINS-REVIEW-DECISION-ONLY.md) for the dedicated second-pipeline setup
+- [GitHub Actions](GITHUB-ACTIONS.md) for a dedicated comment-triggered workflow example
+- [Jenkins (existing)](JENKINS-EXISTING.md) for pipeline setup
+- [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for Bitbucket Server / DC webhook mapping
 
-| SCM | What to configure (summary) | Official docs |
-|-----|-----------------------------|---------------|
-| **GitHub** | Branch protection: require PR reviews; **Request changes** blocks merge until cleared or dismissed. Optional: disallow bypass. | [PR reviews](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/about-pull-request-reviews), [protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) |
-| **Gitea** | Protected branch: **Block merge on rejected reviews**; optional: admins must follow rules. | [Protected branches](https://docs.gitea.com/usage/access-control/protected-branches) |
-| **GitLab** | Approvals / **Request changes** blocking depends on **tier** and project settings (e.g. prevent merge when changes requested). | [MR approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/), [MR reviews](https://docs.gitlab.com/ee/user/project/merge_requests/reviews/) |
-| **Bitbucket Cloud** | Branch restrictions and merge checks (approvals, no changes requested, tasks, builds). Strict **prevent merge** may require **Premium**. | [Checks before merge](https://support.atlassian.com/bitbucket-cloud/docs/suggest-or-require-checks-before-a-merge/) |
-| **Bitbucket Server / DC** | Branch merge checks (approvals, needs-work, tasks, builds). | [Checks for merging PRs](https://confluence.atlassian.com/spaces/BitbucketServer/pages/776640039/Checks+for+merging+pull-requests) |
+### 2.2 Alternative: reuse the existing pipeline
 
-Ensure the **bot account** is treated as a valid reviewer where your rules count approvals or “changes requested”.
+If a separate job is not desirable, route comment events through the existing pipeline and switch those runs to **review-decision-only**. The full review path continues to handle code updates, while comment-driven runs skip the main review agent and only recompute the gate.
 
-### 2.4 Token permissions
+This reduces CI surface area, but full reviews and comment-only recalculations will then share the same queue, logs, and job counts.
 
-The token must be allowed to **submit** the same outcomes you rely on (REST scopes / permissions for reviews, approvals, MR notes on GitLab, participant **`PUT`** on Bitbucket Server for the configured slug). Narrow scopes often break **decisions** while **posting comments** still works.
+Use the same references for the concrete mechanics:
 
-### 2.5 Optional: comment-driven recomputation
+- [Configuration reference](CONFIGURATION-REFERENCE.md) for the event variables, reply-dismissal, and `CODE_REVIEW_JENKINS_DECISION_ONLY_ACTIONS`
+- [Jenkins: review-decision-only on comment activity](JENKINS-REVIEW-DECISION-ONLY.md) for Jenkins wiring
+- [GitHub Actions](GITHUB-ACTIONS.md) for event-based workflow triggering
+- [Jenkins (existing)](JENKINS-EXISTING.md) and [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for Jenkins webhook setup
 
-1. Run **`code-review --review-decision-only`** (or set **`CODE_REVIEW_REVIEW_DECISION_ONLY`**) from CI when webhooks fire on comment activity.
-2. Set **`CODE_REVIEW_EVENT_KIND`**, **`CODE_REVIEW_EVENT_COMMENT_ID`**, and related **`CODE_REVIEW_EVENT_*`** from the payload ([Configuration reference](CONFIGURATION-REFERENCE.md) §5.1). Use **`reply_added`** when a human replied on a thread; use **`comment_deleted`**, **`thread_resolved`**, **`thread_outdated`**, or **`scheduled`** when you only need a fresh count from SCM state (no reply-dismissal LLM). For **`reply_added`** with reply-dismissal, **`CODE_REVIEW_EVENT_COMMENT_ID`** must be the SCM’s **pull request review comment** id (the reply or another comment in the same thread)—**not** a Bitbucket **task** id or other object type, or thread loading will fail and you will see **`skipped_insufficient_thread`** in metrics/logs.
-3. Enable **`SCM_REVIEW_DECISION_ENABLED`** on that job so the new counts produce a submission.
-4. **Reply-dismissal:** set **`CODE_REVIEW_REPLY_DISMISSAL_ENABLED=true`** if you want the optional LLM step on **`reply_added`** (supported on GitHub, GitLab, Bitbucket Cloud, Bitbucket Server / DC; not on **Gitea**—there **`skipped_no_capability`** if enabled). Bot-authored replies are ignored (**`skipped_bot_author`**); LLM or parse failure applies no exclusion (**`llm_error`** / **`parse_failed`**). Thread follow-ups respect **`--dry-run`**. Observability: **`code_review_reply_dismissal_total{outcome=...}`** when Prometheus is enabled ([Configuration reference](CONFIGURATION-REFERENCE.md) §7).
-5. **Skip idle jobs:** **`CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING`** — for **`reply_added`** with event context, skip the run when the provider reports the token user is **not** in a blocking review state (providers without that capability never skip here).
-6. Jenkins: **`CODE_REVIEW_JENKINS_DECISION_ONLY_ACTIONS`** and [Bitbucket Data Center (Jenkins)](BITBUCKET-DATACENTER.md) for **`bitbucket_server`** webhook wiring.
-
-### 2.6 Verify
-
-Use **`--dry-run`** to inspect counts and logs without posting comments or submitting a review decision.
+Use **`--dry-run`** when validating either approach.
 
 ---
 

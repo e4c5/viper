@@ -86,6 +86,8 @@ LLM (optional): set `LLM_PROVIDER` and `LLM_MODEL` to override defaults (e.g. `L
 
 **Auto PR review decisions** (optional): set the same global/folder/job env vars the app reads (see [Configuration reference](CONFIGURATION-REFERENCE.md#2-scm-scm_)): `SCM_REVIEW_DECISION_ENABLED` (e.g. `true`), `SCM_REVIEW_DECISION_HIGH_THRESHOLD`, `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD`, and for **Bitbucket Server/DC only** `SCM_BITBUCKET_SERVER_USER_SLUG`. The Jenkinsfile forwards these into the agent container or inline `code-review` run; omit a variable in Jenkins to keep the app default for that setting.
 
+For a dedicated Jenkins setup that recomputes the quality gate after comment or thread activity without running the full review agent, see [Jenkins: review-decision-only on comment activity](JENKINS-REVIEW-DECISION-ONLY.md).
+
 ---
 
 ## 4. Webhooks so PRs trigger the job
@@ -135,6 +137,7 @@ See [Using a new version of the review tool when code changes](JENKINS-UPDATING-
 
 - **Existing Jenkins**: Add one Pipeline job (Script Path: `docker/jenkins/Jenkinsfile`), credentials `SCM_TOKEN` and `LLM_API_KEY`, and SCM/LLM env vars.
 - **Webhooks**: Use Generic Webhook Trigger and your SCM’s webhook UI; if your SCM is Bitbucket Data Center, see [Bitbucket Data Center](BITBUCKET-DATACENTER.md).
+- **Comment-triggered recalculation**: See [Jenkins: review-decision-only on comment activity](JENKINS-REVIEW-DECISION-ONLY.md).
 - **Execution**: Use the prebuilt image (or build it) on agents with Docker/Podman, or install the CLI and set `USE_INLINE_AGENT=true` as in [Jenkins without Docker](JENKINS-NO-DOCKER.md).
 - **After code changes**: See [Using a new version when code changes](JENKINS-UPDATING-AGENT.md).
 

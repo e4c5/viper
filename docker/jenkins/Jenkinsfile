@@ -11,8 +11,10 @@
 //   Generic Webhook Trigger maps from the payload (e.g. GitHub: issue_comment,pull_request_review_comment).
 //   When PR_ACTION matches, this pipeline runs `code-review --review-decision-only`; SCM_HEAD_SHA may be
 //   empty (resolved via API). Set SCM_REVIEW_DECISION_ENABLED on the job so submission runs.
-//   Optional: map payload fields into CODE_REVIEW_EVENT_* for audit logs (see docs/CONFIGURATION-REFERENCE.md).
-//   Optional: CODE_REVIEW_REPLY_DISMISSAL_ENABLED=true on GitHub/GitLab for reply_added events (LLM + gate exclusion / thread reply).
+//   Optional: map payload fields into CODE_REVIEW_EVENT_* for audit logs and reply-dismissal context
+//   (see docs/CONFIGURATION-REFERENCE.md).
+//   Optional: CODE_REVIEW_REPLY_DISMISSAL_ENABLED=true on supported providers for reply_added events
+//   (see docs/CONFIGURATION-REFERENCE.md for provider coverage).
 //
 // Self-contained; no load. Pipeline script from SCM (Script Path: docker/jenkins/Jenkinsfile) or paste inline.
 
@@ -178,6 +180,17 @@ pipeline {
                                         -e LLM_API_KEY="${LLM_API_KEY:-}" \
                                         -e PYTHONUNBUFFERED=1 \
                                         -e CODE_REVIEW_LOG_LEVEL="$REVIEW_CODE_REVIEW_LOG_LEVEL" \
+                                        -e CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING="${CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING:-}" \
+                                        -e CODE_REVIEW_REPLY_DISMISSAL_ENABLED="${CODE_REVIEW_REPLY_DISMISSAL_ENABLED:-}" \
+                                        -e CODE_REVIEW_EVENT_NAME="${CODE_REVIEW_EVENT_NAME:-}" \
+                                        -e CODE_REVIEW_EVENT_ACTION="${CODE_REVIEW_EVENT_ACTION:-}" \
+                                        -e CODE_REVIEW_EVENT_KIND="${CODE_REVIEW_EVENT_KIND:-}" \
+                                        -e CODE_REVIEW_EVENT_COMMENT_ID="${CODE_REVIEW_EVENT_COMMENT_ID:-}" \
+                                        -e CODE_REVIEW_EVENT_THREAD_ID="${CODE_REVIEW_EVENT_THREAD_ID:-}" \
+                                        -e CODE_REVIEW_EVENT_ACTOR_LOGIN="${CODE_REVIEW_EVENT_ACTOR_LOGIN:-}" \
+                                        -e CODE_REVIEW_EVENT_ACTOR_ID="${CODE_REVIEW_EVENT_ACTOR_ID:-}" \
+                                        -e CODE_REVIEW_EVENT_HEAD_SHA="${CODE_REVIEW_EVENT_HEAD_SHA:-}" \
+                                        -e CODE_REVIEW_EVENT_SOURCE="${CODE_REVIEW_EVENT_SOURCE:-}" \
                                         $RD_ENV \
                                         "$REVIEW_IMAGE" --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA"$RD_EXTRA --print-findings \
                                     || { echo "HINT: Podman issues? Set USE_INLINE_AGENT=true (docs/QUICKSTART.md)."; exit 1; }
