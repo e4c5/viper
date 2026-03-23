@@ -13,6 +13,8 @@ from code_review.formatters.comment import (
     render_suggestion_block,
 )
 from code_review.providers.base import (
+    BotAttributionIdentity,
+    BotBlockingState,
     FileInfo,
     InlineComment,
     PRInfo,
@@ -27,8 +29,15 @@ from code_review.providers.base import (
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
+from code_review.providers.bot_blocking_common import (
+    blocking_state_from_token_and_github_style_review_list,
+)
 from code_review.providers.review_decision_common import github_style_pull_review_json
 from code_review.providers.safety import truncate_repo_content
+from code_review.schemas.review_thread_dismissal import (
+    ReviewThreadDismissalContext,
+    ReviewThreadDismissalEntry,
+)
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 DEFAULT_BASE_URL = "https://api.github.com"
@@ -125,6 +134,7 @@ class GitHubProvider(ProviderInterface):
               isResolved
               isOutdated
               comments(first: 50) {
+                pageInfo { hasNextPage endCursor }
                 nodes {
                   databaseId
                   body
@@ -132,6 +142,72 @@ class GitHubProvider(ProviderInterface):
                   line
                 }
               }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    _DISMISSAL_THREADS_GQL = """
+    query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              id
+              isResolved
+              isOutdated
+              comments(first: 50) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  databaseId
+                  body
+                  path
+                  line
+                  createdAt
+                  author { login }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    _THREAD_COMMENTS_PAGE_GQL = """
+    query($threadId: ID!, $commentCursor: String) {
+      node(id: $threadId) {
+        ... on PullRequestReviewThread {
+          comments(first: 100, after: $commentCursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              databaseId
+              body
+              path
+              line
+              createdAt
+              author { login }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    _THREAD_COMMENTS_PAGE_GATE_GQL = """
+    query($threadId: ID!, $commentCursor: String) {
+      node(id: $threadId) {
+        ... on PullRequestReviewThread {
+          comments(first: 100, after: $commentCursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              databaseId
+              body
+              path
+              line
             }
           }
         }
@@ -174,19 +250,115 @@ class GitHubProvider(ProviderInterface):
             return None
         return body_text, path_str, line_no, best_sev
 
+    _THREAD_COMMENTS_FETCH_FIRST: str = "__first_page__"
+
     @staticmethod
-    def _github_thread_node_to_unresolved_item(node: dict[str, Any]) -> UnresolvedReviewItem | None:
+    def _github_append_thread_comment_dicts_from_nodes(
+        nodes: Any, out: list[dict[str, Any]]
+    ) -> None:
+        if not isinstance(nodes, list):
+            return
+        for c in nodes:
+            if isinstance(c, dict):
+                out.append(c)
+
+    def _github_thread_comments_pagination_start(
+        self,
+        initial_comments: dict[str, Any] | None,
+        out: list[dict[str, Any]],
+    ) -> tuple[bool, str | None]:
+        """(True, _) => pagination finished (return ``out``); (False, cursor) => fetch more."""
+        if not isinstance(initial_comments, dict):
+            return False, self._THREAD_COMMENTS_FETCH_FIRST
+        self._github_append_thread_comment_dicts_from_nodes(
+            initial_comments.get("nodes"), out
+        )
+        page = initial_comments.get("pageInfo") or {}
+        if not (isinstance(page, dict) and page.get("hasNextPage")):
+            return True, None
+        ec = page.get("endCursor")
+        cur = ec if isinstance(ec, str) and ec else None
+        return False, cur
+
+    def _github_thread_comments_merge_next_page(
+        self,
+        gql: str,
+        thread_id: str,
+        fetch_cursor: str | None,
+        out: list[dict[str, Any]],
+        seen_end: set[str],
+    ) -> str | None:
+        """Run one GraphQL page fetch; return next cursor or None to stop."""
+        if fetch_cursor is None:
+            return None
+        variables: dict[str, Any] = {"threadId": thread_id}
+        if fetch_cursor == self._THREAD_COMMENTS_FETCH_FIRST:
+            variables["commentCursor"] = None
+        else:
+            variables["commentCursor"] = fetch_cursor
+        data = self._graphql(gql, variables)
+        node = data.get("node") if isinstance(data, dict) else None
+        if not isinstance(node, dict):
+            return None
+        conn = node.get("comments") or {}
+        if not isinstance(conn, dict):
+            return None
+        self._github_append_thread_comment_dicts_from_nodes(conn.get("nodes"), out)
+        page = conn.get("pageInfo") or {}
+        if not isinstance(page, dict) or not page.get("hasNextPage"):
+            return None
+        ec = page.get("endCursor")
+        if not isinstance(ec, str) or not ec:
+            return None
+        if ec in seen_end:
+            return None
+        seen_end.add(ec)
+        return ec
+
+    def _github_expand_thread_comments(
+        self,
+        thread_id: str,
+        initial_comments: dict[str, Any] | None,
+        *,
+        gate_mode: bool = False,
+    ) -> list[dict[str, Any]]:
+        """All comments on a review thread (paginates past ``comments(first: N)`` list slices)."""
+        if not (thread_id or "").strip():
+            return []
+        gql = (
+            self._THREAD_COMMENTS_PAGE_GATE_GQL
+            if gate_mode
+            else self._THREAD_COMMENTS_PAGE_GQL
+        )
+        out: list[dict[str, Any]] = []
+        done, fetch_cursor = self._github_thread_comments_pagination_start(
+            initial_comments, out
+        )
+        if done:
+            return out
+        seen_end: set[str] = set()
+        for _ in range(500):
+            fetch_cursor = self._github_thread_comments_merge_next_page(
+                gql, thread_id, fetch_cursor, out, seen_end
+            )
+            if fetch_cursor is None:
+                break
+        return out
+
+    def _github_thread_node_to_unresolved_item(
+        self, node: dict[str, Any]
+    ) -> UnresolvedReviewItem | None:
         if node.get("isResolved") or node.get("isOutdated"):
             return None
-        comments_wrap = node.get("comments") or {}
-        cnodes = comments_wrap.get("nodes") if isinstance(comments_wrap, dict) else None
-        if not isinstance(cnodes, list) or not cnodes:
+        tid = str(node.get("id") or "")
+        comments_wrap = node.get("comments") if isinstance(node.get("comments"), dict) else None
+        cnodes = self._github_expand_thread_comments(tid, comments_wrap, gate_mode=True)
+        if not cnodes:
             return None
         agg = GitHubProvider._github_aggregate_thread_comments(cnodes)
         if agg is None:
             return None
         body_text, path_str, line_no, best_sev = agg
-        tid = str(node.get("id") or "")
         return UnresolvedReviewItem(
             stable_id=f"github:thread:{tid}",
             thread_id=tid,
@@ -256,7 +428,8 @@ class GitHubProvider(ProviderInterface):
                 break
         else:
             logger.warning(
-                "GitHub GraphQL reviewThreads pagination exceeded max_pages=%s owner=%s repo=%s pr=%s",
+                "GitHub GraphQL reviewThreads pagination exceeded max_pages=%s "
+                "owner=%s repo=%s pr=%s",
                 max_pages,
                 owner,
                 repo,
@@ -273,7 +446,7 @@ class GitHubProvider(ProviderInterface):
         except (httpx.HTTPError, json.JSONDecodeError, RuntimeError) as e:
             logger.warning(
                 "GitHub GraphQL reviewThreads failed owner=%s repo=%s pr=%s: %s; "
-                "skipping pre-existing unresolved aggregation (REST comments lack resolution state).",
+                "skipping unresolved aggregation (REST comments lack resolution state).",
                 owner,
                 repo,
                 pr_number,
@@ -355,6 +528,184 @@ class GitHubProvider(ProviderInterface):
             )
         return result
 
+    def _github_token_user_login_lower(self) -> str | None:
+        try:
+            data = self._get("/user")
+            if isinstance(data, dict):
+                login = str(data.get("login") or "").strip().lower()
+                return login or None
+        except Exception as e:
+            logger.warning("GitHub GET /user failed for bot blocking state: %s", e)
+        return None
+
+    def _github_list_pull_reviews(self, owner: str, repo: str, pr_number: int) -> list[Any] | None:
+        """List PR reviews, or ``None`` if the listing failed (caller maps to ``UNKNOWN``)."""
+        path = f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+        out: list[Any] = []
+        page = 1
+        for _ in range(50):
+            try:
+                data = self._get(path, params={"per_page": 100, "page": page})
+            except Exception as e:
+                logger.warning(
+                    "GitHub list PR reviews failed owner=%s repo=%s pr=%s: %s",
+                    owner,
+                    repo,
+                    pr_number,
+                    e,
+                )
+                return None
+            if not isinstance(data, list):
+                logger.warning(
+                    "GitHub list PR reviews unexpected JSON owner=%s repo=%s pr=%s page=%s",
+                    owner,
+                    repo,
+                    pr_number,
+                    page,
+                )
+                return None
+            if not data:
+                break
+            out.extend(data)
+            if len(data) < 100:
+                break
+            page += 1
+        return out
+
+    def get_bot_blocking_state(self, owner: str, repo: str, pr_number: int) -> BotBlockingState:
+        """Latest token-user PR review: ``CHANGES_REQUESTED`` → blocking."""
+        return blocking_state_from_token_and_github_style_review_list(
+            self._github_token_user_login_lower(),
+            self._github_list_pull_reviews(owner, repo, pr_number),
+        )
+
+    def get_bot_attribution_identity(
+        self, owner: str, repo: str, pr_number: int
+    ) -> BotAttributionIdentity:
+        try:
+            data = self._get("/user")
+            if isinstance(data, dict):
+                login = str(data.get("login") or "").strip().lower()
+                uid = str(data.get("id") or "").strip()
+                return BotAttributionIdentity(login=login, id_str=uid)
+        except Exception as e:
+            logger.warning("GitHub get_bot_attribution_identity failed: %s", e)
+        return BotAttributionIdentity()
+
+    def _github_build_dismissal_context_from_comment_nodes(
+        self, thread_graphql_id: str, cnodes: list[dict[str, Any]]
+    ) -> ReviewThreadDismissalContext | None:
+        if not thread_graphql_id or not cnodes:
+            return None
+        entries: list[ReviewThreadDismissalEntry] = []
+        for c in cnodes:
+            if not isinstance(c, dict):
+                continue
+            auth = c.get("author") if isinstance(c.get("author"), dict) else {}
+            login = str((auth or {}).get("login") or "")
+            entries.append(
+                ReviewThreadDismissalEntry(
+                    comment_id=str(c.get("databaseId") or ""),
+                    author_login=login,
+                    body=str(c.get("body") or ""),
+                    created_at=str(c.get("createdAt") or ""),
+                )
+            )
+        if len(entries) < 2:
+            return None
+        return ReviewThreadDismissalContext(
+            gate_exclusion_stable_id=f"github:thread:{thread_graphql_id}",
+            entries=entries,
+        )
+
+    def _github_dismissal_context_in_thread_nodes(
+        self, nodes: list[Any], want_id: int
+    ) -> ReviewThreadDismissalContext | None:
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            tid = str(node.get("id") or "")
+            if not tid:
+                continue
+            cw = node.get("comments") if isinstance(node.get("comments"), dict) else None
+            expanded = self._github_expand_thread_comments(tid, cw, gate_mode=False)
+            for c in expanded:
+                if not isinstance(c, dict):
+                    continue
+                if int(c.get("databaseId") or 0) == want_id:
+                    return self._github_build_dismissal_context_from_comment_nodes(
+                        tid, expanded
+                    )
+        return None
+
+    def get_review_thread_dismissal_context(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        triggered_comment_id: str,
+    ) -> ReviewThreadDismissalContext | None:
+        """Find the review thread containing the given comment ``databaseId``."""
+        raw = (triggered_comment_id or "").strip()
+        if not raw:
+            return None
+        try:
+            want_id = int(raw)
+        except ValueError:
+            return None
+        cursor: str | None = None
+        seen_end_cursors: set[str] = set()
+        max_pages = 500
+        try:
+            for _ in range(max_pages):
+                variables: dict[str, Any] = {
+                    "owner": owner,
+                    "name": repo,
+                    "number": int(pr_number),
+                    "cursor": cursor,
+                }
+                data = self._graphql(self._DISMISSAL_THREADS_GQL, variables)
+                rt = self._github_graphql_review_threads_container(data)
+                if rt is None:
+                    break
+                hit = self._github_dismissal_context_in_thread_nodes(
+                    rt.get("nodes") or [], want_id
+                )
+                if hit is not None:
+                    return hit
+                cursor = self._github_review_threads_advance_cursor(
+                    rt, seen_end_cursors, owner, repo, pr_number
+                )
+                if cursor is None:
+                    break
+        except Exception as e:
+            logger.warning(
+                "GitHub get_review_thread_dismissal_context failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
+        return None
+
+    def post_review_thread_reply(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        reply_to_comment_id: str,
+        body: str,
+    ) -> None:
+        try:
+            rid = int((reply_to_comment_id or "").strip())
+        except ValueError as e:
+            raise ValueError("GitHub reply_to_comment_id must be numeric") from e
+        self._post(
+            f"/repos/{owner}/{repo}/pulls/{pr_number}/comments",
+            {"body": body, "in_reply_to": rid},
+        )
+
     def submit_review_decision(
         self,
         owner: str,
@@ -408,4 +759,8 @@ class GitHubProvider(ProviderInterface):
             supports_suggestions=True,
             supports_multiline_suggestions=True,
             supports_review_decisions=True,
+            supports_bot_blocking_state_query=True,
+            supports_bot_attribution_identity_query=True,
+            supports_review_thread_dismissal_context=True,
+            supports_review_thread_reply=True,
         )

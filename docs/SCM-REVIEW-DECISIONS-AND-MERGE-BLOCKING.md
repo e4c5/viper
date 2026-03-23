@@ -28,6 +28,32 @@ When PR authors push new commits to address comments, the agent re-runs automati
 | **Bitbucket Cloud** | Before writing the new state the opposite endpoint is cleared (`DELETE /request-changes` before approving; `DELETE /approve` before requesting changes). A 404 on the DELETE is silently ignored. |
 | **Bitbucket Server** | `PUT .../participants/{slug}` replaces the status in place; transitions are inherently idempotent. |
 
+### Quality gate recalculation and replies (review-decision-only)
+
+The **full** review run (default agent flow) recomputes the gate from **unresolved review items on the PR** plus any **new** findings it is about to post, then may submit `APPROVE` / `REQUEST_CHANGES`. That path does **not** use reply-dismissal.
+
+**Review-decision-only** (`CODE_REVIEW_REVIEW_DECISION_ONLY` or `--review-decision-only`) skips the main review agent and inline posting. It still loads **open** high/medium signals from the SCM (same aggregation rules as the README quality gate), applies your thresholds, and submits a review decision when `SCM_REVIEW_DECISION_ENABLED=true`. Operators typically trigger this mode from **webhooks or scheduled jobs** when a PR’s discussion state changes, and optionally pass **`CODE_REVIEW_EVENT_*`** so logs (and some behaviours below) know what happened.
+
+| Trigger (typical) | What gets counted | Reply-dismissal LLM |
+|-------------------|-------------------|---------------------|
+| `CODE_REVIEW_EVENT_KIND` unset / empty context | All unresolved gate items from the provider | No |
+| `comment_deleted`, `thread_resolved`, `thread_outdated`, `scheduled`, … | All unresolved items reflecting **current** SCM state after that event | No |
+| `reply_added` | Same, **unless** reply-dismissal applies (next rows) | Only if enabled and conditions match |
+
+**Optional reply-dismissal** (`CODE_REVIEW_REPLY_DISMISSAL_ENABLED=true`) runs **only** in review-decision-only when **`CODE_REVIEW_EVENT_KIND=reply_added`** and **`CODE_REVIEW_EVENT_COMMENT_ID`** identifies the new reply. It is implemented only where the provider exposes review-thread context (**GitHub** and **GitLab** today). On other providers, reply-added jobs still **recompute** the gate from the SCM, but the dismissal step is skipped (see metrics / logs: `skipped_no_capability`).
+
+What happens when reply-dismissal runs:
+
+1. **Bot replies are ignored** — if the webhook actor matches the bot identity used for posting, the dismissal path is skipped so the job does not classify the bot’s own comments (`skipped_bot_author` in metrics / structured logs).
+2. **Thread context** — the runner loads the review thread (bot comment plus human replies). If the payload does not yield a usable thread, exclusion is not applied (`skipped_insufficient_thread`).
+3. **LLM verdict** — a small, tool-free model classifies whether the human reply **adequately addresses** the review comment (`agreed` vs `disagreed`). On **LLM or parse failure**, no thread is excluded; counts stay conservative (`llm_error` / `parse_failed`).
+4. **`agreed`** — for **this invocation only**, the thread’s stable id is **omitted** when counting open high/medium. The runner then submits `APPROVE` / `REQUEST_CHANGES` using those reduced counts. This exclusion is **not** persisted as SCM state: a later decision-only run without a successful `agreed` path will count that thread again if it is still unresolved on the SCM. Authors should still **resolve or address** threads in the native UI when your process expects the SCM to be the source of truth.
+5. **`disagreed`** — counts are **not** reduced; if the provider supports thread replies, the runner may post a short follow-up on that thread (unless `--dry-run`).
+
+**Optional early exit:** `CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING` applies to **`reply_added`** when event context is present: if the provider reports the token user is **not** in a blocking review state, the job can skip recomputation entirely (providers without blocking-state query never skip on this path). Use this to avoid noise when the bot is no longer “requesting changes” in the SCM’s model.
+
+Configuration details and env names: [Configuration reference](CONFIGURATION-REFERENCE.md) §5 and §5.1. Prometheus label **`outcome`** on `code_review_reply_dismissal_total` reflects which path ran (`agreed`, `disagreed`, skips, errors).
+
 ---
 
 ## 2. What this codebase implements today
@@ -44,7 +70,11 @@ When PR authors push new commits to address comments, the agent re-runs automati
 
 All providers still post **inline comments** and participate in the **quality gate counts** as documented in the README.
 
-For a **code-level inventory**, test coverage, and a phased implementation backlog (GitLab → Bitbucket Server → Bitbucket Cloud), see **[SCM review decisions — implementation plan](SCM-REVIEW-DECISIONS-IMPLEMENTATION-PLAN.md)**.
+### Review-decision-only, reply-dismissal, and thread events
+
+In **review-decision-only** mode (`CODE_REVIEW_REVIEW_DECISION_ONLY` or `--review-decision-only`), the runner recomputes open high/medium counts from the provider and may submit `APPROVE` / `REQUEST_CHANGES` without running the main review agent. **How reply-based recalculation and optional thread exclusion interact with the gate** is described in **§1 (Quality gate recalculation and replies)**. Map webhook fields into `CODE_REVIEW_EVENT_*` per [Configuration reference](CONFIGURATION-REFERENCE.md) §5 and §5.1.
+
+For **implementation details** (interfaces, `ReviewOrchestrator`, provider modules), see [Developer guide](DEVELOPER_GUIDE.md). Tests live under `tests/test_runner.py`, `tests/providers/test_review_decision_common.py`, and per-provider `tests/providers/test_*.py`.
 
 ---
 
@@ -122,7 +152,6 @@ The table below maps **UI/API concepts** to **when merge can be blocked**, point
 
 ## 6. Related reading
 
-- [SCM review decisions — implementation plan](SCM-REVIEW-DECISIONS-IMPLEMENTATION-PLAN.md) — what is implemented in code and backlog per provider
 - [Configuration reference](CONFIGURATION-REFERENCE.md) — `SCM_REVIEW_DECISION_*`
 - [Developer guide](DEVELOPER_GUIDE.md) — `ProviderInterface`, extension points
 - [Bitbucket Data Center (Jenkins)](BITBUCKET-DATACENTER.md) — webhook and env for `bitbucket_server`

@@ -1,11 +1,16 @@
 """Tests for optional Prometheus/OpenTelemetry export (Phase 4.3)."""
 
+import importlib
+import re
+
 import pytest
 
+import code_review.observability as observability_module
 from code_review.observability import (
     RunHandle,
     finish_run,
     get_prometheus_registry,
+    record_reply_dismissal_outcome,
     start_run,
 )
 
@@ -49,3 +54,35 @@ def test_run_handle_end_with_no_span():
     """RunHandle.end() is safe when _span is None."""
     h = RunHandle(trace_id="x", _span=None)
     h.end(1.0, owner="o", repo="r", pr_number=1)
+
+
+def test_record_reply_dismissal_outcome_no_op_without_prometheus():
+    """record_reply_dismissal_outcome does not raise when metrics are disabled."""
+    record_reply_dismissal_outcome("agreed")
+
+
+def test_record_reply_dismissal_outcome_increments_when_prometheus_enabled(monkeypatch):
+    pytest.importorskip("prometheus_client")
+    from prometheus_client import generate_latest
+
+    monkeypatch.setenv("CODE_REVIEW_METRICS", "prometheus")
+    importlib.reload(observability_module)
+    try:
+        observability_module.record_reply_dismissal_outcome("agreed")
+        observability_module.record_reply_dismissal_outcome("agreed")
+        observability_module.record_reply_dismissal_outcome("disagreed")
+        reg = observability_module.get_prometheus_registry()
+        assert reg is not None
+        out = generate_latest(reg).decode()
+        # Per-label values (not just metric name) prove .labels(...).inc() ran correctly.
+        assert re.search(
+            r'code_review_reply_dismissal_total\{outcome="agreed"\}\s+2(?:\.0)?\b',
+            out,
+        )
+        assert re.search(
+            r'code_review_reply_dismissal_total\{outcome="disagreed"\}\s+1(?:\.0)?\b',
+            out,
+        )
+    finally:
+        monkeypatch.delenv("CODE_REVIEW_METRICS", raising=False)
+        importlib.reload(observability_module)

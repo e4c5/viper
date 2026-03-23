@@ -491,7 +491,7 @@ def test_generate_auto_pr_description_uses_title_and_paths():
 
 
 def test_maybe_post_started_review_comment_posts_when_description_missing():
-    """When description is empty/short and provider cannot update PR, post full summary as comment."""
+    """Post full summary when description is missing and PR body cannot be updated."""
     provider = MagicMock()
     provider.update_pr_description = MagicMock(side_effect=NotImplementedError())
     pr_info = MagicMock(title="T", description="")
@@ -508,7 +508,7 @@ def test_maybe_post_started_review_comment_posts_when_description_missing():
 
 
 def test_maybe_post_started_review_comment_updates_pr_description_when_supported():
-    """When description is empty/short and provider supports it, update PR and post short comment."""
+    """Update PR description and post a short comment when the provider supports it."""
     provider = MagicMock()
     pr_info = MagicMock(title="kafka", description="")
     paths = ["AGENTS.md", "README.md"]

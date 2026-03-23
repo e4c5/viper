@@ -12,6 +12,8 @@ from code_review.formatters.comment import (
     render_suggestion_block,
 )
 from code_review.providers.base import (
+    BotAttributionIdentity,
+    BotBlockingState,
     FileInfo,
     InlineComment,
     PRInfo,
@@ -34,6 +36,10 @@ from code_review.providers.review_decision_common import (
     gitlab_note_with_submit_review_requested_changes,
 )
 from code_review.providers.safety import truncate_repo_content
+from code_review.schemas.review_thread_dismissal import (
+    ReviewThreadDismissalContext,
+    ReviewThreadDismissalEntry,
+)
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 logger = logging.getLogger(__name__)
@@ -42,6 +48,84 @@ logger = logging.getLogger(__name__)
 def _project_id(owner: str, repo: str) -> str:
     """URL-encoded project path for GitLab API."""
     return quote(f"{owner}/{repo}", safe="")
+
+
+def _gitlab_user_id_or_none(me: Any) -> int | None:
+    if not isinstance(me, dict) or me.get("id") is None:
+        return None
+    return int(me["id"])
+
+
+def _gitlab_mine_mr_reviews_for_user(data: list[Any], my_id: int) -> list[tuple[int, str]]:
+    mine: list[tuple[int, str]] = []
+    for r in data:
+        if not isinstance(r, dict):
+            continue
+        u = r.get("user") or {}
+        if not isinstance(u, dict) or u.get("id") is None:
+            continue
+        if int(u["id"]) != my_id:
+            continue
+        mine.append((int(r.get("id") or 0), str(r.get("state") or "").strip().lower()))
+    return mine
+
+
+def _gitlab_bot_blocking_from_sorted_mine(mine: list[tuple[int, str]]) -> BotBlockingState:
+    if not mine:
+        return "NOT_BLOCKING"
+    mine.sort(key=lambda x: x[0])
+    last = mine[-1][1]
+    if last == "requested_changes":
+        return "BLOCKING"
+    if last == "approved":
+        return "NOT_BLOCKING"
+    return "UNKNOWN"
+
+
+def _gitlab_notes_contain_id(notes: Any, want: str) -> bool:
+    if not isinstance(notes, list):
+        return False
+    for n in notes:
+        if isinstance(n, dict) and str(n.get("id") or "") == want:
+            return True
+    return False
+
+
+def _gitlab_dismissal_entries_from_notes(notes: list[Any]) -> list[ReviewThreadDismissalEntry]:
+    entries: list[ReviewThreadDismissalEntry] = []
+    for n in notes:
+        if not isinstance(n, dict):
+            continue
+        author = n.get("author") if isinstance(n.get("author"), dict) else {}
+        uname = str(author.get("username") or author.get("name") or "")
+        entries.append(
+            ReviewThreadDismissalEntry(
+                comment_id=str(n.get("id") or ""),
+                author_login=uname,
+                body=str(n.get("body") or ""),
+                created_at=str(n.get("created_at") or ""),
+            )
+        )
+    return entries
+
+
+def _gitlab_dismissal_context_for_discussion(
+    disc: dict[str, Any], want: str, pr_number: int
+) -> ReviewThreadDismissalContext | None:
+    did = str(disc.get("id") or "")
+    notes = disc.get("notes") or []
+    if not isinstance(notes, list):
+        return None
+    if not _gitlab_notes_contain_id(notes, want):
+        return None
+    entries = _gitlab_dismissal_entries_from_notes(notes)
+    if len(entries) < 2:
+        return None
+    stable = f"gitlab:discussion:{did}" if did else f"gitlab:discussion:{pr_number}"
+    return ReviewThreadDismissalContext(
+        gate_exclusion_stable_id=stable,
+        entries=entries,
+    )
 
 
 class GitLabProvider(ProviderInterface):
@@ -62,7 +146,7 @@ class GitLabProvider(ProviderInterface):
     def _get_mr_discussions_paginated(
         self, owner: str, repo: str, pr_number: int
     ) -> list[dict[str, Any]]:
-        """List all MR discussions (GitLab paginates; default page size would omit later threads)."""
+        """List all MR discussions (GitLab paginates; small pages omit later threads)."""
         base_path = self._path(owner, repo, "merge_requests", str(pr_number), "discussions")
         combined: list[dict[str, Any]] = []
         page = 1
@@ -86,6 +170,39 @@ class GitLabProvider(ProviderInterface):
                 break
             if not data:
                 break
+            for item in data:
+                if isinstance(item, dict):
+                    combined.append(item)
+            if len(data) < per_page:
+                break
+            page += 1
+        return combined
+
+    def _get_mr_reviews_paginated(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[dict[str, Any]] | None:
+        """List all MR reviews (paginated). ``None`` if any page fails or response is not a list."""
+        base_path = self._path(owner, repo, "merge_requests", str(pr_number), "reviews")
+        combined: list[dict[str, Any]] = []
+        page = 1
+        per_page = 100
+        max_pages = 500
+        for _ in range(max_pages):
+            url = f"{base_path}?per_page={per_page}&page={page}"
+            try:
+                data = self._get(url)
+            except Exception as e:
+                logger.warning(
+                    "GitLab MR reviews fetch failed owner=%s repo=%s pr_number=%s page=%s: %s",
+                    owner,
+                    repo,
+                    pr_number,
+                    page,
+                    e,
+                )
+                return None
+            if not isinstance(data, list):
+                return None
             for item in data:
                 if isinstance(item, dict):
                     combined.append(item)
@@ -334,6 +451,40 @@ class GitLabProvider(ProviderInterface):
             {"body": body},
         )
 
+    def get_bot_blocking_state(self, owner: str, repo: str, pr_number: int) -> BotBlockingState:
+        """Use MR reviews API when available; ``requested_changes`` → blocking."""
+        try:
+            me = self._get(f"{self._base_url}/user")
+            my_id = _gitlab_user_id_or_none(me)
+            if my_id is None:
+                return "UNKNOWN"
+            data = self._get_mr_reviews_paginated(owner, repo, pr_number)
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code if exc.response is not None else 0
+            if code == 404:
+                return "UNKNOWN"
+            logger.warning(
+                "GitLab get_bot_blocking_state HTTP error owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                exc,
+            )
+            return "UNKNOWN"
+        except Exception as e:
+            logger.warning(
+                "GitLab get_bot_blocking_state failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return "UNKNOWN"
+        if data is None:
+            return "UNKNOWN"
+        mine = _gitlab_mine_mr_reviews_for_user(data, my_id)
+        return _gitlab_bot_blocking_from_sorted_mine(mine)
+
     def submit_review_decision(
         self,
         owner: str,
@@ -423,6 +574,91 @@ class GitLabProvider(ProviderInterface):
             payload["title"] = title
         self._put(path, payload)
 
+    def get_bot_attribution_identity(
+        self, owner: str, repo: str, pr_number: int
+    ) -> BotAttributionIdentity:
+        try:
+            data = self._get(f"{self._base_url}/user")
+            if isinstance(data, dict):
+                login = str(data.get("username") or "").strip().lower()
+                uid = str(data.get("id") or "").strip()
+                return BotAttributionIdentity(login=login, id_str=uid)
+        except Exception as e:
+            logger.warning("GitLab get_bot_attribution_identity failed: %s", e)
+        return BotAttributionIdentity()
+
+    def _gitlab_discussion_id_for_note_id(
+        self, owner: str, repo: str, pr_number: int, note_id: str
+    ) -> str:
+        want = (note_id or "").strip()
+        if not want:
+            return ""
+        try:
+            data = self._get_mr_discussions_paginated(owner, repo, pr_number)
+        except Exception as e:
+            logger.warning(
+                "GitLab discussion lookup failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return ""
+        for disc in data:
+            if not isinstance(disc, dict):
+                continue
+            did = str(disc.get("id") or "")
+            if _gitlab_notes_contain_id(disc.get("notes") or [], want):
+                return did
+        return ""
+
+    def get_review_thread_dismissal_context(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        triggered_comment_id: str,
+    ) -> ReviewThreadDismissalContext | None:
+        want = (triggered_comment_id or "").strip()
+        if not want:
+            return None
+        try:
+            data = self._get_mr_discussions_paginated(owner, repo, pr_number)
+        except Exception as e:
+            logger.warning(
+                "GitLab get_review_thread_dismissal_context failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
+        for disc in data:
+            if not isinstance(disc, dict):
+                continue
+            ctx = _gitlab_dismissal_context_for_discussion(disc, want, pr_number)
+            if ctx is not None:
+                return ctx
+        return None
+
+    def post_review_thread_reply(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        reply_to_comment_id: str,
+        body: str,
+    ) -> None:
+        disc_id = self._gitlab_discussion_id_for_note_id(
+            owner, repo, pr_number, reply_to_comment_id
+        )
+        if not disc_id:
+            raise ValueError(f"No GitLab discussion for note id {reply_to_comment_id!r}")
+        path = self._path(
+            owner, repo, "merge_requests", str(pr_number), "discussions", disc_id, "notes"
+        )
+        self._post(path, {"body": body})
+
     def capabilities(self) -> ProviderCapabilities:
         """
         Return provider capability flags for GitLab.
@@ -435,4 +671,8 @@ class GitLabProvider(ProviderInterface):
             supports_suggestions=True,
             supports_multiline_suggestions=True,
             supports_review_decisions=True,
+            supports_bot_blocking_state_query=True,
+            supports_bot_attribution_identity_query=True,
+            supports_review_thread_dismissal_context=True,
+            supports_review_thread_reply=True,
         )

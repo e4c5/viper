@@ -247,7 +247,8 @@ def test_submit_review_decision_unsupported_http_is_no_op(mock_client, status):
     mock_resp = MagicMock()
     mock_resp.status_code = status
     exc = httpx.HTTPStatusError("nope", request=MagicMock(), response=mock_resp)
-    mock_client.return_value.__enter__.return_value.request.return_value.raise_for_status.side_effect = exc
+    req = mock_client.return_value.__enter__.return_value.request.return_value
+    req.raise_for_status.side_effect = exc
 
     p = GiteaProvider("https://gitea.example.com", "tok")
     p.submit_review_decision("owner", "repo", 1, "APPROVE", body="x", head_sha="sha")
@@ -258,7 +259,8 @@ def test_submit_review_decision_re_raises_other_http_errors(mock_client):
     mock_resp = MagicMock()
     mock_resp.status_code = 500
     exc = httpx.HTTPStatusError("err", request=MagicMock(), response=mock_resp)
-    mock_client.return_value.__enter__.return_value.request.return_value.raise_for_status.side_effect = exc
+    req = mock_client.return_value.__enter__.return_value.request.return_value
+    req.raise_for_status.side_effect = exc
 
     p = GiteaProvider("https://gitea.example.com", "tok")
     with pytest.raises(httpx.HTTPStatusError):

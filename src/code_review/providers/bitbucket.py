@@ -5,6 +5,8 @@ from typing import Any
 
 from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.base import (
+    BotAttributionIdentity,
+    BotBlockingState,
     FileInfo,
     InlineComment,
     PRInfo,
@@ -32,6 +34,27 @@ DEFAULT_BASE_URL = "https://api.bitbucket.org/2.0"
 logger = logging.getLogger(__name__)
 
 _BB_PAGINATION_LOOP_MSG = "Bitbucket pagination loop detected (same next URL returned twice): %s"
+
+
+def _bitbucket_cloud_blocking_from_participants(
+    participants: list[Any], my_uuid: str
+) -> BotBlockingState:
+    for p in participants:
+        if not isinstance(p, dict):
+            continue
+        user = p.get("user") or {}
+        if not isinstance(user, dict):
+            continue
+        uid = str(user.get("uuid") or "").strip()
+        if uid != my_uuid:
+            continue
+        st = str(p.get("state") or "").strip().lower().replace(" ", "_")
+        if st in ("changes_requested", "needs_work"):
+            return "BLOCKING"
+        if p.get("approved") is True or st == "approved":
+            return "NOT_BLOCKING"
+        return "UNKNOWN"
+    return "NOT_BLOCKING"
 
 
 class BitbucketProvider(ProviderInterface):
@@ -294,6 +317,43 @@ class BitbucketProvider(ProviderInterface):
         path = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
         self._post(path, {"content": {"raw": body}})
 
+    def get_bot_blocking_state(self, owner: str, repo: str, pr_number: int) -> BotBlockingState:
+        """Inspect PR participants for the token user's approval / changes-requested state."""
+        try:
+            me = self._get(f"{self._base_url}/user")
+            if not isinstance(me, dict):
+                return "UNKNOWN"
+            my_uuid = str(me.get("uuid") or "").strip()
+            if not my_uuid:
+                return "UNKNOWN"
+            pr = self._get(self._path(owner, repo, "pullrequests", str(pr_number)))
+            if not isinstance(pr, dict):
+                return "UNKNOWN"
+            participants = pr.get("participants") or []
+        except Exception as e:
+            logger.warning(
+                "Bitbucket Cloud get_bot_blocking_state failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return "UNKNOWN"
+        return _bitbucket_cloud_blocking_from_participants(participants, my_uuid)
+
+    def get_bot_attribution_identity(
+        self, owner: str, repo: str, pr_number: int
+    ) -> BotAttributionIdentity:
+        try:
+            me = self._get(f"{self._base_url}/user")
+            if isinstance(me, dict):
+                uid = str(me.get("uuid") or "").strip()
+                login = str(me.get("username") or "").strip().lower()
+                return BotAttributionIdentity(login=login, uuid=uid)
+        except Exception as e:
+            logger.warning("Bitbucket Cloud get_bot_attribution_identity failed: %s", e)
+        return BotAttributionIdentity()
+
     def submit_review_decision(
         self,
         owner: str,
@@ -424,4 +484,6 @@ class BitbucketProvider(ProviderInterface):
             omit_fingerprint_marker_in_body=True,
             embed_agent_marker_as_commonmark_linkref=True,
             supports_review_decisions=True,
+            supports_bot_blocking_state_query=True,
+            supports_bot_attribution_identity_query=True,
         )

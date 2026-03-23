@@ -33,7 +33,8 @@ def test_self_retracted_false_positive_requires_self_reference():
 
 
 def test_legitimate_retract_in_domain_language_not_dropped():
-    assert _finding_message_looks_self_retracted("Ensure the latch retracts before the door closes.") is False
+    msg = "Ensure the latch retracts before the door closes."
+    assert _finding_message_looks_self_retracted(msg) is False
 
 
 def test_will_retract_requires_first_person():

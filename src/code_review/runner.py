@@ -1,5 +1,7 @@
 """ADK Runner setup and programmatic invocation for code review."""
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json
@@ -8,13 +10,15 @@ import os
 import re
 import time
 import uuid
+from dataclasses import dataclass
+from typing import Any
 
 from google.genai import types
 from litellm import AuthenticationError
 
 import code_review
 from code_review import observability
-from code_review.agent import create_review_agent
+from code_review.agent import create_review_agent, reply_dismissal_verdict_from_llm_text
 from code_review.config import (
     get_code_review_app_config,
     get_context_aware_config,
@@ -42,11 +46,20 @@ from code_review.formatters.comment import finding_to_comment_body
 from code_review.models import get_context_window
 from code_review.providers import get_provider
 from code_review.providers.base import (
+    BotAttributionIdentity,
     InlineComment,
     RateLimitError,
+    ReviewDecision,
     UnresolvedReviewItem,
 )
 from code_review.schemas.findings import FindingV1
+from code_review.schemas.reply_dismissal import ReplyDismissalVerdictV1
+from code_review.schemas.review_decision_event import (
+    ReviewDecisionEventContext,
+    event_allows_decision_only_skip_when_bot_not_blocking,
+    review_decision_event_context_from_env,
+)
+from code_review.schemas.review_thread_dismissal import ReviewThreadDismissalContext
 from code_review.standards import detect_from_paths, get_review_standards
 
 APP_NAME = "code_review"
@@ -217,9 +230,9 @@ def _patch_tokens(text: str) -> set[str]:
 
 
 def _validate_suggested_patches(
-    findings: list["FindingV1"],
+    findings: list[FindingV1],
     diff_text: str,
-) -> list["FindingV1"]:
+) -> list[FindingV1]:
     """Strip suggested_patch from findings where the patch doesn't match the anchored line.
 
     For each finding with a suggested_patch, look up the actual content of finding.line
@@ -285,7 +298,7 @@ def _validate_suggested_patches(
 
 
 # Model sometimes emits stream-of-consciousness findings then retracts them in the same message.
-# Every pattern ties the walk-back to the model / this finding (I, this, that, it), not domain jargon alone.
+# Patterns tie the walk-back to the model / this finding (I, this, that, it), not domain jargon.
 _SELF_RETRACTION_MESSAGE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:i\s+will|i['\u2019]ll)\s+retract\b", re.I),
     re.compile(r"\bi\s+retract\b", re.I),
@@ -379,10 +392,10 @@ def _find_closest_anchor_line(
 
 
 def _relocate_findings_by_anchor(
-    findings: list["FindingV1"],
+    findings: list[FindingV1],
     diff_text: str,
     window: int = _ANCHOR_RELOCATION_WINDOW,
-) -> list["FindingV1"]:
+) -> list[FindingV1]:
     """Correct finding line numbers when the anchor text doesn't match the reported line.
 
     The LLM sometimes identifies the right code issue but reports a line number
@@ -407,10 +420,10 @@ def _relocate_findings_by_anchor(
 
 
 def _maybe_relocate_finding(
-    f: "FindingV1",
+    f: FindingV1,
     file_lines: dict[str, dict[int, str]],
     window: int,
-) -> "FindingV1":
+) -> FindingV1:
     """Return *f* relocated to the correct line if anchor text doesn't match, else unchanged."""
     anchor_text = (f.anchor or f.fingerprint_hint or "").strip()
     if not anchor_text:
@@ -739,8 +752,7 @@ def _omit_marker_pr_summary_visible_text(
     successful_inline_posts: int,
     cfg,
     provider,
-    high_count: int,
-    medium_count: int,
+    gate_outcome: QualityGateReviewOutcome,
 ) -> str:
     """Human-readable PR summary for providers that omit inline HTML markers (e.g. Bitbucket)."""
     lines: list[str] = [
@@ -751,9 +763,14 @@ def _omit_marker_pr_summary_visible_text(
             "It **did not flag new issues** that require inline comments in this run "
             "(within the reviewed diff scope and your ignore rules)."
         )
-        lines.append(
-            "**From this automated pass, the change appears to meet expectations** for the areas reviewed."
+        gate_in_summary = bool(getattr(cfg, "review_decision_enabled", False)) and (
+            provider.capabilities().supports_review_decisions
         )
+        if not gate_in_summary or gate_outcome.decision != "REQUEST_CHANGES":
+            lines.append(
+                "**From this automated pass, the change appears to meet expectations** "
+                "for the areas reviewed."
+            )
     else:
         lines.append(
             f"It **identified {findings_planned} issue(s)** worth addressing on the diff."
@@ -771,9 +788,7 @@ def _omit_marker_pr_summary_visible_text(
                 "Re-run after updating the PR or fixing the reported problems."
             )
 
-    extra = _optional_quality_gate_summary_suffix(
-        provider, cfg, high_count, medium_count
-    )
+    extra = _optional_quality_gate_summary_suffix(provider, cfg, gate_outcome)
     if extra:
         lines.append(extra)
     return "\n\n".join(lines)
@@ -782,13 +797,11 @@ def _omit_marker_pr_summary_visible_text(
 def _optional_quality_gate_summary_suffix(
     provider,
     cfg,
-    high_count: int,
-    medium_count: int,
+    gate_outcome: QualityGateReviewOutcome,
 ) -> str:
     """Append threshold / merge-gate wording when review decisions are enabled.
 
-    *high_count* and *medium_count* must match the single pre-inline-post snapshot from
-    :func:`_quality_gate_high_medium_counts` so summary text agrees with ``submit_review_decision``.
+    *gate_outcome* must be the same snapshot used for :func:`_maybe_submit_review_decision`.
     """
     if not bool(getattr(cfg, "review_decision_enabled", False)):
         return ""
@@ -796,21 +809,15 @@ def _optional_quality_gate_summary_suffix(
         return ""
     high_threshold = int(getattr(cfg, "review_decision_high_threshold", 1))
     medium_threshold = int(getattr(cfg, "review_decision_medium_threshold", 3))
-    decision = _compute_review_decision_from_counts(
-        high_count,
-        medium_count,
-        high_threshold=high_threshold,
-        medium_threshold=medium_threshold,
-    )
-    if decision == "REQUEST_CHANGES":
+    if gate_outcome.decision == "REQUEST_CHANGES":
         return (
             f"Given your configured thresholds, Viper **suggests this PR needs work** before merge "
-            f"(open high={high_count} vs threshold {high_threshold}, "
-            f"open medium={medium_count} vs threshold {medium_threshold})."
+            f"(open high={gate_outcome.high_count} vs threshold {high_threshold}, "
+            f"open medium={gate_outcome.medium_count} vs threshold {medium_threshold})."
         )
     return (
         f"Given your configured thresholds, this PR **passes Viper's automated merge gate** "
-        f"(open high={high_count}, open medium={medium_count})."
+        f"(open high={gate_outcome.high_count}, open medium={gate_outcome.medium_count})."
     )
 
 
@@ -825,8 +832,7 @@ def _post_omit_marker_pr_summary_comment(
     *,
     findings_planned: int,
     successful_inline_posts: int,
-    high_count: int,
-    medium_count: int,
+    gate_outcome: QualityGateReviewOutcome,
     include_run_marker: bool = True,
 ) -> None:
     """Post a PR-level summary for omit-marker providers; optionally attach the ``run=`` id marker.
@@ -844,8 +850,7 @@ def _post_omit_marker_pr_summary_comment(
         successful_inline_posts=successful_inline_posts,
         cfg=cfg,
         provider=provider,
-        high_count=high_count,
-        medium_count=medium_count,
+        gate_outcome=gate_outcome,
     )
     if include_run_marker:
         run_id = _build_idempotency_key(cfg, llm_cfg, owner, repo, pr_number, head_sha)
@@ -889,14 +894,12 @@ def _quality_gate_dedupe_key_for_new_finding(finding: FindingV1, fp: str) -> str
     return f"new:{finding.path}:{finding.line}:{finding.code}"
 
 
-def _quality_gate_high_medium_counts(
+def _quality_gate_fetch_unresolved_items(
     provider,
     owner: str,
     repo: str,
     pr_number: int,
-    to_post: list[tuple[FindingV1, str]],
-) -> tuple[int, int]:
-    """Count distinct open high/medium signals: existing unresolved items plus net-new findings."""
+) -> list[Any]:
     try:
         items = provider.get_unresolved_review_items_for_quality_gate(owner, repo, pr_number)
     except Exception as e:
@@ -907,37 +910,66 @@ def _quality_gate_high_medium_counts(
             pr_number,
             e,
         )
-        items = []
-    if not isinstance(items, list):
-        items = []
+        return []
+    return items if isinstance(items, list) else []
 
+
+def _quality_gate_bump_seen(
+    seen_keys: set[str],
+    high_count: int,
+    medium_count: int,
+    key: str,
+    severity: str,
+) -> tuple[int, int]:
+    if key in seen_keys:
+        return high_count, medium_count
+    seen_keys.add(key)
+    if severity == "high":
+        return high_count + 1, medium_count
+    if severity == "medium":
+        return high_count, medium_count + 1
+    return high_count, medium_count
+
+
+def _quality_gate_high_medium_counts(
+    provider,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    to_post: list[tuple[FindingV1, str]],
+    *,
+    excluded_stable_ids: frozenset[str] | None = None,
+) -> tuple[int, int]:
+    """Count distinct open high/medium signals: existing unresolved items plus net-new findings."""
+    items = _quality_gate_fetch_unresolved_items(provider, owner, repo, pr_number)
+    skip_ids = excluded_stable_ids or frozenset()
     seen_keys: set[str] = set()
     high_count = 0
     medium_count = 0
 
-    def _bump(key: str, severity: str) -> None:
-        nonlocal high_count, medium_count
-        if key in seen_keys:
-            return
-        seen_keys.add(key)
-        if severity == "high":
-            high_count += 1
-        elif severity == "medium":
-            medium_count += 1
-
     for raw in items:
         if not isinstance(raw, UnresolvedReviewItem):
+            continue
+        if raw.stable_id in skip_ids:
             continue
         sev = raw.inferred_severity
         if sev not in ("high", "medium"):
             continue
-        _bump(_quality_gate_dedupe_key_for_item(raw), sev)
+        high_count, medium_count = _quality_gate_bump_seen(
+            seen_keys, high_count, medium_count, _quality_gate_dedupe_key_for_item(raw), sev
+        )
 
     for finding, fp in to_post:
         sev = finding.severity
         if sev not in ("high", "medium"):
             continue
-        _bump(_quality_gate_dedupe_key_for_new_finding(finding, fp), sev)
+        high_count, medium_count = _quality_gate_bump_seen(
+            seen_keys,
+            high_count,
+            medium_count,
+            _quality_gate_dedupe_key_for_new_finding(finding, fp),
+            sev,
+        )
 
     return high_count, medium_count
 
@@ -948,11 +980,123 @@ def _compute_review_decision_from_counts(
     *,
     high_threshold: int,
     medium_threshold: int,
-) -> str:
+) -> ReviewDecision:
     """Return REQUEST_CHANGES or APPROVE from aggregated open high/medium counts."""
     if high_count >= high_threshold or medium_count >= medium_threshold:
         return "REQUEST_CHANGES"
     return "APPROVE"
+
+
+@dataclass(frozen=True)
+class QualityGateReviewOutcome:
+    """Aggregated quality-gate counts and derived review decision (single source of truth)."""
+
+    high_count: int
+    medium_count: int
+    decision: ReviewDecision
+    submission_reason: str
+
+
+def _compute_quality_gate_review_outcome(
+    provider,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    to_post: list[tuple[FindingV1, str]],
+    cfg,
+    *,
+    excluded_gate_stable_ids: frozenset[str] | None = None,
+) -> QualityGateReviewOutcome:
+    """Combine provider unresolved items with planned posts; apply thresholds; build reason text."""
+    high_count, medium_count = _quality_gate_high_medium_counts(
+        provider,
+        owner,
+        repo,
+        pr_number,
+        to_post,
+        excluded_stable_ids=excluded_gate_stable_ids,
+    )
+    high_threshold = int(getattr(cfg, "review_decision_high_threshold", 1))
+    medium_threshold = int(getattr(cfg, "review_decision_medium_threshold", 3))
+    decision = _compute_review_decision_from_counts(
+        high_count,
+        medium_count,
+        high_threshold=high_threshold,
+        medium_threshold=medium_threshold,
+    )
+    submission_reason = (
+        f"Auto decision by Viper: aggregated open high={high_count} (threshold {high_threshold}), "
+        f"open medium={medium_count} (threshold {medium_threshold}) "
+        f"=> {decision}."
+    )
+    return QualityGateReviewOutcome(
+        high_count=high_count,
+        medium_count=medium_count,
+        decision=decision,
+        submission_reason=submission_reason,
+    )
+
+
+def _resolve_head_sha_for_review_decision_submission(
+    provider,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+) -> str:
+    """Use caller-provided head_sha, or fetch current PR head from the provider when empty."""
+    stripped = (head_sha or "").strip()
+    if stripped:
+        return stripped
+    try:
+        pr_info = provider.get_pr_info(owner, repo, pr_number)
+    except Exception as e:
+        logger.warning(
+            "get_pr_info failed while resolving head_sha owner=%s repo=%s pr_number=%s: %s",
+            owner,
+            repo,
+            pr_number,
+            e,
+        )
+        return ""
+    if pr_info is None:
+        return ""
+    resolved = (getattr(pr_info, "head_sha", None) or "").strip()
+    if resolved:
+        logger.info(
+            "Resolved PR head_sha from provider for review decision (prefix=%s)",
+            resolved[:12],
+        )
+    return resolved
+
+
+def _log_review_decision_event_if_present(ctx: ReviewDecisionEventContext | None) -> None:
+    """Emit one info line when webhook/CI event metadata is present (decision-only runs)."""
+    if ctx is None or not ctx.has_audit_fields():
+        return
+    logger.info(
+        "review_decision_event_context kind=%s source=%s name=%s action=%s "
+        "comment_id=%s thread_id=%s actor_login=%s",
+        ctx.event_kind,
+        ctx.source,
+        ctx.event_name,
+        ctx.event_action,
+        ctx.comment_id,
+        ctx.thread_id,
+        ctx.actor_login,
+    )
+
+
+def _head_sha_hint_for_decision_only(
+    ctx: ReviewDecisionEventContext | None,
+    cli_head_sha: str,
+) -> str:
+    """Prefer explicit head from event payload, then CLI/env head, before provider lookup."""
+    if ctx is not None:
+        from_event = (ctx.head_sha or "").strip()
+        if from_event:
+            return from_event
+    return (cli_head_sha or "").strip()
 
 
 def _maybe_submit_review_decision(
@@ -964,30 +1108,17 @@ def _maybe_submit_review_decision(
     dry_run: bool,
     cfg,
     *,
-    high_count: int,
-    medium_count: int,
+    gate_outcome: QualityGateReviewOutcome,
 ) -> None:
     """Submit or log PR-level review decision when configured and supported.
 
-    *high_count* / *medium_count* must be the same pre-inline-post values used for the
-    omit-marker PR summary so decision and user-visible counts stay aligned.
+    *gate_outcome* must match the omit-marker PR summary snapshot when both run in the same pass.
     """
     if not bool(getattr(cfg, "review_decision_enabled", False)):
         return
 
-    high_threshold = int(getattr(cfg, "review_decision_high_threshold", 1))
-    medium_threshold = int(getattr(cfg, "review_decision_medium_threshold", 3))
-    decision = _compute_review_decision_from_counts(
-        high_count,
-        medium_count,
-        high_threshold=high_threshold,
-        medium_threshold=medium_threshold,
-    )
-    reason = (
-        f"Auto decision by Viper: aggregated open high={high_count} (threshold {high_threshold}), "
-        f"open medium={medium_count} (threshold {medium_threshold}) "
-        f"=> {decision}."
-    )
+    decision = gate_outcome.decision
+    reason = gate_outcome.submission_reason
 
     caps = provider.capabilities()
     if not caps.supports_review_decisions:
@@ -1177,6 +1308,97 @@ def _run_agent_and_collect_response(
     return asyncio.run(_collect_response_async(runner, session_service, session_id, content))
 
 
+def _normalize_scm_identity_fragment(value: str) -> str:
+    """Lowercase and strip braces/spaces for comparing SCM user/uuid strings."""
+    return (value or "").strip().lower().replace("{", "").replace("}", "")
+
+
+def _event_actor_matches_bot_login(actor_login: str, bot: BotAttributionIdentity) -> bool:
+    bot_login = (bot.login or "").strip()
+    return bool(bot_login and actor_login and actor_login.lower() == bot_login.lower())
+
+
+def _event_actor_matches_bot_id(actor_id: str, bot: BotAttributionIdentity) -> bool:
+    bot_id_str = (bot.id_str or "").strip()
+    return bool(bot_id_str and actor_id and actor_id == bot_id_str)
+
+
+def _event_actor_matches_bot_slug(actor_login: str, bot: BotAttributionIdentity) -> bool:
+    bot_slug = (bot.slug or "").strip()
+    return bool(bot_slug and actor_login and actor_login.lower() == bot_slug.lower())
+
+
+def _event_actor_matches_bot_uuid_fragments(
+    actor_id: str, actor_login: str, bot: BotAttributionIdentity
+) -> bool:
+    bot_uuid = _normalize_scm_identity_fragment(bot.uuid)
+    if not bot_uuid:
+        return False
+    actor_uuid = _normalize_scm_identity_fragment(actor_id)
+    if actor_uuid and bot_uuid == actor_uuid:
+        return True
+    actor_login_uuid = _normalize_scm_identity_fragment(actor_login)
+    return bool(actor_login_uuid and bot_uuid == actor_login_uuid)
+
+
+def _reply_added_event_authored_by_bot(
+    event: ReviewDecisionEventContext, bot: BotAttributionIdentity
+) -> bool:
+    """True when event actor fields identify the same user as the review token (bot)."""
+    if not bot.is_resolved():
+        return False
+    actor_login = (event.actor_login or "").strip()
+    actor_id = (event.actor_id or "").strip()
+    if not actor_login and not actor_id:
+        return False
+    if _event_actor_matches_bot_login(actor_login, bot):
+        return True
+    if _event_actor_matches_bot_id(actor_id, bot):
+        return True
+    if _event_actor_matches_bot_slug(actor_login, bot):
+        return True
+    return _event_actor_matches_bot_uuid_fragments(actor_id, actor_login, bot)
+
+
+def _format_reply_dismissal_user_message(
+    ctx: ReviewThreadDismissalContext,
+    bot: BotAttributionIdentity,
+) -> str:
+    """Build the user message for the reply-dismissal agent."""
+    who = (bot.login or bot.slug or bot.id_str or bot.uuid or "").strip() or "(unknown)"
+    lines = [
+        "Classify this single pull-request review thread.",
+        f"Automated reviewer identity hint (token user): {who}",
+        "",
+        "Thread comments in chronological order:",
+    ]
+    for i, ent in enumerate(ctx.entries, start=1):
+        lines.append(f"--- Comment {i} ---")
+        lines.append(f"Author: {(ent.author_login or '').strip() or '(unknown)'}")
+        lines.append(ent.body or "")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _run_reply_dismissal_llm(user_message: str) -> str:
+    """Run the tool-free reply-dismissal agent once; return raw model text."""
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+
+    from code_review.agent.reply_dismissal_agent import create_reply_dismissal_agent
+
+    agent = create_reply_dismissal_agent()
+    session_service = InMemorySessionService()
+    runner = Runner(
+        agent=agent,
+        app_name=APP_NAME,
+        session_service=session_service,
+    )
+    session_id = f"reply-dismissal/{uuid.uuid4().hex[:12]}"
+    content = types.Content(role="user", parts=[types.Part(text=user_message)])
+    return _run_agent_and_collect_response(runner, session_service, session_id, content)
+
+
 class ReviewOrchestrator:
     """Orchestrates a single code review run (findings-only mode)."""
 
@@ -1192,6 +1414,8 @@ class ReviewOrchestrator:
         review_decision_enabled: bool | None = None,
         review_decision_high_threshold: int | None = None,
         review_decision_medium_threshold: int | None = None,
+        review_decision_only: bool = False,
+        event_context: ReviewDecisionEventContext | None = None,
     ):
         self.owner = owner
         self.repo = repo
@@ -1202,6 +1426,8 @@ class ReviewOrchestrator:
         self._review_decision_enabled_override = review_decision_enabled
         self._review_decision_high_threshold_override = review_decision_high_threshold
         self._review_decision_medium_threshold_override = review_decision_medium_threshold
+        self._review_decision_only = review_decision_only
+        self._event_context = event_context
 
     def _load_config_and_provider(self):
         """Load SCM/LLM config and create the provider instance.
@@ -1643,8 +1869,8 @@ class ReviewOrchestrator:
         )
         if dry_run:
             return 0
-        high_count, medium_count = _quality_gate_high_medium_counts(
-            provider, owner, repo, pr_number, to_post
+        gate_outcome = _compute_quality_gate_review_outcome(
+            provider, owner, repo, pr_number, to_post, cfg
         )
         count = 0
         if to_post:
@@ -1679,8 +1905,7 @@ class ReviewOrchestrator:
                 head_sha,
                 findings_planned=planned,
                 successful_inline_posts=count,
-                high_count=high_count,
-                medium_count=medium_count,
+                gate_outcome=gate_outcome,
                 include_run_marker=include_marker,
             )
         _maybe_submit_review_decision(
@@ -1691,8 +1916,7 @@ class ReviewOrchestrator:
             head_sha,
             dry_run,
             cfg,
-            high_count=high_count,
-            medium_count=medium_count,
+            gate_outcome=gate_outcome,
         )
         return count
 
@@ -1915,6 +2139,266 @@ class ReviewOrchestrator:
         )
         return refs, context_brief, prompt_suffix
 
+    def _decision_only_try_skip_when_bot_not_blocking(
+        self,
+        provider,
+        app_cfg,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        trace_id: str,
+        start_time: float,
+        run_handle,
+    ) -> list[FindingV1] | None:
+        if not (
+            app_cfg.review_decision_only_skip_if_bot_not_blocking
+            and event_allows_decision_only_skip_when_bot_not_blocking(self._event_context)
+        ):
+            return None
+        caps = provider.capabilities()
+        if not caps.supports_bot_blocking_state_query:
+            return None
+        if provider.get_bot_blocking_state(owner, repo, pr_number) != "NOT_BLOCKING":
+            return None
+        logger.info(
+            "Review-decision-only: skipping quality gate (bot not blocking; "
+            "CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING=1, "
+            "event_kind=reply_added)."
+        )
+        return self._record_observability_and_build_result(
+            trace_id,
+            owner,
+            repo,
+            pr_number,
+            start_time,
+            run_handle,
+            paths=[],
+            all_findings=[],
+            successful_post_count=0,
+            to_post=[],
+        )
+
+    def _decision_only_maybe_post_disagreed_thread_reply(
+        self,
+        provider,
+        caps_rd,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        dry_run: bool,
+        comment_id: str,
+        verdict: ReplyDismissalVerdictV1,
+    ) -> None:
+        if not caps_rd.supports_review_thread_reply:
+            return
+        if dry_run:
+            truncated = (verdict.reply_text or "")[:500]
+            logger.info(
+                "Dry-run: would post review-thread reply (truncated): %s",
+                truncated,
+            )
+            return
+        try:
+            provider.post_review_thread_reply(
+                owner, repo, pr_number, comment_id, verdict.reply_text
+            )
+        except Exception as e:
+            logger.warning("post_review_thread_reply failed: %s", e)
+
+    def _decision_only_reply_dismissal_excluded_gate_ids(
+        self,
+        provider,
+        app_cfg,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        dry_run: bool,
+        trace_id: str,
+    ) -> frozenset[str]:
+        """Stable ids to exclude from the quality gate after optional reply-dismissal LLM."""
+        ctx = self._event_context
+        if not (
+            app_cfg.reply_dismissal_enabled
+            and ctx is not None
+            and ctx.event_kind == "reply_added"
+            and (ctx.comment_id or "").strip()
+        ):
+            return frozenset()
+
+        comment_id = ctx.comment_id.strip()
+        bot_id = provider.get_bot_attribution_identity(owner, repo, pr_number)
+        if _reply_added_event_authored_by_bot(ctx, bot_id):
+            observability.record_reply_dismissal_outcome("skipped_bot_author")
+            logger.info(
+                "Reply-dismissal skipped: reply_added actor matches bot "
+                "(actor_login=%r actor_id=%r)",
+                (ctx.actor_login or "").strip(),
+                (ctx.actor_id or "").strip(),
+            )
+            return frozenset()
+
+        caps_rd = provider.capabilities()
+        if not caps_rd.supports_review_thread_dismissal_context:
+            observability.record_reply_dismissal_outcome("skipped_no_capability")
+            return frozenset()
+
+        dctx = provider.get_review_thread_dismissal_context(
+            owner, repo, pr_number, comment_id
+        )
+        if dctx is None or len(dctx.entries) < 2:
+            observability.record_reply_dismissal_outcome("skipped_insufficient_thread")
+            return frozenset()
+
+        user_msg = _format_reply_dismissal_user_message(dctx, bot_id)
+        try:
+            raw_verdict = _run_reply_dismissal_llm(user_msg)
+        except Exception as e:
+            logger.warning("Reply-dismissal LLM run failed: %s", e)
+            observability.record_reply_dismissal_outcome("llm_error")
+            return frozenset()
+
+        verdict = reply_dismissal_verdict_from_llm_text(raw_verdict)
+        if verdict is None:
+            observability.record_reply_dismissal_outcome("parse_failed")
+            return frozenset()
+
+        logger.info(
+            "reply_dismissal_verdict trace_id=%s verdict=%s pr=%s/%s#%s",
+            trace_id,
+            verdict.verdict,
+            owner,
+            repo,
+            pr_number,
+        )
+
+        if verdict.verdict == "agreed":
+            observability.record_reply_dismissal_outcome("agreed")
+            logger.info(
+                "Reply-dismissal agreed; excluding gate stable_id=%s",
+                dctx.gate_exclusion_stable_id,
+            )
+            return frozenset({dctx.gate_exclusion_stable_id})
+
+        if verdict.verdict == "disagreed":
+            observability.record_reply_dismissal_outcome("disagreed")
+            self._decision_only_maybe_post_disagreed_thread_reply(
+                provider,
+                caps_rd,
+                owner,
+                repo,
+                pr_number,
+                dry_run,
+                comment_id,
+                verdict,
+            )
+
+        return frozenset()
+
+    def _run_review_decision_only(
+        self,
+        trace_id: str,
+        start_time: float,
+        run_handle,
+        cfg,
+        provider,
+    ) -> list[FindingV1]:
+        """Recompute quality-gate counts from SCM state and submit review decision only."""
+        owner = self.owner
+        repo = self.repo
+        pr_number = self.pr_number
+        dry_run = self.dry_run
+        pr_url = self._build_pr_url(cfg, owner, repo, pr_number)
+        logger.info(
+            "Review-decision-only run for %s/%s PR %s (provider=%s) URL: %s",
+            owner,
+            repo,
+            pr_number,
+            cfg.provider,
+            pr_url,
+        )
+        print(f"Review-decision-only for PR: {pr_url}")
+
+        _log_review_decision_event_if_present(self._event_context)
+
+        app_cfg = get_code_review_app_config()
+        if (
+            self._event_context is not None
+            and self._event_context.has_audit_fields()
+            and self._event_context.event_kind
+            in ("comment_deleted", "thread_resolved", "thread_outdated", "scheduled")
+        ):
+            logger.info(
+                "Review-decision-only: event_kind=%s — recomputing gate from SCM state only "
+                "(no reply-dismissal LLM)",
+                self._event_context.event_kind,
+            )
+
+        skip_result = self._determine_skip_reason(
+            provider, cfg, owner, repo, pr_number, trace_id, start_time, run_handle
+        )
+        if skip_result is not None:
+            return skip_result
+
+        skip_early = self._decision_only_try_skip_when_bot_not_blocking(
+            provider,
+            app_cfg,
+            owner,
+            repo,
+            pr_number,
+            trace_id,
+            start_time,
+            run_handle,
+        )
+        if skip_early is not None:
+            return skip_early
+
+        head_hint = _head_sha_hint_for_decision_only(self._event_context, self.head_sha)
+        head_sha = _resolve_head_sha_for_review_decision_submission(
+            provider, owner, repo, pr_number, head_hint
+        )
+        if not head_sha and not dry_run:
+            logger.warning(
+                "Review-decision-only: head_sha missing after provider lookup; "
+                "submit_review_decision may omit commit id for some SCMs."
+            )
+
+        excluded_gate = self._decision_only_reply_dismissal_excluded_gate_ids(
+            provider, app_cfg, owner, repo, pr_number, dry_run, trace_id
+        )
+
+        gate_outcome = _compute_quality_gate_review_outcome(
+            provider,
+            owner,
+            repo,
+            pr_number,
+            [],
+            cfg,
+            excluded_gate_stable_ids=excluded_gate if excluded_gate else None,
+        )
+        _maybe_submit_review_decision(
+            provider,
+            owner,
+            repo,
+            pr_number,
+            head_sha,
+            dry_run,
+            cfg,
+            gate_outcome=gate_outcome,
+        )
+
+        return self._record_observability_and_build_result(
+            trace_id,
+            owner,
+            repo,
+            pr_number,
+            start_time,
+            run_handle,
+            paths=[],
+            all_findings=[],
+            successful_post_count=0,
+            to_post=[],
+        )
+
     def run(self) -> list[FindingV1]:
         """
         Execute the full review flow. Returns list of findings that were posted
@@ -1933,6 +2417,11 @@ class ReviewOrchestrator:
         run_handle = observability.start_run(trace_id)
 
         cfg, llm_cfg, provider = self._load_config_and_provider()
+        app_cfg = get_code_review_app_config()
+        decision_only = bool(self._review_decision_only) or bool(app_cfg.review_decision_only)
+        if decision_only:
+            return self._run_review_decision_only(trace_id, start_time, run_handle, cfg, provider)
+
         pr_url = self._build_pr_url(cfg, owner, repo, pr_number)
 
         logger.info(
@@ -1977,7 +2466,6 @@ class ReviewOrchestrator:
             return idempotency_result
 
         ctx_cfg = get_context_aware_config()
-        app_cfg = get_code_review_app_config()
         if ctx_cfg.enabled:
             try:
                 validate_context_aware_sources(ctx_cfg, cfg)
@@ -2135,6 +2623,8 @@ def run_review(
     review_decision_enabled: bool | None = None,
     review_decision_high_threshold: int | None = None,
     review_decision_medium_threshold: int | None = None,
+    review_decision_only: bool = False,
+    event_context: ReviewDecisionEventContext | None = None,
 ) -> list[FindingV1]:
     """
     Run the code review agent (findings-only mode). Fetches existing comments,
@@ -2143,7 +2633,17 @@ def run_review(
 
     Optional review-decision kwargs apply only to this run (they do not mutate
     the process-global cached :func:`~code_review.config.get_scm_config` instance).
+
+    When *review_decision_only* is True (or ``CODE_REVIEW_REVIEW_DECISION_ONLY`` is set),
+    skips the agent, inline posting, and idempotency short-circuit; only recomputes the
+    quality gate and submits a PR review decision when enabled in SCM config.
+
+    *event_context* may be supplied programmatically; when omitted, non-empty
+    ``CODE_REVIEW_EVENT_*`` environment variables are parsed into
+    :class:`~code_review.schemas.review_decision_event.ReviewDecisionEventContext`
+    (used for review-decision-only logging and head SHA hints).
     """
+    resolved_event = event_context or review_decision_event_context_from_env()
     orchestrator = ReviewOrchestrator(
         owner,
         repo,
@@ -2154,5 +2654,7 @@ def run_review(
         review_decision_enabled=review_decision_enabled,
         review_decision_high_threshold=review_decision_high_threshold,
         review_decision_medium_threshold=review_decision_medium_threshold,
+        review_decision_only=review_decision_only,
+        event_context=resolved_event,
     )
     return orchestrator.run()

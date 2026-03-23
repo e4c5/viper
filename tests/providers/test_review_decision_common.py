@@ -3,7 +3,6 @@
 from unittest.mock import MagicMock
 
 import httpx
-import pytest
 
 from code_review.providers.review_decision_common import (
     DEFAULT_AUTOMATED_REVIEW_BODY,
@@ -61,7 +60,11 @@ def test_delete_soft_fail_custom_safe_codes():
 
     # With custom safe_codes that include 403, delete_fn is still called once and returns cleanly
     delete_fn2 = MagicMock(side_effect=exc)
-    delete_soft_fail(delete_fn2, "https://example.com/api/approve", safe_codes=frozenset({403, 404}))
+    delete_soft_fail(
+        delete_fn2,
+        "https://example.com/api/approve",
+        safe_codes=frozenset({403, 404}),
+    )
     delete_fn2.assert_called_once()
 
 

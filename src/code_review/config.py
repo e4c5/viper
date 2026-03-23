@@ -106,7 +106,10 @@ class LLMConfig(BaseSettings):
     provider: Literal["gemini", "openai", "anthropic", "ollama", "vertex", "openrouter"] = "gemini"
     api_key: SecretStr | None = Field(
         default=None,
-        description="API key for the configured LLM provider (single key; provider chosen via LLM_PROVIDER).",
+        description=(
+            "API key for the configured LLM provider "
+            "(single key; provider chosen via LLM_PROVIDER)."
+        ),
     )
     model: str = "gemini-2.5-flash"
     context_window: int = Field(
@@ -258,6 +261,36 @@ class CodeReviewAppConfig(BaseSettings):
     include_commit_messages_in_prompt: bool = Field(
         default=True,
         validation_alias="CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT",
+    )
+    review_decision_only: bool = Field(
+        default=False,
+        validation_alias="CODE_REVIEW_REVIEW_DECISION_ONLY",
+        description=(
+            "Skip the LLM and inline posting; only recompute quality-gate counts and "
+            "submit PR review decision when SCM_REVIEW_DECISION_ENABLED is true. "
+            "Optional CODE_REVIEW_EVENT_* env vars attach webhook context for logging "
+            "(see docs/CONFIGURATION-REFERENCE.md)."
+        ),
+    )
+    review_decision_only_skip_if_bot_not_blocking: bool = Field(
+        default=False,
+        validation_alias="CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING",
+        description=(
+            "Review-decision-only: when the event is reply_added "
+            "(non-empty CODE_REVIEW_EVENT_*), skip recomputation if the provider reports "
+            "the token user is not in a blocking review state. "
+            "No effect when event context is empty or for non-reply events."
+        ),
+    )
+    reply_dismissal_enabled: bool = Field(
+        default=False,
+        validation_alias="CODE_REVIEW_REPLY_DISMISSAL_ENABLED",
+        description=(
+            "Review-decision-only: when event_kind is reply_added and CODE_REVIEW_EVENT_COMMENT_ID "
+            "is set, run the reply-dismissal LLM on the thread (GitHub/GitLab when supported); "
+            "if agreed, exclude that thread from quality-gate counts; if disagreed, optionally "
+            "post a thread reply when the provider supports it."
+        ),
     )
 
 

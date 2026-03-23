@@ -193,6 +193,27 @@ def test_submit_review_decision(mock_client):
 
 
 @patch("code_review.providers.github.httpx.Client")
+def test_get_bot_blocking_state_unknown_when_list_reviews_fails(mock_client):
+    """Failed reviews listing must not be treated as empty (NOT_BLOCKING)."""
+    ok_user = MagicMock()
+    ok_user.headers = {"content-type": "application/json"}
+    ok_user.json.return_value = {"login": "thebot"}
+    ok_user.raise_for_status = MagicMock()
+
+    bad = MagicMock()
+    bad.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "err",
+        request=MagicMock(),
+        response=MagicMock(status_code=503),
+    )
+
+    mock_client.return_value.__enter__.return_value.get.side_effect = [ok_user, bad]
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    assert p.get_bot_blocking_state("owner", "repo", 1) == "UNKNOWN"
+
+
+@patch("code_review.providers.github.httpx.Client")
 def test_get_pr_info(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
@@ -323,3 +344,131 @@ def test_get_unresolved_review_items_graphql_failure_returns_empty(mock_client):
     items = p.get_unresolved_review_items_for_quality_gate("o", "r", 1)
     assert items == []
     mock_client.return_value.__enter__.return_value.get.assert_not_called()
+
+
+@patch("code_review.providers.github.GitHubProvider._graphql")
+def test_get_review_thread_dismissal_context_finds_thread(mock_gql):
+    mock_gql.return_value = {
+        "repository": {
+            "pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [
+                        {
+                            "id": "PRRT_kwDOABC",
+                            "isResolved": False,
+                            "isOutdated": False,
+                            "comments": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [
+                                    {
+                                        "databaseId": 100,
+                                        "body": "[High] x",
+                                        "path": "a.py",
+                                        "line": 1,
+                                        "createdAt": "t1",
+                                        "author": {"login": "bot"},
+                                    },
+                                    {
+                                        "databaseId": 200,
+                                        "body": "fixed",
+                                        "path": "a.py",
+                                        "line": 1,
+                                        "createdAt": "t2",
+                                        "author": {"login": "dev"},
+                                    },
+                                ],
+                            },
+                        }
+                    ],
+                }
+            }
+        }
+    }
+    p = GitHubProvider("https://api.github.com", "tok")
+    ctx = p.get_review_thread_dismissal_context("o", "r", 1, "200")
+    assert ctx is not None
+    assert ctx.gate_exclusion_stable_id == "github:thread:PRRT_kwDOABC"
+    assert len(ctx.entries) == 2
+
+
+@patch.object(GitHubProvider, "_graphql")
+def test_get_review_thread_dismissal_context_fetches_extra_comment_pages(mock_gql):
+    """Triggered comment past first comments page is found via node(id) pagination."""
+    first_page_nodes = [
+        {
+            "databaseId": 1000 + i,
+            "body": f"c{i}",
+            "path": "a.py",
+            "line": 1,
+            "createdAt": "t0",
+            "author": {"login": "u"},
+        }
+        for i in range(50)
+    ]
+    thread = {
+        "id": "PRRT_kwLONG",
+        "isResolved": False,
+        "isOutdated": False,
+        "comments": {
+            "pageInfo": {"hasNextPage": True, "endCursor": "commentCur1"},
+            "nodes": first_page_nodes,
+        },
+    }
+    list_threads = {
+        "repository": {
+            "pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [thread],
+                }
+            }
+        }
+    }
+    more_comments = {
+        "node": {
+            "comments": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [
+                    {
+                        "databaseId": 9999,
+                        "body": "target",
+                        "path": "a.py",
+                        "line": 1,
+                        "createdAt": "t9",
+                        "author": {"login": "human"},
+                    }
+                ],
+            }
+        }
+    }
+    mock_gql.side_effect = [list_threads, more_comments]
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    ctx = p.get_review_thread_dismissal_context("o", "r", 1, "9999")
+    assert ctx is not None
+    assert len(ctx.entries) == 51
+    assert ctx.entries[-1].comment_id == "9999"
+
+
+@patch("code_review.providers.github.httpx.Client")
+def test_get_bot_attribution_identity_github(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {"login": "MyBot", "id": 42}
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    bid = p.get_bot_attribution_identity("o", "r", 1)
+    assert bid.login == "mybot"
+    assert bid.id_str == "42"
+
+
+@patch.object(GitHubProvider, "_post")
+def test_post_review_thread_reply_github(mock_post):
+    p = GitHubProvider("https://api.github.com", "tok")
+    p.post_review_thread_reply("o", "r", 1, "99", "hello")
+    mock_post.assert_called_once_with(
+        "/repos/o/r/pulls/1/comments",
+        {"body": "hello", "in_reply_to": 99},
+    )

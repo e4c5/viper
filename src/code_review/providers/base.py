@@ -4,9 +4,10 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from code_review.diff.parser import parse_unified_diff
+from code_review.schemas.review_thread_dismissal import ReviewThreadDismissalContext
 
 
 def _log_pr_info_warning(
@@ -100,6 +101,13 @@ class ProviderCapabilities(BaseModel):
       definitions produce no rendered output when unreferenced.
     - supports_review_decisions: provider supports PR-level review decisions
       (APPROVE / REQUEST_CHANGES).
+    - supports_bot_blocking_state_query: provider can report whether the token user
+      currently has an active request-changes / needs-work style block (Phase D).
+    - supports_bot_attribution_identity_query: provider can return token/bot SCM identity
+      (login, id, etc.) for matching comments and reviews (Phase E / §5.3).
+    - supports_review_thread_dismissal_context: provider can load ordered thread comments
+      for reply-dismissal classification (Phase E.1).
+    - supports_review_thread_reply: provider can post a reply on an existing review comment.
     """
 
     resolvable_comments: bool = False
@@ -110,9 +118,40 @@ class ProviderCapabilities(BaseModel):
     omit_fingerprint_marker_in_body: bool = False
     embed_agent_marker_as_commonmark_linkref: bool = False
     supports_review_decisions: bool = False
+    supports_bot_blocking_state_query: bool = False
+    supports_bot_attribution_identity_query: bool = False
+    supports_review_thread_dismissal_context: bool = False
+    supports_review_thread_reply: bool = False
 
 
 ReviewDecision = Literal["APPROVE", "REQUEST_CHANGES"]
+
+BotBlockingState = Literal["BLOCKING", "NOT_BLOCKING", "UNKNOWN"]
+
+
+class BotAttributionIdentity(BaseModel):
+    """SCM identity for the token user / bot used to attribute Viper reviews and comments."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    login: str = Field(
+        default="",
+        description="Normalized lowercase username/login when the API exposes it",
+    )
+    id_str: str = Field(default="", description="Numeric or opaque user id as string")
+    slug: str = Field(default="", description="Bitbucket Server user slug when applicable")
+    uuid: str = Field(
+        default="",
+        description="Bitbucket Cloud uuid (with or without braces) when applicable",
+    )
+
+    def is_resolved(self) -> bool:
+        return bool(
+            (self.login or "").strip()
+            or (self.id_str or "").strip()
+            or (self.slug or "").strip()
+            or (self.uuid or "").strip()
+        )
 
 
 class FileInfo(BaseModel):
@@ -130,15 +169,83 @@ class PRInfo(BaseModel):
     title: str = ""
     labels: list[str] = Field(default_factory=list, description="Label names")
     description: str = ""
+    head_sha: str = Field(
+        default="",
+        description="Current PR/MR head commit when returned by the provider (optional).",
+    )
+
+
+def _strip_sha_field(value: object) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return ""
+
+
+def _head_sha_from_github_style_head(data: dict) -> str:
+    head = data.get("head")
+    if isinstance(head, dict):
+        return _strip_sha_field(head.get("sha"))
+    return ""
+
+
+def _head_sha_from_diff_refs(data: dict) -> str:
+    diff_refs = data.get("diff_refs") or {}
+    if isinstance(diff_refs, dict):
+        return _strip_sha_field(diff_refs.get("head_sha"))
+    return ""
+
+
+def _head_sha_from_bitbucket_source(data: dict) -> str:
+    source = data.get("source") or {}
+    if not isinstance(source, dict):
+        return ""
+    commit = source.get("commit") or {}
+    if isinstance(commit, dict):
+        return _strip_sha_field(commit.get("hash"))
+    return ""
+
+
+def _head_sha_from_bitbucket_server_from_ref(data: dict) -> str:
+    from_ref = data.get("fromRef") or {}
+    if isinstance(from_ref, dict):
+        return _strip_sha_field(from_ref.get("latestCommit"))
+    return ""
+
+
+def head_sha_from_pr_api_dict(data: dict) -> str:
+    """Extract head commit SHA from common PR/MR JSON shapes (GitHub/Gitea, GitLab, Bitbucket)."""
+    if not isinstance(data, dict):
+        return ""
+    for fn in (
+        _head_sha_from_github_style_head,
+        _head_sha_from_diff_refs,
+        _head_sha_from_bitbucket_source,
+        _head_sha_from_bitbucket_server_from_ref,
+    ):
+        s = fn(data)
+        if s:
+            return s
+    return ""
 
 
 def pr_info_from_api_dict(data: dict, description_key: str = "body") -> PRInfo:
-    """Build PRInfo from a provider API dict. Use description_key='description' for GitLab/Bitbucket."""
+    """Build PRInfo from a provider API dict.
+
+    Use description_key='description' for GitLab/Bitbucket.
+    """
     title = data.get("title", "") or ""
     labels_raw = data.get("labels") or []
-    labels = [lb.get("name", lb) if isinstance(lb, dict) else str(lb) for lb in labels_raw]
+    labels = [
+        (lb.get("name", lb) if isinstance(lb, dict) else str(lb))
+        for lb in labels_raw
+    ]
     description = data.get(description_key, "") or ""
-    return PRInfo(title=title, labels=labels, description=description)
+    return PRInfo(
+        title=title,
+        labels=labels,
+        description=description,
+        head_sha=head_sha_from_pr_api_dict(data),
+    )
 
 
 def normalize_diff_anchor_path(file_path: str) -> str:
@@ -157,7 +264,10 @@ def normalize_diff_anchor_path(file_path: str) -> str:
 
 
 def file_infos_from_pull_file_list(files: list) -> list[FileInfo]:
-    """Build list of FileInfo from a provider API list of file dicts (filename/path, status, additions, deletions)."""
+    """Build list of FileInfo from a provider list of file dicts.
+
+    Dicts use filename/path, status, additions, deletions.
+    """
     if not isinstance(files, list):
         return []
     result: list[FileInfo] = []
@@ -255,7 +365,9 @@ class InlineComment(BaseModel):
     )
     line_type: str | None = Field(
         default=None,
-        description="For Bitbucket Server: 'ADDED' or 'CONTEXT' so the comment anchors to the diff line",
+        description=(
+            "For Bitbucket Server: 'ADDED' or 'CONTEXT' so the comment anchors to the diff line"
+        ),
     )
 
     @model_validator(mode="after")
@@ -447,6 +559,33 @@ class ProviderInterface(ABC):
             supports_multiline_suggestions=False,
         )
 
+    def get_bot_attribution_identity(
+        self, owner: str, repo: str, pr_number: int
+    ) -> BotAttributionIdentity:
+        """Return SCM identity for the authenticated user (token) when available."""
+        return BotAttributionIdentity()
+
+    def get_review_thread_dismissal_context(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        triggered_comment_id: str,
+    ) -> ReviewThreadDismissalContext | None:
+        """Load ordered thread comments for reply-dismissal; None if unsupported or not found."""
+        return None
+
+    def post_review_thread_reply(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        reply_to_comment_id: str,
+        body: str,
+    ) -> None:
+        """Post a reply on an existing PR review comment (e.g. disagreed dismissal text)."""
+        raise NotImplementedError("post_review_thread_reply not implemented for this provider")
+
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """
         Return PR title and labels for skip-review check.
@@ -463,3 +602,14 @@ class ProviderInterface(ABC):
         Default: empty list (provider does not implement commit listing).
         """
         return []
+
+    def get_bot_blocking_state(self, owner: str, repo: str, pr_number: int) -> BotBlockingState:
+        """Return whether the token/integration user currently blocks merge via review state.
+
+        ``BLOCKING`` ≈ request-changes / needs-work still in effect for this user.
+        ``NOT_BLOCKING`` ≈ approved or no blocking review from this user.
+        ``UNKNOWN`` when the SCM does not expose this or the call fails.
+
+        Used for optional review-decision-only short-circuits (see Phase D docs).
+        """
+        return "UNKNOWN"

@@ -384,7 +384,9 @@ def test_submit_review_decision_request_changes_ignores_404_unapprove(mock_clien
 
     mock_delete_resp = MagicMock()
     mock_delete_resp.status_code = 404
-    mock_404 = real_httpx.HTTPStatusError("not found", request=MagicMock(), response=mock_delete_resp)
+    mock_404 = real_httpx.HTTPStatusError(
+        "not found", request=MagicMock(), response=mock_delete_resp
+    )
     mock_post_resp = MagicMock()
     mock_post_resp.raise_for_status = MagicMock()
     mock_post_resp.json.return_value = {"id": 1}
@@ -414,3 +416,51 @@ def test_submit_review_decision_approve_does_not_delete(mock_client):
     assert http.delete.call_count == 0
     assert http.post.call_count == 1
     assert "/merge_requests/7/approve" in http.post.call_args[0][0]
+
+
+@patch("code_review.providers.gitlab.http_get_json_or_text")
+def test_get_bot_blocking_state_requested_changes_last_wins(mock_get):
+    mock_get.side_effect = [
+        {"id": 10},
+        [
+            {"id": 1, "user": {"id": 10}, "state": "approved"},
+            {"id": 2, "user": {"id": 10}, "state": "requested_changes"},
+        ],
+    ]
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    assert p.get_bot_blocking_state("owner", "repo", 3) == "BLOCKING"
+
+
+@patch("code_review.providers.gitlab.http_get_json_or_text")
+def test_get_bot_blocking_state_not_blocking_when_other_users_only(mock_get):
+    mock_get.side_effect = [
+        {"id": 10},
+        [{"id": 1, "user": {"id": 99}, "state": "requested_changes"}],
+    ]
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    assert p.get_bot_blocking_state("owner", "repo", 3) == "NOT_BLOCKING"
+
+
+@patch("code_review.providers.gitlab.http_get_json_or_text")
+def test_get_bot_blocking_state_unknown_on_reviews_404(mock_get):
+    import httpx as real_httpx
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+    err = real_httpx.HTTPStatusError("nope", request=MagicMock(), response=mock_resp)
+    mock_get.side_effect = [{"id": 10}, err]
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    assert p.get_bot_blocking_state("owner", "repo", 3) == "UNKNOWN"
+
+
+@patch("code_review.providers.gitlab.http_get_json_or_text")
+def test_get_bot_blocking_state_paginates_reviews(mock_get):
+    """Bot review on page 2 must not be ignored (first page only is stale)."""
+    page1 = [{"id": i, "user": {"id": 99}, "state": "approved"} for i in range(100)]
+    page2 = [
+        {"id": 150, "user": {"id": 10}, "state": "approved"},
+        {"id": 200, "user": {"id": 10}, "state": "requested_changes"},
+    ]
+    mock_get.side_effect = [{"id": 10}, page1, page2]
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    assert p.get_bot_blocking_state("owner", "repo", 3) == "BLOCKING"

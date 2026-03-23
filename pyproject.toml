@@ -90,3 +90,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "C4", "UP"]
+
+# LLM instruction strings are intentionally long single lines.
+[tool.ruff.lint.per-file-ignores]
+"src/code_review/agent/agent.py" = ["E501"]

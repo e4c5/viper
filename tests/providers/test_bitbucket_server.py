@@ -878,3 +878,106 @@ def test_submit_review_decision_requires_participant_slug():
     p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
     with pytest.raises(ValueError, match="SCM_BITBUCKET_SERVER_USER_SLUG"):
         p.submit_review_decision("PROJ", "repo", 1, "APPROVE")
+
+
+def test_get_bot_blocking_state_unknown_without_participant_slug():
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    assert p.get_bot_blocking_state("PROJ", "repo", 1) == "UNKNOWN"
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_bot_blocking_state_unknown_when_pr_has_no_participant_or_reviewer_lists(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {"id": 5, "title": "x"}
+    mock_resp.raise_for_status = MagicMock()
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketServerProvider(
+        "https://bb:7990/rest/api/1.0",
+        "tok",
+        participant_user_slug="u1",
+    )
+    assert p.get_bot_blocking_state("PROJ", "repo", 5) == "UNKNOWN"
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_bot_blocking_state_not_blocking_when_participants_and_reviewers_empty(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {"participants": [], "reviewers": []}
+    mock_resp.raise_for_status = MagicMock()
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketServerProvider(
+        "https://bb:7990/rest/api/1.0",
+        "tok",
+        participant_user_slug="u1",
+    )
+    assert p.get_bot_blocking_state("PROJ", "repo", 5) == "NOT_BLOCKING"
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_bot_blocking_state_needs_work(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {
+        "reviewers": [
+            {"user": {"slug": "u1"}, "status": "NEEDS_WORK"},
+        ]
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketServerProvider(
+        "https://bb:7990/rest/api/1.0",
+        "tok",
+        participant_user_slug="u1",
+    )
+    assert p.get_bot_blocking_state("PROJ", "repo", 5) == "BLOCKING"
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_bot_blocking_state_participants_needs_work(mock_client):
+    """Participant PUT state is reflected on ``participants``; may be absent from ``reviewers``."""
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {
+        "participants": [
+            {"user": {"slug": "u1"}, "status": "NEEDS_WORK"},
+        ],
+        "reviewers": [],
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketServerProvider(
+        "https://bb:7990/rest/api/1.0",
+        "tok",
+        participant_user_slug="u1",
+    )
+    assert p.get_bot_blocking_state("PROJ", "repo", 5) == "BLOCKING"
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_bot_blocking_state_participants_precedence_over_reviewers(mock_client):
+    """``participants`` wins when both lists include the user (participant PUT semantics)."""
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {
+        "participants": [
+            {"user": {"slug": "u1"}, "status": "APPROVED"},
+        ],
+        "reviewers": [
+            {"user": {"slug": "u1"}, "status": "NEEDS_WORK"},
+        ],
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketServerProvider(
+        "https://bb:7990/rest/api/1.0",
+        "tok",
+        participant_user_slug="u1",
+    )
+    assert p.get_bot_blocking_state("PROJ", "repo", 5) == "NOT_BLOCKING"

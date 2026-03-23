@@ -298,7 +298,9 @@ def test_submit_review_decision_approve_ignores_404_on_clear(mock_client):
 
     mock_delete_resp = MagicMock()
     mock_delete_resp.status_code = 404
-    mock_404 = real_httpx.HTTPStatusError("not found", request=MagicMock(), response=mock_delete_resp)
+    mock_404 = real_httpx.HTTPStatusError(
+        "not found", request=MagicMock(), response=mock_delete_resp
+    )
     mock_post_resp = MagicMock()
     mock_post_resp.raise_for_status = MagicMock()
     mock_post_resp.content = b""
@@ -311,3 +313,31 @@ def test_submit_review_decision_approve_ignores_404_on_clear(mock_client):
 
     urls = [http.post.call_args_list[i][0][0] for i in range(http.post.call_count)]
     assert any(u.endswith("/pullrequests/9/approve") for u in urls)
+
+
+@patch("code_review.providers.bitbucket.http_get_json_or_text")
+def test_get_bot_blocking_state_needs_work(mock_get):
+    mock_get.side_effect = [
+        {"uuid": "{me}"},
+        {
+            "participants": [
+                {"user": {"uuid": "{me}"}, "state": "needs_work"},
+            ]
+        },
+    ]
+    p = BitbucketProvider("https://api.bitbucket.org/2.0", "tok")
+    assert p.get_bot_blocking_state("ws", "repo", 1) == "BLOCKING"
+
+
+@patch("code_review.providers.bitbucket.http_get_json_or_text")
+def test_get_bot_blocking_state_approved(mock_get):
+    mock_get.side_effect = [
+        {"uuid": "{me}"},
+        {
+            "participants": [
+                {"user": {"uuid": "{me}"}, "approved": True, "state": "approved"},
+            ]
+        },
+    ]
+    p = BitbucketProvider("https://api.bitbucket.org/2.0", "tok")
+    assert p.get_bot_blocking_state("ws", "repo", 1) == "NOT_BLOCKING"

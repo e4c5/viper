@@ -23,6 +23,7 @@ This file helps AI coding assistants (e.g. Cursor, Codex) work effectively on th
 | **Logging** | `src/code_review/logging_config.py` | Centralized logging configuration |
 | **Model** | `src/code_review/models.py` | `get_configured_model()`, `get_context_window()`, `get_max_output_tokens()` |
 | **Findings** | `src/code_review/schemas/findings.py` | `FindingV1` — contract for agent JSON output |
+| **Reply dismissal** | `schemas/reply_dismissal.py`, `schemas/review_thread_dismissal.py`, `agent/reply_dismissal_agent.py`, `providers/base.py` (`get_review_thread_dismissal_context`, `post_review_thread_reply`, `get_bot_attribution_identity`) | Review-decision-only: `CODE_REVIEW_REPLY_DISMISSAL_ENABLED`; thread context + reply on **GitHub** and **GitLab** only |
 | **Diff** | `src/code_review/diff/` | Parser, position, fingerprint/marker for dedup and comments |
 | **Standards** | `src/code_review/standards/` | Language/framework detection; `prompts/` contains review prompt fragments |
 | **Formatters** | `src/code_review/formatters/comment.py` | `finding_to_comment_body()` |
@@ -54,8 +55,7 @@ Tests mirror `src/`: `tests/test_runner.py`, `tests/providers/`, `tests/runner/`
 ## Documentation
 
 - **README.md** — Quick start, config, Docker/CI, observability.
-- **docs/SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md** — Per-SCM approve / needs-work / merge checks vs `SCM_REVIEW_DECISION_*`.
-- **docs/SCM-REVIEW-DECISIONS-IMPLEMENTATION-PLAN.md** — Code inventory for review decisions; gap backlog (GitLab, Bitbucket).
+- **docs/SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md** — Per-SCM approve / needs-work / merge checks vs `SCM_REVIEW_DECISION_*`; review-decision-only and reply-dismissal (end user).
 - **docs/DEVELOPER_GUIDE.md** — Full implementation guide: architecture, flow, modules, config, extension points, testing.
 
 **ADK**: Runner builds an ADK Agent (model, instruction, tools from `agent/tools/`) and uses Runner + InMemorySessionService; it calls `Runner.run()` then parses the final response for a JSON array of findings. Tools delegate to the provider; the agent does not post or fetch comments.

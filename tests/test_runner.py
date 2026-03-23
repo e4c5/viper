@@ -6,7 +6,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from code_review.agent import create_review_agent
-from code_review.providers.base import FileInfo, PRInfo, ProviderCapabilities, UnresolvedReviewItem
+from code_review.providers.base import (
+    BotAttributionIdentity,
+    FileInfo,
+    PRInfo,
+    ProviderCapabilities,
+    UnresolvedReviewItem,
+)
 from tests.conftest import runner_run_async_returning
 
 
@@ -494,3 +500,639 @@ def test_run_review_request_changes_from_pre_existing_unresolved_high_comment(
 
     provider.submit_review_decision.assert_called_once()
     assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_decision_only_skips_agent_and_inline(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    """Decision-only mode resolves head_sha from get_pr_info and submits review without LLM."""
+    from code_review.runner import run_review
+
+    provider = _provider_with_review_decisions()
+    provider.get_pr_info = MagicMock(return_value=PRInfo(head_sha="from-api-sha"))
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    posted = run_review(
+        "o",
+        "r",
+        1,
+        head_sha="",
+        dry_run=False,
+        review_decision_only=True,
+    )
+
+    assert posted == []
+    provider.post_review_comments.assert_not_called()
+    provider.submit_review_decision.assert_called_once()
+    assert provider.submit_review_decision.call_args.kwargs.get("head_sha") == "from-api-sha"
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_decision_only_prefers_event_context_head_sha(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    """Event context head_sha wins over empty CLI head when resolving submission SHA."""
+    from code_review.runner import run_review
+    from code_review.schemas.review_decision_event import ReviewDecisionEventContext
+
+    provider = _provider_with_review_decisions()
+    provider.get_pr_info = MagicMock(return_value=PRInfo(head_sha="should-not-use"))
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    run_review(
+        "o",
+        "r",
+        1,
+        head_sha="",
+        dry_run=False,
+        review_decision_only=True,
+        event_context=ReviewDecisionEventContext(head_sha="from-event"),
+    )
+
+    provider.submit_review_decision.assert_called_once()
+    assert provider.submit_review_decision.call_args.kwargs.get("head_sha") == "from-event"
+    provider.get_pr_info.assert_not_called()
+
+
+@patch("code_review.runner.get_code_review_app_config")
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_decision_only_skips_when_skip_if_bot_not_blocking_and_reply(
+    mock_get_scm_config,
+    mock_get_provider,
+    mock_get_context_window,
+    mock_app_cfg,
+):
+    """Opt-in + reply_added + NOT_BLOCKING skips gate and submission."""
+    from code_review.runner import run_review
+    from code_review.schemas.review_decision_event import ReviewDecisionEventContext
+
+    mock_app_cfg.return_value = MagicMock(review_decision_only_skip_if_bot_not_blocking=True)
+    caps = ProviderCapabilities(
+        resolvable_comments=False,
+        supports_suggestions=False,
+        supports_review_decisions=True,
+        supports_bot_blocking_state_query=True,
+    )
+    provider = _provider_with_review_decisions(capabilities=caps)
+    provider.get_pr_info = MagicMock(return_value=PRInfo(head_sha="from-api-sha"))
+    provider.get_bot_blocking_state = MagicMock(return_value="NOT_BLOCKING")
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    posted = run_review(
+        "o",
+        "r",
+        1,
+        head_sha="",
+        dry_run=False,
+        review_decision_only=True,
+        event_context=ReviewDecisionEventContext(
+            event_kind="reply_added",
+            comment_id="42",
+            source="webhook_comment",
+        ),
+    )
+
+    assert posted == []
+    provider.get_bot_blocking_state.assert_called_once_with("o", "r", 1)
+    provider.submit_review_decision.assert_not_called()
+
+
+@patch("code_review.runner.get_code_review_app_config")
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_decision_only_skip_opt_in_ignored_when_bot_blocking(
+    mock_get_scm_config,
+    mock_get_provider,
+    mock_get_context_window,
+    mock_app_cfg,
+):
+    from code_review.runner import run_review
+    from code_review.schemas.review_decision_event import ReviewDecisionEventContext
+
+    mock_app_cfg.return_value = MagicMock(review_decision_only_skip_if_bot_not_blocking=True)
+    caps = ProviderCapabilities(
+        resolvable_comments=False,
+        supports_suggestions=False,
+        supports_review_decisions=True,
+        supports_bot_blocking_state_query=True,
+    )
+    provider = _provider_with_review_decisions(capabilities=caps)
+    provider.get_pr_info = MagicMock(return_value=PRInfo(head_sha="sha"))
+    provider.get_bot_blocking_state = MagicMock(return_value="BLOCKING")
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    run_review(
+        "o",
+        "r",
+        1,
+        head_sha="",
+        dry_run=False,
+        review_decision_only=True,
+        event_context=ReviewDecisionEventContext(
+            event_kind="reply_added",
+            comment_id="42",
+            source="webhook_comment",
+        ),
+    )
+
+    provider.submit_review_decision.assert_called_once()
+
+
+@patch("code_review.runner.get_code_review_app_config")
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_decision_only_skip_opt_in_ignored_for_comment_deleted(
+    mock_get_scm_config,
+    mock_get_provider,
+    mock_get_context_window,
+    mock_app_cfg,
+):
+    from code_review.runner import run_review
+    from code_review.schemas.review_decision_event import ReviewDecisionEventContext
+
+    mock_app_cfg.return_value = MagicMock(review_decision_only_skip_if_bot_not_blocking=True)
+    caps = ProviderCapabilities(
+        resolvable_comments=False,
+        supports_suggestions=False,
+        supports_review_decisions=True,
+        supports_bot_blocking_state_query=True,
+    )
+    provider = _provider_with_review_decisions(capabilities=caps)
+    provider.get_pr_info = MagicMock(return_value=PRInfo(head_sha="sha"))
+    provider.get_bot_blocking_state = MagicMock(return_value="NOT_BLOCKING")
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    run_review(
+        "o",
+        "r",
+        1,
+        head_sha="",
+        dry_run=False,
+        review_decision_only=True,
+        event_context=ReviewDecisionEventContext(
+            event_kind="comment_deleted",
+            comment_id="42",
+            source="webhook_comment",
+        ),
+    )
+
+    provider.get_bot_blocking_state.assert_not_called()
+    provider.submit_review_decision.assert_called_once()
+
+
+def test_compute_quality_gate_review_outcome_matches_thresholds():
+    """Shared outcome helper stays aligned with threshold semantics."""
+    from code_review.runner import _compute_quality_gate_review_outcome
+
+    provider = MagicMock()
+    provider.get_unresolved_review_items_for_quality_gate = MagicMock(return_value=[])
+    cfg = _review_decision_scm_config()
+    from code_review.schemas.findings import FindingV1
+
+    to_post = [
+        (
+            FindingV1(path="a.py", line=1, severity="high", code="c", message="m"),
+            "fp1",
+        )
+    ]
+    out = _compute_quality_gate_review_outcome(provider, "o", "r", 1, to_post, cfg)
+    assert out.high_count == 1
+    assert out.medium_count == 0
+    assert out.decision == "REQUEST_CHANGES"
+    assert "REQUEST_CHANGES" in out.submission_reason
+
+
+def test_compute_quality_gate_review_outcome_excludes_stable_ids():
+    from code_review.runner import _compute_quality_gate_review_outcome
+
+    provider = MagicMock()
+    provider.get_unresolved_review_items_for_quality_gate = MagicMock(
+        return_value=[
+            UnresolvedReviewItem(
+                stable_id="github:thread:x",
+                thread_id="x",
+                kind="discussion_thread",
+                path="a.py",
+                line=1,
+                body="[High] a",
+                inferred_severity="high",
+            ),
+            UnresolvedReviewItem(
+                stable_id="github:thread:y",
+                thread_id="y",
+                kind="discussion_thread",
+                path="b.py",
+                line=2,
+                body="[High] b",
+                inferred_severity="high",
+            ),
+        ]
+    )
+    cfg = _review_decision_scm_config()
+    out = _compute_quality_gate_review_outcome(
+        provider,
+        "o",
+        "r",
+        1,
+        [],
+        cfg,
+        excluded_gate_stable_ids=frozenset({"github:thread:x"}),
+    )
+    assert out.high_count == 1
+    assert out.decision == "REQUEST_CHANGES"
+
+
+def test_omit_marker_pr_summary_omits_meets_expectations_when_gate_requests_changes():
+    from code_review.runner import (
+        QualityGateReviewOutcome,
+        _omit_marker_pr_summary_visible_text,
+    )
+
+    cfg = _review_decision_scm_config()
+    provider = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        supports_review_decisions=True,
+    )
+    gate = QualityGateReviewOutcome(
+        high_count=1,
+        medium_count=0,
+        decision="REQUEST_CHANGES",
+        submission_reason="x",
+    )
+    text = _omit_marker_pr_summary_visible_text(
+        findings_planned=0,
+        successful_inline_posts=0,
+        cfg=cfg,
+        provider=provider,
+        gate_outcome=gate,
+    )
+    assert "meet expectations" not in text.lower()
+    assert "needs work" in text.lower()
+
+
+def test_omit_marker_pr_summary_keeps_meets_expectations_when_gate_approves():
+    from code_review.runner import (
+        QualityGateReviewOutcome,
+        _omit_marker_pr_summary_visible_text,
+    )
+
+    cfg = _review_decision_scm_config()
+    provider = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        supports_review_decisions=True,
+    )
+    gate = QualityGateReviewOutcome(
+        high_count=0,
+        medium_count=0,
+        decision="APPROVE",
+        submission_reason="x",
+    )
+    text = _omit_marker_pr_summary_visible_text(
+        findings_planned=0,
+        successful_inline_posts=0,
+        cfg=cfg,
+        provider=provider,
+        gate_outcome=gate,
+    )
+    assert "meet expectations" in text.lower()
+
+
+def test_omit_marker_pr_summary_meets_expectations_when_review_decisions_disabled():
+    from code_review.runner import (
+        QualityGateReviewOutcome,
+        _omit_marker_pr_summary_visible_text,
+    )
+
+    cfg = _scm_config(
+        review_decision_enabled=False,
+        review_decision_high_threshold=1,
+        review_decision_medium_threshold=3,
+    )
+    provider = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        supports_review_decisions=True,
+    )
+    gate = QualityGateReviewOutcome(
+        high_count=9,
+        medium_count=9,
+        decision="REQUEST_CHANGES",
+        submission_reason="x",
+    )
+    text = _omit_marker_pr_summary_visible_text(
+        findings_planned=0,
+        successful_inline_posts=0,
+        cfg=cfg,
+        provider=provider,
+        gate_outcome=gate,
+    )
+    assert "meet expectations" in text.lower()
+    assert "needs work" not in text.lower()
+
+
+@patch("code_review.runner.get_code_review_app_config")
+@patch("code_review.runner._run_reply_dismissal_llm")
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_decision_only_reply_dismissal_agreed_excludes_thread(
+    mock_get_scm_config,
+    mock_get_provider,
+    mock_get_context_window,
+    mock_llm,
+    mock_app_cfg,
+):
+    from code_review.runner import run_review
+    from code_review.schemas.review_decision_event import ReviewDecisionEventContext
+    from code_review.schemas.review_thread_dismissal import (
+        ReviewThreadDismissalContext,
+        ReviewThreadDismissalEntry,
+    )
+
+    mock_app_cfg.return_value = MagicMock(
+        review_decision_only_skip_if_bot_not_blocking=False,
+        reply_dismissal_enabled=True,
+    )
+    mock_llm.return_value = '{"verdict": "agreed", "reply_text": ""}'
+
+    caps = ProviderCapabilities(
+        resolvable_comments=False,
+        supports_suggestions=False,
+        supports_review_decisions=True,
+        supports_bot_blocking_state_query=True,
+        supports_bot_attribution_identity_query=True,
+        supports_review_thread_dismissal_context=True,
+        supports_review_thread_reply=True,
+    )
+    provider = _provider_with_review_decisions(capabilities=caps)
+    provider.get_pr_info = MagicMock(return_value=PRInfo(head_sha="sha"))
+    provider.get_unresolved_review_items_for_quality_gate = MagicMock(
+        return_value=[
+            UnresolvedReviewItem(
+                stable_id="github:thread:PRRT_1",
+                thread_id="PRRT_1",
+                kind="discussion_thread",
+                path="a.py",
+                line=1,
+                body="[High] fix it",
+                inferred_severity="high",
+            )
+        ]
+    )
+    provider.get_review_thread_dismissal_context = MagicMock(
+        return_value=ReviewThreadDismissalContext(
+            gate_exclusion_stable_id="github:thread:PRRT_1",
+            entries=[
+                ReviewThreadDismissalEntry(
+                    comment_id="10", author_login="viper-bot", body="[High] fix it"
+                ),
+                ReviewThreadDismissalEntry(comment_id="11", author_login="dev", body="done"),
+            ],
+        )
+    )
+    provider.get_bot_attribution_identity = MagicMock(
+        return_value=BotAttributionIdentity(login="viper-bot")
+    )
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    run_review(
+        "o",
+        "r",
+        1,
+        head_sha="sha",
+        dry_run=False,
+        review_decision_only=True,
+        event_context=ReviewDecisionEventContext(
+            event_kind="reply_added",
+            comment_id="11",
+            source="webhook_comment",
+        ),
+    )
+
+    mock_llm.assert_called_once()
+    provider.submit_review_decision.assert_called_once()
+    assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
+
+
+@patch("code_review.runner.get_code_review_app_config")
+@patch("code_review.runner._run_reply_dismissal_llm")
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_decision_only_reply_dismissal_disagreed_posts_reply(
+    mock_get_scm_config,
+    mock_get_provider,
+    mock_get_context_window,
+    mock_llm,
+    mock_app_cfg,
+):
+    from code_review.runner import run_review
+    from code_review.schemas.review_decision_event import ReviewDecisionEventContext
+    from code_review.schemas.review_thread_dismissal import (
+        ReviewThreadDismissalContext,
+        ReviewThreadDismissalEntry,
+    )
+
+    mock_app_cfg.return_value = MagicMock(
+        review_decision_only_skip_if_bot_not_blocking=False,
+        reply_dismissal_enabled=True,
+    )
+    mock_llm.return_value = (
+        '{"verdict": "disagreed", "reply_text": "Please add a regression test."}'
+    )
+
+    caps = ProviderCapabilities(
+        resolvable_comments=False,
+        supports_suggestions=False,
+        supports_review_decisions=True,
+        supports_bot_blocking_state_query=True,
+        supports_bot_attribution_identity_query=True,
+        supports_review_thread_dismissal_context=True,
+        supports_review_thread_reply=True,
+    )
+    provider = _provider_with_review_decisions(capabilities=caps)
+    provider.get_pr_info = MagicMock(return_value=PRInfo(head_sha="sha"))
+    provider.get_unresolved_review_items_for_quality_gate = MagicMock(return_value=[])
+    provider.get_review_thread_dismissal_context = MagicMock(
+        return_value=ReviewThreadDismissalContext(
+            gate_exclusion_stable_id="github:thread:PRRT_1",
+            entries=[
+                ReviewThreadDismissalEntry(comment_id="10", author_login="bot", body="[High] x"),
+                ReviewThreadDismissalEntry(comment_id="11", author_login="dev", body="nope"),
+            ],
+        )
+    )
+    provider.get_bot_attribution_identity = MagicMock(return_value=BotAttributionIdentity())
+    provider.post_review_thread_reply = MagicMock()
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    run_review(
+        "o",
+        "r",
+        1,
+        head_sha="sha",
+        dry_run=False,
+        review_decision_only=True,
+        event_context=ReviewDecisionEventContext(
+            event_kind="reply_added",
+            comment_id="11",
+            source="webhook_comment",
+        ),
+    )
+
+    provider.post_review_thread_reply.assert_called_once_with(
+        "o", "r", 1, "11", "Please add a regression test."
+    )
+
+
+@patch("code_review.runner.observability.record_reply_dismissal_outcome")
+@patch("code_review.runner.get_code_review_app_config")
+@patch("code_review.runner._run_reply_dismissal_llm")
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_decision_only_reply_dismissal_skipped_when_actor_is_bot(
+    mock_get_scm_config,
+    mock_get_provider,
+    mock_get_context_window,
+    mock_llm,
+    mock_app_cfg,
+    mock_record_rd,
+):
+    """Bot-authored reply_added must not run reply-dismissal LLM or thread fetch."""
+    from code_review.runner import run_review
+    from code_review.schemas.review_decision_event import ReviewDecisionEventContext
+
+    mock_app_cfg.return_value = MagicMock(
+        review_decision_only_skip_if_bot_not_blocking=False,
+        reply_dismissal_enabled=True,
+    )
+
+    caps = ProviderCapabilities(
+        resolvable_comments=False,
+        supports_suggestions=False,
+        supports_review_decisions=True,
+        supports_bot_blocking_state_query=True,
+        supports_bot_attribution_identity_query=True,
+        supports_review_thread_dismissal_context=True,
+        supports_review_thread_reply=True,
+    )
+    provider = _provider_with_review_decisions(capabilities=caps)
+    provider.get_pr_info = MagicMock(return_value=PRInfo(head_sha="sha"))
+    provider.get_unresolved_review_items_for_quality_gate = MagicMock(
+        return_value=[
+            UnresolvedReviewItem(
+                stable_id="github:thread:PRRT_1",
+                thread_id="PRRT_1",
+                kind="discussion_thread",
+                path="a.py",
+                line=1,
+                body="[High] fix it",
+                inferred_severity="high",
+            )
+        ]
+    )
+    provider.get_review_thread_dismissal_context = MagicMock()
+    provider.get_bot_attribution_identity = MagicMock(
+        return_value=BotAttributionIdentity(login="viper-bot")
+    )
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    run_review(
+        "o",
+        "r",
+        1,
+        head_sha="sha",
+        dry_run=False,
+        review_decision_only=True,
+        event_context=ReviewDecisionEventContext(
+            event_kind="reply_added",
+            comment_id="11",
+            source="webhook_comment",
+            actor_login="viper-bot",
+        ),
+    )
+
+    mock_llm.assert_not_called()
+    provider.get_review_thread_dismissal_context.assert_not_called()
+    mock_record_rd.assert_any_call("skipped_bot_author")
+
+
+def test_reply_added_event_authored_by_bot_matches_login_and_id():
+    from code_review.runner import _reply_added_event_authored_by_bot
+    from code_review.schemas.review_decision_event import ReviewDecisionEventContext
+
+    bot = BotAttributionIdentity(login="The-Bot", id_str="42")
+    assert _reply_added_event_authored_by_bot(
+        ReviewDecisionEventContext(actor_login="the-bot"), bot
+    )
+    assert _reply_added_event_authored_by_bot(
+        ReviewDecisionEventContext(actor_id="42"), bot
+    )
+    assert not _reply_added_event_authored_by_bot(
+        ReviewDecisionEventContext(actor_login="human"), bot
+    )
+    assert not _reply_added_event_authored_by_bot(
+        ReviewDecisionEventContext(actor_login="human"),
+        BotAttributionIdentity(),
+    )
+    assert not _reply_added_event_authored_by_bot(
+        ReviewDecisionEventContext(comment_id="1"),
+        bot,
+    )
