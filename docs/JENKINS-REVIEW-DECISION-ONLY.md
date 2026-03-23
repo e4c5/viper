@@ -33,7 +33,7 @@ Keep both jobs in the same folder.
 
 Important:
 
-- If the copied job seems to lose `SCM_PROVIDER` or `SCM_URL` after runs, move those values to the folder-level environment configuration (or global env vars for single-SCM setups) instead of relying on job parameter defaults.
+- If the copied job seems to lose `SCM_PROVIDER` or `SCM_URL` after runs, move those values to the folder-level environment configuration (preferred for multi-SCM), or set them directly on each Bitbucket job, instead of relying on job parameter defaults.
 - With **Pipeline script from SCM**, Jenkins can reapply parameter definitions from `docker/jenkins/Jenkinsfile`, so job parameter default values may appear reset.
 
 ### 1.2 Enable review decisions on the new job

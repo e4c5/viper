@@ -51,12 +51,14 @@ Add **Secret text** credentials with the IDs below (same as for Gitea/GitHub/Git
 
 ---
 
-## 4. Job environment variables
+## 4. SCM environment scope (recommended for multi-SCM)
 
-In the Bitbucket job, set (job **Configure** → **Build Environment** or **Global properties**):
+For **multi-SCM Jenkins**, set these at the **folder** that contains the Bitbucket jobs (preferred), or at each Bitbucket pipeline job if folder-level env is not available.
+
+Use Jenkins **global** env vars only for a **single-SCM** Jenkins where all review jobs target the same SCM.
 
 - **`SCM_PROVIDER`**: Set to **`bitbucket_server`** (required for Data Center; do not use `bitbucket`, which is for Cloud).
-- **`SCM_URL`** (or **`SCM_URL_BITBUCKET`**): Bitbucket REST API 1.0 base, e.g.  
+- **`SCM_URL`**: Bitbucket REST API 1.0 base, e.g.  
   `http://localhost:7990/rest/api/1.0` or `https://bitbucket.example.com/rest/api/1.0`  
   (no trailing slash).
 
