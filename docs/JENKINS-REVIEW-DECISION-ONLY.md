@@ -50,7 +50,11 @@ Examples for `CODE_REVIEW_JENKINS_DECISION_ONLY_ACTIONS`:
 
 - If `PR_ACTION` is the GitHub event name: `pull_request_review_comment` for review-comment replies and deletes, or `issue_comment` for PR conversation comments
 - If `PR_ACTION` is the GitHub action field instead: `created,deleted`
-- Other SCMs: use the values your webhook mapping sends into `PR_ACTION`
+- Bitbucket Server / DC (`PR_ACTION=$.eventKey`): `pr:comment:added,pr:comment:edited,pr:comment:deleted`
+- Bitbucket Server / DC (only new comments/replies): `pr:comment:added`
+- Other SCMs: use the exact values your webhook mapping sends into `PR_ACTION`
+
+For Bitbucket Server / DC, keep full-review PR actions in your webhook filter (for example `^pr:(opened|modified|from_ref_updated)$`) and route comment activity through `CODE_REVIEW_JENKINS_DECISION_ONLY_ACTIONS`.
 
 ### 1.3 Configure the copied job webhook
 
@@ -62,6 +66,25 @@ On the copied job:
 4. Filter the webhook so only comment or thread events trigger this job.
 
 `SCM_HEAD_SHA` may be empty for review-decision-only runs. The runner can resolve the current PR head from the SCM API when needed.
+
+### 1.3.1 Optional filter setup (Generic Webhook Trigger)
+
+In **Generic Webhook Trigger** for the copied comment-events job, configure:
+
+- **Optional filter** -> **Text**: `$PR_ACTION`
+- **Optional filter** -> **Regex**: use a regex that matches only comment/thread actions for your SCM mapping
+
+Concrete examples:
+
+- Gitea/GitHub/GitLab when `PR_ACTION=$.action` and you only want comment creates/deletes:
+  - Regex: `^(created|deleted)$`
+- GitHub when `PR_ACTION` is event name (for example `issue_comment` or `pull_request_review_comment`):
+  - Regex: `^(issue_comment|pull_request_review_comment)$`
+- Bitbucket Server / DC when `PR_ACTION=$.eventKey`:
+  - Regex: `^pr:comment:(added|edited|deleted)$`
+  - Or only new comments/replies: `^pr:comment:added$`
+
+For the full-review job, keep the PR lifecycle filter instead (for Bitbucket Server / DC, for example `^pr:(opened|modified|from_ref_updated)$`).
 
 ### 1.4 Map review-decision event context
 
