@@ -1,6 +1,9 @@
 """Unit tests for GitHub/Gitea-style bot blocking from PR review lists."""
 
-from code_review.providers.bot_blocking_common import blocking_state_from_github_style_reviews
+from code_review.providers.bot_blocking_common import (
+    blocking_state_from_github_style_reviews,
+    blocking_state_from_token_and_github_style_review_list,
+)
 
 
 def _review(rid: int, state: str) -> dict:
@@ -20,6 +23,26 @@ def test_only_pending_is_not_blocking():
     assert (
         blocking_state_from_github_style_reviews(reviews, token_login_lower="bot")
         == "NOT_BLOCKING"
+    )
+
+
+def test_wrapper_unknown_when_login_missing():
+    assert (
+        blocking_state_from_token_and_github_style_review_list("", [_review(1, "APPROVED")])
+        == "UNKNOWN"
+    )
+
+
+def test_wrapper_unknown_when_reviews_fetch_failed():
+    assert (
+        blocking_state_from_token_and_github_style_review_list("bot", None) == "UNKNOWN"
+    )
+
+
+def test_wrapper_delegates_when_ok():
+    reviews = [_review(1, "CHANGES_REQUESTED")]
+    assert (
+        blocking_state_from_token_and_github_style_review_list("bot", reviews) == "BLOCKING"
     )
 
 

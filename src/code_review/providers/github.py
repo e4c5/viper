@@ -29,7 +29,9 @@ from code_review.providers.base import (
     file_infos_from_pull_file_list,
     pr_info_from_api_dict,
 )
-from code_review.providers.bot_blocking_common import blocking_state_from_github_style_reviews
+from code_review.providers.bot_blocking_common import (
+    blocking_state_from_token_and_github_style_review_list,
+)
 from code_review.providers.review_decision_common import github_style_pull_review_json
 from code_review.providers.safety import truncate_repo_content
 from code_review.schemas.review_thread_dismissal import (
@@ -572,13 +574,10 @@ class GitHubProvider(ProviderInterface):
 
     def get_bot_blocking_state(self, owner: str, repo: str, pr_number: int) -> BotBlockingState:
         """Latest token-user PR review: ``CHANGES_REQUESTED`` → blocking."""
-        login = self._github_token_user_login_lower()
-        if not login:
-            return "UNKNOWN"
-        reviews = self._github_list_pull_reviews(owner, repo, pr_number)
-        if reviews is None:
-            return "UNKNOWN"
-        return blocking_state_from_github_style_reviews(reviews, token_login_lower=login)
+        return blocking_state_from_token_and_github_style_review_list(
+            self._github_token_user_login_lower(),
+            self._github_list_pull_reviews(owner, repo, pr_number),
+        )
 
     def get_bot_attribution_identity(
         self, owner: str, repo: str, pr_number: int

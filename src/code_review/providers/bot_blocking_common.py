@@ -75,3 +75,22 @@ def blocking_state_from_github_style_reviews(
     if last_raw is None:
         return "NOT_BLOCKING"
     return _blocking_from_github_norm(_norm_review_state(last_raw), last_raw)
+
+
+def blocking_state_from_token_and_github_style_review_list(
+    token_login_lower: str,
+    reviews: list[Any] | None,
+) -> BotBlockingState:
+    """Map token login + a fetched GitHub-style review list to blocking state.
+
+    Returns ``UNKNOWN`` when the token user login is unknown or *reviews* is
+    ``None`` (listing failed). Otherwise delegates to
+    :func:`blocking_state_from_github_style_reviews`.
+    """
+    if not token_login_lower:
+        return "UNKNOWN"
+    if reviews is None:
+        return "UNKNOWN"
+    return blocking_state_from_github_style_reviews(
+        reviews, token_login_lower=token_login_lower
+    )
