@@ -1115,6 +1115,10 @@ def _maybe_submit_review_decision(
     *gate_outcome* must match the omit-marker PR summary snapshot when both run in the same pass.
     """
     if not bool(getattr(cfg, "review_decision_enabled", False)):
+        logger.info(
+            "Skipping PR review decision submission: SCM_REVIEW_DECISION_ENABLED is false "
+            "(enable to push the computed gate to the SCM).",
+        )
         return
 
     decision = gate_outcome.decision
@@ -1395,6 +1399,12 @@ def _run_reply_dismissal_llm(user_message: str) -> str:
         session_service=session_service,
     )
     session_id = f"reply-dismissal/{uuid.uuid4().hex[:12]}"
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "LLM request (reply-dismissal) session=%s prompt=%s",
+            session_id,
+            user_message,
+        )
     content = types.Content(role="user", parts=[types.Part(text=user_message)])
     return _run_agent_and_collect_response(runner, session_service, session_id, content)
 
@@ -2223,6 +2233,14 @@ class ReviewOrchestrator:
             and ctx.event_kind == "reply_added"
             and (ctx.comment_id or "").strip()
         ):
+            if app_cfg.reply_dismissal_enabled and logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Reply-dismissal not run: requires event_kind=reply_added and "
+                    "CODE_REVIEW_EVENT_COMMENT_ID; got kind=%r comment_id=%r ctx_present=%s",
+                    getattr(ctx, "event_kind", None) if ctx else None,
+                    ((ctx.comment_id or "").strip() if ctx else "") or "",
+                    ctx is not None,
+                )
             return frozenset()
 
         comment_id = ctx.comment_id.strip()
@@ -2260,6 +2278,14 @@ class ReviewOrchestrator:
         verdict = reply_dismissal_verdict_from_llm_text(raw_verdict)
         if verdict is None:
             observability.record_reply_dismissal_outcome("parse_failed")
+            snippet = (raw_verdict or "").strip()
+            if len(snippet) > 1500:
+                snippet = snippet[:1500] + "…"
+            logger.warning(
+                "Reply-dismissal LLM output could not be parsed as ReplyDismissalVerdictV1; "
+                "enable DEBUG for full request/response. Raw (truncated): %r",
+                snippet or "(empty)",
+            )
             return frozenset()
 
         logger.info(
@@ -2374,6 +2400,12 @@ class ReviewOrchestrator:
             [],
             cfg,
             excluded_gate_stable_ids=excluded_gate if excluded_gate else None,
+        )
+        logger.info(
+            "Review-decision-only quality gate: open_high=%d open_medium=%d => decision=%s",
+            gate_outcome.high_count,
+            gate_outcome.medium_count,
+            gate_outcome.decision,
         )
         _maybe_submit_review_decision(
             provider,
