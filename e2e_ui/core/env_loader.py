@@ -14,13 +14,6 @@ JENKINS_CREDENTIAL_IDS = (
     "LLM_API_KEY",
 )
 
-LEGACY_LLM_ENV_KEYS = (
-    "GOOGLE_API_KEY",
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "OPENROUTER_API_KEY",
-)
-
 
 def find_dotenv() -> Path | None:
     """Locate .env from repo root (cwd or parent up to repo root)."""
@@ -58,12 +51,6 @@ class EnvLoader:
             val = os.environ.get(cid, "").strip()
             if val:
                 out[cid] = val
-        if "LLM_API_KEY" not in out:
-            for env_key in LEGACY_LLM_ENV_KEYS:
-                legacy_val = os.environ.get(env_key, "").strip()
-                if legacy_val:
-                    out["LLM_API_KEY"] = legacy_val
-                    break
         return out
 
     def get(self, credential_id: str, default: str = "") -> str:

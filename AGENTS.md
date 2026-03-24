@@ -23,7 +23,7 @@ This file helps AI coding assistants (e.g. Cursor, Codex) work effectively on th
 | **Logging** | `src/code_review/logging_config.py` | Centralized logging configuration |
 | **Model** | `src/code_review/models.py` | `get_configured_model()`, `get_context_window()`, `get_max_output_tokens()` |
 | **Findings** | `src/code_review/schemas/findings.py` | `FindingV1` — contract for agent JSON output |
-| **Reply dismissal** | `schemas/reply_dismissal.py`, `schemas/review_thread_dismissal.py`, `agent/reply_dismissal_agent.py`, `providers/base.py` (`get_review_thread_dismissal_context`, `post_review_thread_reply`, `get_bot_attribution_identity`) | Review-decision-only: `CODE_REVIEW_REPLY_DISMISSAL_ENABLED`; thread context + reply on **GitHub**, **GitLab**, **Bitbucket Cloud**, **Bitbucket Server** (not **Gitea**) |
+| **Reply dismissal** | `src/code_review/schemas/reply_dismissal.py`, `src/code_review/schemas/review_thread_dismissal.py`, `src/code_review/agent/reply_dismissal_agent.py`, `src/code_review/providers/base.py` (`get_review_thread_dismissal_context`, `post_review_thread_reply`, `get_bot_attribution_identity`) | Review-decision-only: `CODE_REVIEW_REPLY_DISMISSAL_ENABLED`; thread context + reply on **GitHub**, **GitLab**, **Bitbucket Cloud**, **Bitbucket Server** (not **Gitea**) |
 | **Diff** | `src/code_review/diff/` | Parser, position, fingerprint/marker for dedup and comments |
 | **Standards** | `src/code_review/standards/` | Language/framework detection; `prompts/` contains review prompt fragments |
 | **Formatters** | `src/code_review/formatters/comment.py` | `finding_to_comment_body()` |
