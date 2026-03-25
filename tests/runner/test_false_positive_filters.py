@@ -1,6 +1,9 @@
 """Tests for deterministic false-positive filters applied before posting findings."""
 
-from code_review.runner import _filter_obviously_contradicted_findings
+from code_review.runner import (
+    _filter_obviously_contradicted_findings,
+    _message_describes_syntax_or_missing_token_issue,
+)
 from code_review.schemas.findings import FindingV1
 
 SAMPLE_DIFF = """\
@@ -67,3 +70,21 @@ def test_identical_patch_is_stripped_for_non_syntax_message():
 
     assert len(result) == 1
     assert result[0].suggested_patch is None
+
+
+def test_message_describes_missing_quoted_fragment_before_keyword():
+    assert _message_describes_syntax_or_missing_token_issue(
+        'The statement is missing ")" before "{" and will not compile.'
+    )
+
+
+def test_message_describes_missing_backticked_fragment_after_keyword():
+    assert _message_describes_syntax_or_missing_token_issue(
+        "This is missing `]` after the generic type declaration."
+    )
+
+
+def test_message_ignores_missing_quoted_fragment_without_position_keyword():
+    assert not _message_describes_syntax_or_missing_token_issue(
+        'The parser is missing ")" near the next token.'
+    )

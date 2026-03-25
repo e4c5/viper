@@ -237,7 +237,6 @@ def _normalize_code_for_comparison(text: str) -> str:
 
 _SYNTAX_OR_MISSING_TOKEN_MESSAGE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bmissing\s+(?:a\s+)?(?:comma|semicolon|colon|parenthesis|paren|bracket|brace|quote)\b", re.I),
-    re.compile(r"\bmissing\s+[`'\"].+?[`'\"].*\b(?:before|after)\b", re.I),
     re.compile(r"\bsyntax\s+error\b", re.I),
     re.compile(r"\b(?:invalid|malformed)\s+(?:\w+\s+)?code\b", re.I),
     re.compile(r"\b(?:invalid|malformed)\s+(?:annotation|statement|expression)\b", re.I),
@@ -245,17 +244,65 @@ _SYNTAX_OR_MISSING_TOKEN_MESSAGE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bcompiler?\s+error\b", re.I),
 )
 
+_QUOTE_DELIMITERS = frozenset({"`", "'", '"'})
 _MISSING_COMMA_BEFORE_FRAGMENT_PATTERN = re.compile(
     r"\bmissing\s+(?:a\s+)?comma\s+before\s+(?:`([^`]+)`|\"([^\"]+)\"|'([^']+)')",
     re.I,
 )
 
 
+def _contains_word(text: str, word: str) -> bool:
+    """Return True when word appears delimited by non-word characters."""
+    start = 0
+    while True:
+        index = text.find(word, start)
+        if index == -1:
+            return False
+        before_ok = index == 0 or not (text[index - 1].isalnum() or text[index - 1] == "_")
+        after_index = index + len(word)
+        after_ok = after_index == len(text) or not (
+            text[after_index].isalnum() or text[after_index] == "_"
+        )
+        if before_ok and after_ok:
+            return True
+        start = index + len(word)
+
+
+def _message_mentions_missing_quoted_fragment_before_or_after(message: str) -> bool:
+    """Detect messages like 'missing `x` before ...' without broad backtracking regexes."""
+    lowered = message.lower()
+    search_from = 0
+    while True:
+        missing_index = lowered.find("missing", search_from)
+        if missing_index == -1:
+            return False
+
+        fragment_start = missing_index + len("missing")
+        while fragment_start < len(message) and message[fragment_start].isspace():
+            fragment_start += 1
+
+        if fragment_start >= len(message) or message[fragment_start] not in _QUOTE_DELIMITERS:
+            search_from = missing_index + len("missing")
+            continue
+
+        delimiter = message[fragment_start]
+        fragment_end = message.find(delimiter, fragment_start + 1)
+        if fragment_end == -1:
+            return False
+
+        trailing_text = lowered[fragment_end + 1 :]
+        if _contains_word(trailing_text, "before") or _contains_word(trailing_text, "after"):
+            return True
+        search_from = fragment_end + 1
+
+
 def _message_describes_syntax_or_missing_token_issue(message: str) -> bool:
     """True when the finding text claims a token/syntax defect rather than a semantic issue."""
     if not message or not str(message).strip():
         return False
-    return any(p.search(message) for p in _SYNTAX_OR_MISSING_TOKEN_MESSAGE_PATTERNS)
+    return any(p.search(message) for p in _SYNTAX_OR_MISSING_TOKEN_MESSAGE_PATTERNS) or (
+        _message_mentions_missing_quoted_fragment_before_or_after(message)
+    )
 
 
 def _extract_missing_comma_fragment(message: str) -> str | None:
