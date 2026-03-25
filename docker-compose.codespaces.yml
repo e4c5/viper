@@ -1,8 +1,7 @@
 services:
   jenkins:
-    # Codespaces can run the Jenkins pipeline in inline mode, so the Jenkins
-    # service does not need a host Docker/Podman socket mount here.
-    volumes:
-      - jenkins_home:/var/jenkins_home
+    # Enable inline mode: the code-review CLI runs directly inside Jenkins
+    # rather than spawning a separate agent container, which avoids the need
+    # for a working Docker socket inside the Codespace.
     environment:
       USE_INLINE_AGENT: "true"
