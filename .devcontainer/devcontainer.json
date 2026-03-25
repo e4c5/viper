@@ -1,11 +1,7 @@
 {
   "name": "code-review-agent",
   "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
-  "features": {
-    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
-  },
   "postCreateCommand": "pip install -e \".[dev]\"",
-  "postStartCommand": "echo \"Run: docker compose -f docker-compose.yml -f docker-compose.codespaces.yml up -d --build\"",
   "remoteEnv": {
     "USE_INLINE_AGENT": "true"
   },

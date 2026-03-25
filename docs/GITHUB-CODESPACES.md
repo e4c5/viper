@@ -6,8 +6,6 @@ This repository includes a recommended GitHub Codespaces setup in
 ## What the Codespace config does
 
 - Uses the Microsoft Python 3.12 dev container image.
-- Enables Docker access in the Codespace so you can run the local Docker Compose
-  stack from the Codespace terminal.
 - Installs the project in editable mode with development dependencies on create.
 - Sets `USE_INLINE_AGENT=true` in the remote environment so Jenkins pipeline runs
   default to the inline agent path.
@@ -24,15 +22,26 @@ This repository includes a recommended GitHub Codespaces setup in
 
 GitHub Codespaces reads `.devcontainer/devcontainer.json` automatically.
 
-## Use the local stack inside the Codespace
+## Recommended: run inline mode in Codespaces
 
-After the Codespace starts, open a terminal and run:
+The simplest Codespaces workflow does not require Docker-in-Docker. After the
+Codespace starts, use the CLI directly:
+
+```bash
+code-review --help
+```
+
+This keeps setup lightweight and matches `USE_INLINE_AGENT=true`.
+
+## Optional: run the local Gitea + Jenkins stack in Codespaces
+
+If your Codespace supports Docker, you can still run the Compose stack:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.codespaces.yml up -d --build
 ```
 
-Then open the forwarded ports:
+Then open forwarded ports:
 
 - `3000` → Gitea
 - `8080` → Jenkins
