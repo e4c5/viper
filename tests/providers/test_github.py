@@ -46,6 +46,27 @@ def test_get_incremental_pr_diff_uses_compare_endpoint(mock_client):
 
 
 @patch("code_review.providers.github.httpx.Client")
+def test_get_incremental_pr_diff_falls_back_to_full_pr_diff_on_compare_error(mock_client):
+    compare_err = httpx.HTTPStatusError(
+        "compare failed",
+        request=MagicMock(),
+        response=MagicMock(status_code=404),
+    )
+    full_pr_resp = MagicMock()
+    full_pr_resp.text = "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
+    full_pr_resp.headers = {}
+    mock_client.return_value.__enter__.return_value.get.side_effect = [compare_err, full_pr_resp]
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
+
+    assert "diff --git a/full.py b/full.py" in diff
+    calls = mock_client.return_value.__enter__.return_value.get.call_args_list
+    assert "/compare/base123...head456" in calls[0][0][0]
+    assert "/pulls/1" in calls[1][0][0]
+
+
+@patch("code_review.providers.github.httpx.Client")
 def test_get_file_content(mock_client):
     content_b64 = base64.b64encode(b"print('hello')").decode()
     mock_resp = MagicMock()
@@ -112,6 +133,30 @@ def test_get_incremental_pr_files_uses_compare_endpoint(mock_client):
     assert files[0].path == "foo.py"
     call = mock_client.return_value.__enter__.return_value.get.call_args
     assert "/compare/base123...head456" in call[0][0]
+
+
+@patch("code_review.providers.github.httpx.Client")
+def test_get_incremental_pr_files_fall_back_to_full_pr_files_on_compare_error(mock_client):
+    compare_err = httpx.HTTPStatusError(
+        "compare failed",
+        request=MagicMock(),
+        response=MagicMock(status_code=404),
+    )
+    full_pr_resp = MagicMock()
+    full_pr_resp.json.return_value = [
+        {"filename": "full.py", "status": "modified", "additions": 2, "deletions": 1}
+    ]
+    full_pr_resp.headers = {"content-type": "application/json"}
+    mock_client.return_value.__enter__.return_value.get.side_effect = [compare_err, full_pr_resp]
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    files = p.get_incremental_pr_files("owner", "repo", 1, "base123", "head456")
+
+    assert len(files) == 1
+    assert files[0].path == "full.py"
+    calls = mock_client.return_value.__enter__.return_value.get.call_args_list
+    assert "/compare/base123...head456" in calls[0][0][0]
+    assert "/pulls/1/files" in calls[1][0][0]
 
 
 @patch("code_review.providers.github.httpx.Client")

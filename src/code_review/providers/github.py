@@ -471,7 +471,20 @@ class GitHubProvider(ProviderInterface):
         if not base_sha or not head_sha or base_sha == head_sha:
             return self.get_pr_diff(owner, repo, pr_number)
         path = f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}"
-        return self._get_diff(path)
+        try:
+            return self._get_diff(path)
+        except httpx.HTTPError as e:
+            logger.warning(
+                "GitHub incremental compare diff failed owner=%s repo=%s pr=%s "
+                "base=%s head=%s: %s; falling back to full PR diff",
+                owner,
+                repo,
+                pr_number,
+                base_sha,
+                head_sha,
+                e,
+            )
+            return self.get_pr_diff(owner, repo, pr_number)
 
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
         """Return file content at ref; truncated if over max size."""
@@ -500,7 +513,20 @@ class GitHubProvider(ProviderInterface):
         if not base_sha or not head_sha or base_sha == head_sha:
             return self.get_pr_files(owner, repo, pr_number)
         path = f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}"
-        data = self._get(path, params={"per_page": 100})
+        try:
+            data = self._get(path, params={"per_page": 100})
+        except httpx.HTTPError as e:
+            logger.warning(
+                "GitHub incremental compare files failed owner=%s repo=%s pr=%s "
+                "base=%s head=%s: %s; falling back to full PR files",
+                owner,
+                repo,
+                pr_number,
+                base_sha,
+                head_sha,
+                e,
+            )
+            return self.get_pr_files(owner, repo, pr_number)
         if not isinstance(data, dict):
             return []
         return file_infos_from_pull_file_list(data.get("files") or [])

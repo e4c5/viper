@@ -47,6 +47,32 @@ def test_get_incremental_pr_diff_uses_compare_endpoint(mock_client):
 
 
 @patch("code_review.providers.gitea.httpx.Client")
+def test_get_incremental_pr_diff_falls_back_to_full_pr_diff_on_compare_404(mock_client):
+    compare_resp = MagicMock(status_code=404, text="not found")
+    compare_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "compare failed",
+        request=MagicMock(),
+        response=compare_resp,
+    )
+    full_pr_resp = MagicMock()
+    full_pr_resp.text = "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
+    full_pr_resp.headers = {}
+    full_pr_resp.raise_for_status = MagicMock()
+    mock_client.return_value.__enter__.return_value.request.side_effect = [
+        compare_resp,
+        full_pr_resp,
+    ]
+
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
+
+    assert "diff --git a/full.py b/full.py" in diff
+    calls = mock_client.return_value.__enter__.return_value.request.call_args_list
+    assert calls[0][0][1].endswith("/compare/base123...head456.diff")
+    assert calls[1][0][1].endswith("/pulls/1.diff")
+
+
+@patch("code_review.providers.gitea.httpx.Client")
 def test_get_file_content(mock_client):
     content_b64 = base64.b64encode(b"print('hello')").decode()
     mock_resp = MagicMock()
@@ -96,6 +122,35 @@ def test_get_incremental_pr_files_uses_compare_endpoint(mock_client):
     assert files[0].path == "foo.py"
     call = mock_client.return_value.__enter__.return_value.request.call_args
     assert call[0][1].endswith("/compare/base123...head456")
+
+
+@patch("code_review.providers.gitea.httpx.Client")
+def test_get_incremental_pr_files_fall_back_to_full_pr_files_on_compare_422(mock_client):
+    compare_resp = MagicMock(status_code=422, text="invalid range")
+    compare_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "compare failed",
+        request=MagicMock(),
+        response=compare_resp,
+    )
+    full_pr_resp = MagicMock()
+    full_pr_resp.json.return_value = [
+        {"filename": "full.py", "status": "modified", "additions": 2, "deletions": 1}
+    ]
+    full_pr_resp.headers = {"content-type": "application/json"}
+    full_pr_resp.raise_for_status = MagicMock()
+    mock_client.return_value.__enter__.return_value.request.side_effect = [
+        compare_resp,
+        full_pr_resp,
+    ]
+
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    files = p.get_incremental_pr_files("owner", "repo", 1, "base123", "head456")
+
+    assert len(files) == 1
+    assert files[0].path == "full.py"
+    calls = mock_client.return_value.__enter__.return_value.request.call_args_list
+    assert calls[0][0][1].endswith("/compare/base123...head456")
+    assert calls[1][0][1].endswith("/pulls/1/files")
 
 
 @patch("code_review.providers.gitea.httpx.Client")
