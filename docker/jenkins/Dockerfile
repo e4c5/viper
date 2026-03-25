@@ -9,10 +9,16 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && usermod -aG docker jenkins
 
-# Install code-review agent for inline mode (USE_INLINE_AGENT=true) when rootless Podman uid_map fails.
+# Install third-party Python deps first so inline agent rebuilds are faster when
+# only application source changes.
 COPY pyproject.toml /tmp/agent-build/
+COPY requirements/runtime.txt /tmp/agent-build/requirements.txt
+RUN pip3 install --break-system-packages --no-cache-dir -r /tmp/agent-build/requirements.txt
+
+# Install code-review agent for inline mode (USE_INLINE_AGENT=true) when rootless Podman uid_map fails.
+COPY README.md /tmp/agent-build/
 COPY src /tmp/agent-build/src/
-RUN pip3 install --break-system-packages --no-cache-dir /tmp/agent-build && rm -rf /tmp/agent-build
+RUN pip3 install --break-system-packages --no-cache-dir --no-deps /tmp/agent-build && rm -rf /tmp/agent-build
 
 # Preinstall required plugins so the UI includes Credentials + Pipeline.
 COPY docker/jenkins/plugins.txt /usr/share/jenkins/ref/plugins.txt

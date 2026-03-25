@@ -6,22 +6,26 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install deps and package (no dev deps)
-# Copy dependency metadata first (changes less often than source)
+# Install third-party deps first so source changes do not invalidate them.
 COPY pyproject.toml ./
-
-# Copy source code (changes frequently)
-COPY src ./src/
+COPY requirements/runtime.txt ./requirements/runtime.txt
 
 # Upgrade OS packages to pick up security patches (dpkg, glibc, libsqlite3, etc.),
-# then upgrade pip and install the package. Combining into one layer minimises
-# image size and ensures apt lists are not cached.
+# then upgrade pip and install runtime dependencies. Combining into one layer
+# minimises image size and ensures apt lists are not cached.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install --no-cache-dir --upgrade "pip>=26.0" \
-    && pip install --no-cache-dir -e . \
-    && adduser --disabled-password --gecos "" --uid 1000 appuser \
+    && pip install --no-cache-dir -r requirements/runtime.txt \
+    && adduser --disabled-password --gecos "" --uid 1000 appuser
+
+# Copy source code after dependency installation so application-only changes
+# reuse the expensive dependency layer.
+COPY README.md ./
+COPY src ./src/
+
+RUN pip install --no-cache-dir --no-deps -e . \
     && chown -R appuser:appuser /app
 USER appuser
 
