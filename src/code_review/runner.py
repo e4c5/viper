@@ -1580,6 +1580,17 @@ class ReviewOrchestrator:
             return ""
         return base_sha
 
+    def _fetch_pr_files_and_diffs(self, provider, owner: str, repo: str, pr_number: int):
+        """Fetch the full-PR file list and diff.
+
+        Retained as a small compatibility wrapper for tests and helper callers;
+        incremental review flow uses ``_fetch_review_files_and_diffs``.
+        """
+        files = provider.get_pr_files(owner, repo, pr_number)
+        paths = [f.path for f in files]
+        full_diff = provider.get_pr_diff(owner, repo, pr_number)
+        return (files, paths, full_diff)
+
     def _fetch_review_files_and_diffs(
         self,
         provider,
