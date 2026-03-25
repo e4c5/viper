@@ -10,6 +10,7 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -264,7 +265,10 @@ def _normalize_code_for_comparison(text: str) -> str:
 
 
 _SYNTAX_OR_MISSING_TOKEN_MESSAGE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bmissing\s+(?:a\s+)?(?:comma|semicolon|colon|parenthesis|paren|bracket|brace|quote)\b", re.I),
+    re.compile(
+        r"\bmissing\s+(?:a\s+)?(?:comma|semicolon|colon|parenthesis|paren|bracket|brace|quote)\b",
+        re.I,
+    ),
     re.compile(r"\bsyntax\s+error\b", re.I),
     re.compile(r"\b(?:invalid|malformed)\s+(?:\w+\s+)?code\b", re.I),
     re.compile(r"\b(?:invalid|malformed)\s+(?:annotation|statement|expression)\b", re.I),
@@ -356,6 +360,58 @@ def _window_text(lines_map: dict[int, str], line: int, radius: int = 2) -> str:
     return "\n".join(window_lines)
 
 
+def _first_non_empty_patch_line(suggested_patch: str) -> str:
+    """Return the first non-empty line from a suggested patch block."""
+    return next((ln.strip() for ln in suggested_patch.splitlines() if ln.strip()), "")
+
+
+def _drop_or_strip_identical_patch_finding(
+    finding: FindingV1,
+    *,
+    actual_content: str,
+    message: str,
+) -> FindingV1 | None:
+    """Drop contradicted syntax findings or strip redundant suggestions."""
+    if not finding.suggested_patch:
+        return finding
+
+    patch_first_line = _first_non_empty_patch_line(finding.suggested_patch)
+    if not patch_first_line:
+        return finding
+
+    matches_current_line = _normalize_code_for_comparison(
+        patch_first_line
+    ) == _normalize_code_for_comparison(actual_content)
+    if not matches_current_line:
+        return finding
+
+    if _message_describes_syntax_or_missing_token_issue(message):
+        logger.info(
+            "Dropping contradicted syntax/token finding %s:%d: "
+            "suggested patch is identical to current diff line",
+            finding.path,
+            finding.line,
+        )
+        return None
+
+    return finding.model_copy(update={"suggested_patch": None})
+
+
+def _contradicted_missing_comma_fragment(message: str, window_text: str) -> str | None:
+    """Return the contradicted fragment when nearby diff already contains `,<fragment>`."""
+    fragment = _extract_missing_comma_fragment(message)
+    if not fragment:
+        return None
+
+    fragment_patterns = (
+        f", {fragment}",
+        f",{fragment}",
+    )
+    if any(pattern in window_text for pattern in fragment_patterns):
+        return fragment
+    return None
+
+
 def _filter_obviously_contradicted_findings(
     findings: list[FindingV1],
     diff_text: str,
@@ -384,41 +440,24 @@ def _filter_obviously_contradicted_findings(
 
         message = f.message or ""
         window_text = _window_text(lines_map, f.line)
+        f = _drop_or_strip_identical_patch_finding(
+            f,
+            actual_content=actual_content,
+            message=message,
+        )
+        if f is None:
+            continue
 
-        if f.suggested_patch:
-            patch_first_line = next(
-                (ln.strip() for ln in f.suggested_patch.splitlines() if ln.strip()),
-                "",
+        fragment = _contradicted_missing_comma_fragment(message, window_text)
+        if fragment is not None:
+            logger.info(
+                "Dropping contradicted missing-comma finding %s:%d: "
+                "nearby diff already contains comma before %r",
+                f.path,
+                f.line,
+                fragment,
             )
-            if patch_first_line and (
-                _normalize_code_for_comparison(patch_first_line)
-                == _normalize_code_for_comparison(actual_content)
-            ):
-                if _message_describes_syntax_or_missing_token_issue(message):
-                    logger.info(
-                        "Dropping contradicted syntax/token finding %s:%d: "
-                        "suggested patch is identical to current diff line",
-                        f.path,
-                        f.line,
-                    )
-                    continue
-                f = f.model_copy(update={"suggested_patch": None})
-
-        fragment = _extract_missing_comma_fragment(message)
-        if fragment:
-            fragment_patterns = (
-                f", {fragment}",
-                f",{fragment}",
-            )
-            if any(pattern in window_text for pattern in fragment_patterns):
-                logger.info(
-                    "Dropping contradicted missing-comma finding %s:%d: "
-                    "nearby diff already contains comma before %r",
-                    f.path,
-                    f.line,
-                    fragment,
-                )
-                continue
+            continue
 
         kept.append(f)
 
@@ -1970,12 +2009,10 @@ class ReviewOrchestrator:
         prompt_suffix: str = "",
     ) -> list[FindingV1]:
         """Review one file at a time using already-scoped embedded diffs (tools disabled)."""
-        all_findings: list[FindingV1] = []
-        for file_path in paths:
-            file_session_id = f"{owner}/{repo}/pr-{pr_number}/file/{uuid.uuid4().hex[:12]}"
+        def _build_embedded_message(file_path: str) -> str | None:
             file_diff = diff_by_path.get(file_path, "")
             if not file_diff:
-                continue
+                return None
             head_sha_clause = f" head_sha={head_sha}." if head_sha else ""
             msg = (
                 "Review exactly one file from this PR. "
@@ -1987,45 +2024,19 @@ class ReviewOrchestrator:
                 "If there are no issues in this file, output exactly []."
             )
             annotated = annotate_diff_with_line_numbers(file_diff)
-            msg += f"\n\nHere is the unified diff for this file:\n```diff\n{annotated}\n```"
-            if prompt_suffix:
-                msg = msg + "\n\n" + prompt_suffix
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "LLM request (embedded file-by-file) session=%s file=%s prompt=%s",
-                    file_session_id,
-                    file_path,
-                    msg,
-                )
-            content = types.Content(role="user", parts=[types.Part(text=msg)])
-            try:
-                response_text = _run_agent_and_collect_response(
-                    runner, session_service, file_session_id, content
-                )
-            except AuthenticationError as e:
-                logger.error(
-                    "LLM authentication failed while reviewing file=%s; aborting run: %s",
-                    file_path,
-                    e,
-                )
-                raise
-            except RateLimitError as e:
-                logger.warning(
-                    "Rate limit hit while reviewing file=%s (skipping): %s",
-                    file_path,
-                    e,
-                )
-                continue
-            except Exception as e:
-                logger.warning(
-                    "Error reviewing file=%s (skipping): %s",
-                    file_path,
-                    e,
-                    exc_info=logger.isEnabledFor(logging.DEBUG),
-                )
-                continue
-            all_findings.extend(_findings_from_response(response_text))
-        return all_findings
+            return msg + f"\n\nHere is the unified diff for this file:\n```diff\n{annotated}\n```"
+
+        return self._run_per_file_review_loop(
+            runner,
+            session_service,
+            owner,
+            repo,
+            pr_number,
+            paths,
+            build_message=_build_embedded_message,
+            prompt_suffix=prompt_suffix,
+            debug_mode_label="embedded file-by-file",
+        )
 
     def _run_file_by_file_mode(
         self,
@@ -2039,9 +2050,7 @@ class ReviewOrchestrator:
         *,
         prompt_suffix: str = "",
     ) -> list[FindingV1]:
-        all_findings: list[FindingV1] = []
-        for file_path in paths:
-            file_session_id = f"{owner}/{repo}/pr-{pr_number}/file/{uuid.uuid4().hex[:12]}"
+        def _build_file_by_file_message(file_path: str) -> str:
             head_sha_clause = f" head_sha={head_sha}." if head_sha else ""
             ref_guidance = (
                 f' When calling get_file_lines for surrounding context, use ref="{head_sha}"'
@@ -2067,11 +2076,46 @@ class ReviewOrchestrator:
                 + f'Use path "{file_path}" in every finding. '
                 "If there are no issues in this file, output exactly []."
             )
+            return msg
+
+        return self._run_per_file_review_loop(
+            runner,
+            session_service,
+            owner,
+            repo,
+            pr_number,
+            paths,
+            build_message=_build_file_by_file_message,
+            prompt_suffix=prompt_suffix,
+            debug_mode_label="file-by-file",
+        )
+
+    def _run_per_file_review_loop(
+        self,
+        runner,
+        session_service,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        paths: list[str],
+        *,
+        build_message: Callable[[str], str | None],
+        prompt_suffix: str,
+        debug_mode_label: str,
+    ) -> list[FindingV1]:
+        """Run isolated per-file review sessions with shared logging and error handling."""
+        all_findings: list[FindingV1] = []
+        for file_path in paths:
+            file_session_id = f"{owner}/{repo}/pr-{pr_number}/file/{uuid.uuid4().hex[:12]}"
+            msg = build_message(file_path)
+            if not msg:
+                continue
             if prompt_suffix:
                 msg = msg + "\n\n" + prompt_suffix
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
-                    "LLM request (file-by-file) session=%s file=%s prompt=%s",
+                    "LLM request (%s) session=%s file=%s prompt=%s",
+                    debug_mode_label,
                     file_session_id,
                     file_path,
                     msg,
@@ -2082,9 +2126,6 @@ class ReviewOrchestrator:
                     runner, session_service, file_session_id, content
                 )
             except AuthenticationError as e:
-                # LLM authentication errors (e.g. HTTP 401 from OpenRouter/OpenAI/etc.)
-                # indicate a misconfigured or missing API key. Treat these as fatal so
-                # CI surfaces them clearly instead of silently skipping all files.
                 logger.error(
                     "LLM authentication failed while reviewing file=%s; aborting run: %s",
                     file_path,

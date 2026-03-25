@@ -63,7 +63,9 @@ def test_identical_patch_is_stripped_for_non_syntax_message():
     finding = _finding(
         line=1151,
         message="Use a constant for the annotation prefix to avoid repetition.",
-        suggested_patch='fields.append("    @Column(name = \\"").append(cm.targetColumn()).append("\\"");',
+        suggested_patch=(
+            'fields.append("    @Column(name = \\"").append(cm.targetColumn()).append("\\"");'
+        ),
     )
 
     result = _filter_obviously_contradicted_findings([finding], SAMPLE_DIFF)
