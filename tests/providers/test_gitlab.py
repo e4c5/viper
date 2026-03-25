@@ -2,6 +2,9 @@
 
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
+
 from code_review.providers import get_provider
 from code_review.providers.base import InlineComment
 from code_review.providers.gitlab import GitLabProvider
@@ -52,6 +55,54 @@ def test_get_incremental_pr_diff_uses_compare_endpoint(mock_client):
     assert "foo.py" in diff
     call = mock_client.return_value.__enter__.return_value.get.call_args
     assert "/repository/compare?from=base123&to=head456&straight=true" in call[0][0]
+
+
+@patch("code_review.providers.http_shortcuts.httpx.Client")
+def test_get_incremental_pr_diff_falls_back_to_full_pr_diff_on_compare_404(mock_client):
+    compare_resp = MagicMock(status_code=404, text="not found")
+    compare_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "compare failed",
+        request=MagicMock(),
+        response=compare_resp,
+    )
+    full_mr_resp = MagicMock()
+    full_mr_resp.json.return_value = [
+        {
+            "new_path": "full.py",
+            "old_path": "full.py",
+            "diff": "--- a/full.py\n+++ b/full.py\n@@ -1 +1 @@\n-old\n+new\n",
+        }
+    ]
+    full_mr_resp.headers = {"content-type": "application/json"}
+    full_mr_resp.raise_for_status = MagicMock()
+    mock_client.return_value.__enter__.return_value.get.side_effect = [
+        compare_resp,
+        full_mr_resp,
+    ]
+
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
+
+    assert "diff --git a/full.py b/full.py" in diff
+    calls = mock_client.return_value.__enter__.return_value.get.call_args_list
+    assert "/repository/compare?from=base123&to=head456&straight=true" in calls[0][0][0]
+    assert "/merge_requests/1/diffs" in calls[1][0][0]
+
+
+@patch("code_review.providers.http_shortcuts.httpx.Client")
+def test_get_incremental_pr_diff_re_raises_non_fallback_compare_error(mock_client):
+    compare_resp = MagicMock(status_code=500, text="server error")
+    compare_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "compare failed",
+        request=MagicMock(),
+        response=compare_resp,
+    )
+    mock_client.return_value.__enter__.return_value.get.return_value = compare_resp
+
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
 
 
 @patch("code_review.providers.gitlab.httpx.Client")
@@ -121,6 +172,41 @@ def test_get_incremental_pr_files_uses_compare_endpoint(mock_client):
     assert files[0].path == "foo.py"
     call = mock_client.return_value.__enter__.return_value.get.call_args
     assert "/repository/compare?from=base123&to=head456&straight=true" in call[0][0]
+
+
+@patch("code_review.providers.http_shortcuts.httpx.Client")
+def test_get_incremental_pr_files_fall_back_to_full_pr_files_on_compare_422(mock_client):
+    compare_resp = MagicMock(status_code=422, text="invalid range")
+    compare_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "compare failed",
+        request=MagicMock(),
+        response=compare_resp,
+    )
+    full_mr_resp = MagicMock()
+    full_mr_resp.json.return_value = [
+        {
+            "new_path": "full.py",
+            "old_path": "full.py",
+            "new_file": False,
+            "deleted_file": False,
+            "diff": "",
+        }
+    ]
+    full_mr_resp.headers = {"content-type": "application/json"}
+    full_mr_resp.raise_for_status = MagicMock()
+    mock_client.return_value.__enter__.return_value.get.side_effect = [
+        compare_resp,
+        full_mr_resp,
+    ]
+
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    files = p.get_incremental_pr_files("owner", "repo", 1, "base123", "head456")
+
+    assert len(files) == 1
+    assert files[0].path == "full.py"
+    calls = mock_client.return_value.__enter__.return_value.get.call_args_list
+    assert "/repository/compare?from=base123&to=head456&straight=true" in calls[0][0][0]
+    assert "/merge_requests/1/diffs" in calls[1][0][0]
 
 
 @patch("code_review.providers.http_shortcuts.httpx.Client")

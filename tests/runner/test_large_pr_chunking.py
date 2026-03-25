@@ -28,7 +28,11 @@ def _configure_common_runner_mocks(
         scm_config.update(scm_overrides)
 
     mock_scm.return_value = MagicMock(**scm_config)
-    mock_llm.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
+    mock_llm.return_value = MagicMock(
+        provider="gemini",
+        model="gemini-2.5-flash",
+        disable_tool_calls=False,
+    )
     mock_get_provider.return_value = provider
     mock_context_window.return_value = context_window
 

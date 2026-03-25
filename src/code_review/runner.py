@@ -360,9 +360,9 @@ def _window_text(lines_map: dict[int, str], line: int, radius: int = 2) -> str:
     return "\n".join(window_lines)
 
 
-def _first_non_empty_patch_line(suggested_patch: str) -> str:
-    """Return the first non-empty line from a suggested patch block."""
-    return next((ln.strip() for ln in suggested_patch.splitlines() if ln.strip()), "")
+def _non_empty_patch_lines(suggested_patch: str) -> list[str]:
+    """Return stripped non-empty lines from a suggested patch block."""
+    return [ln.strip() for ln in suggested_patch.splitlines() if ln.strip()]
 
 
 def _drop_or_strip_identical_patch_finding(
@@ -375,12 +375,12 @@ def _drop_or_strip_identical_patch_finding(
     if not finding.suggested_patch:
         return finding
 
-    patch_first_line = _first_non_empty_patch_line(finding.suggested_patch)
-    if not patch_first_line:
+    non_empty_lines = _non_empty_patch_lines(finding.suggested_patch)
+    if len(non_empty_lines) != 1:
         return finding
 
     matches_current_line = _normalize_code_for_comparison(
-        patch_first_line
+        non_empty_lines[0]
     ) == _normalize_code_for_comparison(actual_content)
     if not matches_current_line:
         return finding

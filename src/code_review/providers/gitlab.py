@@ -42,6 +42,7 @@ from code_review.schemas.review_thread_dismissal import (
 )
 
 MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
+_COMPARE_FALLBACK_STATUSES = {404, 405, 422}
 logger = logging.getLogger(__name__)
 
 
@@ -264,7 +265,23 @@ class GitLabProvider(ProviderInterface):
         """Return unified diff for the incremental compare range ``base_sha..head_sha``."""
         if not base_sha or not head_sha or base_sha == head_sha:
             return self.get_pr_diff(owner, repo, pr_number)
-        data = self._get(self._incremental_compare_path(owner, repo, base_sha, head_sha))
+        try:
+            data = self._get(self._incremental_compare_path(owner, repo, base_sha, head_sha))
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code not in _COMPARE_FALLBACK_STATUSES:
+                raise
+            logger.warning(
+                "GitLab incremental compare diff unsupported/invalid owner=%s repo=%s pr=%s "
+                "base=%s head=%s status=%s; falling back to full MR diff",
+                owner,
+                repo,
+                pr_number,
+                base_sha,
+                head_sha,
+                status_code,
+            )
+            return self.get_pr_diff(owner, repo, pr_number)
         if not isinstance(data, dict):
             return ""
         return self._unified_diff_from_diff_entries(data.get("diffs"))
@@ -343,7 +360,23 @@ class GitLabProvider(ProviderInterface):
         """Return files changed in the incremental compare range ``base_sha..head_sha``."""
         if not base_sha or not head_sha or base_sha == head_sha:
             return self.get_pr_files(owner, repo, pr_number)
-        data = self._get(self._incremental_compare_path(owner, repo, base_sha, head_sha))
+        try:
+            data = self._get(self._incremental_compare_path(owner, repo, base_sha, head_sha))
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code not in _COMPARE_FALLBACK_STATUSES:
+                raise
+            logger.warning(
+                "GitLab incremental compare files unsupported/invalid owner=%s repo=%s pr=%s "
+                "base=%s head=%s status=%s; falling back to full MR files",
+                owner,
+                repo,
+                pr_number,
+                base_sha,
+                head_sha,
+                status_code,
+            )
+            return self.get_pr_files(owner, repo, pr_number)
         if not isinstance(data, dict):
             return []
         return self._file_infos_from_diff_entries(data.get("diffs"))

@@ -74,6 +74,22 @@ def test_identical_patch_is_stripped_for_non_syntax_message():
     assert result[0].suggested_patch is None
 
 
+def test_multiline_patch_with_matching_first_line_is_not_treated_as_contradicted():
+    finding = _finding(
+        line=1151,
+        message="The annotation builder is malformed and will not compile.",
+        suggested_patch=(
+            'fields.append("    @Column(name = \\"").append(cm.targetColumn()).append("\\"");\n'
+            'fields.append(", nullable = false");'
+        ),
+    )
+
+    result = _filter_obviously_contradicted_findings([finding], SAMPLE_DIFF)
+
+    assert len(result) == 1
+    assert result[0] == finding
+
+
 def test_syntax_patch_with_different_string_literal_spacing_is_not_dropped():
     diff_text = """\
 diff --git a/src/main/java/Example.java b/src/main/java/Example.java
