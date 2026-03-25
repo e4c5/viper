@@ -51,7 +51,7 @@ def test_get_incremental_pr_diff_uses_compare_endpoint(mock_client):
 
     assert "foo.py" in diff
     call = mock_client.return_value.__enter__.return_value.get.call_args
-    assert "/repository/compare?from=base123&to=head456" in call[0][0]
+    assert "/repository/compare?from=base123&to=head456&straight=true" in call[0][0]
 
 
 @patch("code_review.providers.gitlab.httpx.Client")
@@ -120,7 +120,7 @@ def test_get_incremental_pr_files_uses_compare_endpoint(mock_client):
     assert len(files) == 1
     assert files[0].path == "foo.py"
     call = mock_client.return_value.__enter__.return_value.get.call_args
-    assert "/repository/compare?from=base123&to=head456" in call[0][0]
+    assert "/repository/compare?from=base123&to=head456&straight=true" in call[0][0]
 
 
 @patch("code_review.providers.http_shortcuts.httpx.Client")

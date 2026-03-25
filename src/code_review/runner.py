@@ -628,13 +628,16 @@ def _build_idempotency_key(
     repo: str,
     pr_number: int,
     head_sha: str,
+    base_sha: str = "",
 ) -> str:
-    """Idempotency key: same key => same run already done for this PR/head/config."""
+    """Idempotency key: same key => same run already done for this PR/range/config."""
+    head_sha = (head_sha or "").strip()
+    base_sha = (base_sha or "").strip()
     config_hash = hashlib.sha256(
         f"{scm_cfg.provider}:{scm_cfg.url}:{llm_cfg.provider}:{llm_cfg.model}".encode()
     ).hexdigest()[:16]
     return (
-        f"{scm_cfg.provider}/{owner}/{repo}/pr/{pr_number}/head/{head_sha}/"
+        f"{scm_cfg.provider}/{owner}/{repo}/pr/{pr_number}/head/{head_sha}/base/{base_sha}/"
         f"agent/{AGENT_VERSION}/config/{config_hash}"
     )
 
@@ -834,6 +837,7 @@ def _post_inline_comments(
     repo: str,
     pr_number: int,
     head_sha: str,
+    incremental_base_sha: str,
     to_post: list[tuple[FindingV1, str]],
     cfg,
     llm_cfg,
@@ -841,7 +845,9 @@ def _post_inline_comments(
 ) -> int:
     """Build inline comments and post each one individually. Returns successful post count."""
     caps = provider.capabilities()
-    run_id = _build_idempotency_key(cfg, llm_cfg, owner, repo, pr_number, head_sha)
+    run_id = _build_idempotency_key(
+        cfg, llm_cfg, owner, repo, pr_number, head_sha, incremental_base_sha
+    )
     added_set = _added_lines_in_diff(full_diff) if full_diff else set()
     comments: list[InlineComment] = []
     for f, fp in to_post:
@@ -997,6 +1003,7 @@ def _post_omit_marker_pr_summary_comment(
     cfg,
     llm_cfg,
     head_sha: str,
+    incremental_base_sha: str = "",
     *,
     findings_planned: int,
     successful_inline_posts: int,
@@ -1021,7 +1028,9 @@ def _post_omit_marker_pr_summary_comment(
         gate_outcome=gate_outcome,
     )
     if include_run_marker:
-        run_id = _build_idempotency_key(cfg, llm_cfg, owner, repo, pr_number, head_sha)
+        run_id = _build_idempotency_key(
+            cfg, llm_cfg, owner, repo, pr_number, head_sha, incremental_base_sha
+        )
         use_linkref = getattr(caps, "embed_agent_marker_as_commonmark_linkref", None) is True
         body = format_comment_body_with_marker(
             visible,
@@ -1721,14 +1730,18 @@ class ReviewOrchestrator:
         trace_id: str,
         start_time: float,
         run_handle,
+        incremental_base_sha: str = "",
     ) -> list[FindingV1] | None:
         """
-        If we already ran for this PR/head/config (run id in comment marker),
+        If we already ran for this PR/range/config (run id in comment marker),
         emit observability and return []. Otherwise return None (caller continues).
         """
         if not head_sha:
             return None
-        run_id = _build_idempotency_key(cfg, llm_cfg, owner, repo, pr_number, head_sha)
+        incremental_base_sha = incremental_base_sha or self._incremental_base_sha(cfg, head_sha)
+        run_id = _build_idempotency_key(
+            cfg, llm_cfg, owner, repo, pr_number, head_sha, incremental_base_sha
+        )
         if not _idempotency_key_seen_in_comments(existing_dicts, run_id):
             return None
         _duration_ms = (time.perf_counter() - start_time) * 1000
@@ -2153,6 +2166,7 @@ class ReviewOrchestrator:
         repo: str,
         pr_number: int,
         head_sha: str,
+        incremental_base_sha: str,
         dry_run: bool,
         to_post: list[tuple[FindingV1, str]],
         cfg,
@@ -2187,6 +2201,7 @@ class ReviewOrchestrator:
                 repo,
                 pr_number,
                 head_sha,
+                incremental_base_sha,
                 to_post,
                 cfg,
                 llm_cfg,
@@ -2205,6 +2220,7 @@ class ReviewOrchestrator:
                 cfg,
                 llm_cfg,
                 head_sha,
+                incremental_base_sha,
                 findings_planned=planned,
                 successful_inline_posts=count,
                 gate_outcome=gate_outcome,
@@ -2867,6 +2883,7 @@ class ReviewOrchestrator:
             resolved_body_set,
             resolved_fp_set,
         ) = self._load_existing_comments_and_markers(provider, owner, repo, pr_number)
+        incremental_base_sha = self._incremental_base_sha(cfg, head_sha)
 
         idempotency_result = self._compute_idempotency_and_maybe_short_circuit(
             cfg,
@@ -2879,9 +2896,10 @@ class ReviewOrchestrator:
             trace_id,
             start_time,
             run_handle,
+            incremental_base_sha=incremental_base_sha,
         )
         if idempotency_result is not None:
-            logger.info("Skipping run (idempotent: same head/config already reviewed)")
+            logger.info("Skipping run (idempotent: same review range/config already reviewed)")
             return idempotency_result
 
         ctx_cfg = get_context_aware_config()
@@ -3010,6 +3028,7 @@ class ReviewOrchestrator:
             repo,
             pr_number,
             head_sha,
+            incremental_base_sha,
             dry_run,
             to_post,
             cfg,

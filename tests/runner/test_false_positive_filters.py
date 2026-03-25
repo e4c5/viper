@@ -35,7 +35,7 @@ def _finding(**overrides) -> FindingV1:
 
 def test_identical_syntax_fix_is_dropped_as_contradicted():
     finding = _finding(
-        line=1153,
+        line=1152,
         message=(
             "The @Column annotation is missing a comma before `nullable = false`, "
             "which will result in invalid Java code."

@@ -313,6 +313,23 @@ def test_compute_idempotency_and_maybe_short_circuit_returns_empty_list_when_key
     mock_obs.finish_run.assert_called_once()
 
 
+def test_compute_idempotency_and_maybe_short_circuit_uses_incremental_base_in_key():
+    """A different incremental base_sha must not short-circuit as the same run."""
+    from code_review.runner import _build_idempotency_key
+
+    cfg = MagicMock(provider="gitea", url="https://x.com", token="x", base_sha="base-new")
+    llm_cfg = MagicMock(provider="gemini", model="m")
+    run_id = _build_idempotency_key(cfg, llm_cfg, "o", "r", 1, "abc", "base-old")
+    existing_dicts = [{"path": "a.py", "body": f"<!-- code-review-agent:run={run_id} -->\nDone."}]
+    o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
+
+    result = o._compute_idempotency_and_maybe_short_circuit(
+        cfg, llm_cfg, "o", "r", 1, "abc", existing_dicts, "trace", 0.0, MagicMock()
+    )
+
+    assert result is None
+
+
 # --- Step 3: _fetch_pr_files_and_diffs, _build_ignore_set_and_filter_files,
 #            _detect_languages_for_files ---
 
@@ -449,7 +466,7 @@ def test_post_findings_and_summary_returns_zero_when_dry_run():
     provider = MagicMock()
     to_post = []
     count = o._post_findings_and_summary(
-        provider, "o", "r", 1, "abc", True, to_post, MagicMock(), MagicMock(), []
+        provider, "o", "r", 1, "abc", "", True, to_post, MagicMock(), MagicMock(), []
     )
     assert count == 0
     provider.post_review_comments.assert_not_called()

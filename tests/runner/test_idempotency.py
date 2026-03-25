@@ -21,8 +21,22 @@ def test_build_idempotency_key_format(mock_scm, mock_llm):
         mock_scm.return_value, mock_llm.return_value, "o", "r", 1, "abc123"
     )
     assert "gitea/o/r/pr/1/head/abc123" in key
+    assert "/base/" in key
     assert "agent/" in key
     assert "config/" in key
+
+
+@patch("code_review.runner.get_llm_config")
+@patch("code_review.runner.get_scm_config")
+def test_build_idempotency_key_includes_incremental_base(mock_scm, mock_llm):
+    mock_scm.return_value = MagicMock(provider="gitea", url="https://gitea.example.com", token="x")
+    mock_llm.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
+
+    key = _build_idempotency_key(
+        mock_scm.return_value, mock_llm.return_value, "o", "r", 1, "abc123", "base456"
+    )
+
+    assert "head/abc123/base/base456" in key
 
 
 def test_idempotency_key_seen_in_comments():

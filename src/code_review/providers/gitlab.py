@@ -220,6 +220,15 @@ class GitLabProvider(ProviderInterface):
     def _put(self, path: str, json: dict) -> Any:
         return http_put_json(path, json, headers=self._headers(), timeout=self._timeout)
 
+    def _incremental_compare_path(
+        self, owner: str, repo: str, base_sha: str, head_sha: str
+    ) -> str:
+        path = self._path(owner, repo, "repository", "compare")
+        return (
+            f"{path}?from={quote(base_sha, safe='')}"
+            f"&to={quote(head_sha, safe='')}&straight=true"
+        )
+
     def _delete(self, path: str) -> None:
         http_delete(path, headers=self._headers(), timeout=self._timeout)
 
@@ -255,8 +264,7 @@ class GitLabProvider(ProviderInterface):
         """Return unified diff for the incremental compare range ``base_sha..head_sha``."""
         if not base_sha or not head_sha or base_sha == head_sha:
             return self.get_pr_diff(owner, repo, pr_number)
-        path = self._path(owner, repo, "repository", "compare")
-        data = self._get(f"{path}?from={quote(base_sha, safe='')}&to={quote(head_sha, safe='')}")
+        data = self._get(self._incremental_compare_path(owner, repo, base_sha, head_sha))
         if not isinstance(data, dict):
             return ""
         return self._unified_diff_from_diff_entries(data.get("diffs"))
@@ -335,8 +343,7 @@ class GitLabProvider(ProviderInterface):
         """Return files changed in the incremental compare range ``base_sha..head_sha``."""
         if not base_sha or not head_sha or base_sha == head_sha:
             return self.get_pr_files(owner, repo, pr_number)
-        path = self._path(owner, repo, "repository", "compare")
-        data = self._get(f"{path}?from={quote(base_sha, safe='')}&to={quote(head_sha, safe='')}")
+        data = self._get(self._incremental_compare_path(owner, repo, base_sha, head_sha))
         if not isinstance(data, dict):
             return []
         return self._file_infos_from_diff_entries(data.get("diffs"))
