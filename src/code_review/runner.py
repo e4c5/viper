@@ -1086,7 +1086,6 @@ def _log_review_decision_event_if_present(ctx: ReviewDecisionEventContext | None
 
 
 def _head_sha_hint_for_decision_only(
-    ctx: ReviewDecisionEventContext | None,
     cli_head_sha: str,
 ) -> str:
     """Return CLI/env head SHA for decision-only runs."""
@@ -1671,7 +1670,9 @@ class ReviewOrchestrator:
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
 
-        disable_tools_effective = disable_tools if disable_tools is not None else not use_file_by_file
+        disable_tools_effective = (
+            disable_tools if disable_tools is not None else not use_file_by_file
+        )
         agent = create_review_agent(
             provider,
             review_standards,
@@ -2312,6 +2313,83 @@ class ReviewOrchestrator:
             to_post=[],
         )
 
+    def _validate_context_sources_or_raise(
+        self,
+        ctx_cfg,
+        cfg,
+        run_handle,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        start_time: float,
+    ) -> None:
+        """Validate context-aware sources when enabled and finish observability on fatal config."""
+        if not ctx_cfg.enabled:
+            return
+        try:
+            validate_context_aware_sources(ctx_cfg, cfg)
+        except ContextAwareFatalError as e:
+            logger.error("Context-aware review configuration error: %s", e)
+            observability.finish_run(
+                run_handle,
+                owner,
+                repo,
+                pr_number,
+                files_count=0,
+                findings_count=0,
+                posts_count=0,
+                duration_seconds=(time.perf_counter() - start_time),
+            )
+            raise
+
+    @staticmethod
+    def _log_review_scope_fetch(incremental_base_sha: str, head_sha: str, paths: list[str]) -> None:
+        """Emit a concise log line describing the fetched review scope."""
+        if incremental_base_sha:
+            logger.info(
+                "Fetched incremental diff base=%s head=%s, %d file(s) to review",
+                incremental_base_sha[:12],
+                (head_sha or "")[:12],
+                len(paths),
+            )
+            return
+        logger.info("Fetched diff, %d file(s) to review", len(paths))
+
+    @staticmethod
+    def _build_review_execution_mode(
+        full_diff: str,
+        diff_budget: int,
+        incremental_base_sha: str,
+        paths: list[str],
+    ) -> tuple[bool, bool, dict[str, str] | None]:
+        """Return execution mode flags plus an optional embedded per-file diff map."""
+        use_file_by_file = _estimate_tokens(full_diff) > diff_budget
+        use_embedded_file_diffs = bool(incremental_base_sha and use_file_by_file)
+        diff_by_path = (
+            {path: unified_diff_for_path(full_diff, path) for path in paths}
+            if use_embedded_file_diffs
+            else None
+        )
+        return use_file_by_file, use_embedded_file_diffs, diff_by_path
+
+    @staticmethod
+    def _log_review_execution_mode(
+        use_file_by_file: bool,
+        use_embedded_file_diffs: bool,
+        paths: list[str],
+    ) -> None:
+        """Log whether this run is single-shot, tool-based, or embedded file-by-file."""
+        if not use_file_by_file:
+            logger.info("Running agent (single shot)")
+            return
+        if use_embedded_file_diffs:
+            logger.info(
+                "Running agent on %d file(s) (embedded file-by-file, incremental scope)",
+                len(paths),
+            )
+            return
+        logger.info("Running agent on %d file(s) (file-by-file)", len(paths))
+
     def _decision_only_maybe_post_disagreed_thread_reply(
         self,
         provider,
@@ -2339,6 +2417,69 @@ class ReviewOrchestrator:
         except Exception as e:
             logger.warning("post_review_thread_reply failed: %s", e)
 
+    def _reply_dismissal_comment_id_or_none(self, app_cfg) -> str | None:
+        """Return event comment id when reply-dismissal should run, else ``None``."""
+        ctx = self._event_context
+        if app_cfg.reply_dismissal_enabled and ctx is not None and (ctx.comment_id or "").strip():
+            return ctx.comment_id.strip()
+        if app_cfg.reply_dismissal_enabled and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Reply-dismissal not run: requires CODE_REVIEW_EVENT_COMMENT_ID; "
+                "got comment_id=%r ctx_present=%s",
+                ((ctx.comment_id or "").strip() if ctx else "") or "",
+                ctx is not None,
+            )
+        return None
+
+    def _reply_dismissal_precheck(
+        self,
+        provider,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        comment_id: str,
+    ) -> tuple[BotAttributionIdentity, ReviewThreadDismissalContext] | None:
+        """Return bot identity and dismissal context when reply-dismissal can proceed."""
+        ctx = self._event_context
+        if ctx is None:
+            return None
+        bot_id = provider.get_bot_attribution_identity(owner, repo, pr_number)
+        if _reply_added_event_authored_by_bot(ctx, bot_id):
+            observability.record_reply_dismissal_outcome("skipped_bot_author")
+            logger.info(
+                "Reply-dismissal skipped: reply_added actor matches bot "
+                "(actor_login=%r actor_id=%r)",
+                (ctx.actor_login or "").strip(),
+                (ctx.actor_id or "").strip(),
+            )
+            return None
+        caps_rd = provider.capabilities()
+        if not caps_rd.supports_review_thread_dismissal_context:
+            observability.record_reply_dismissal_outcome("skipped_no_capability")
+            return None
+        dctx = provider.get_review_thread_dismissal_context(owner, repo, pr_number, comment_id)
+        if dctx is None or len(dctx.entries) < 2:
+            observability.record_reply_dismissal_outcome("skipped_insufficient_thread")
+            return None
+        return bot_id, dctx
+
+    @staticmethod
+    def _reply_dismissal_parse_verdict(raw_verdict: str) -> ReplyDismissalVerdictV1 | None:
+        """Parse reply-dismissal LLM output and log a helpful truncated warning on failure."""
+        verdict = reply_dismissal_verdict_from_llm_text(raw_verdict)
+        if verdict is not None:
+            return verdict
+        observability.record_reply_dismissal_outcome("parse_failed")
+        snippet = (raw_verdict or "").strip()
+        if len(snippet) > 1500:
+            snippet = snippet[:1500] + "…"
+        logger.warning(
+            "Reply-dismissal LLM output could not be parsed as ReplyDismissalVerdictV1; "
+            "enable DEBUG for full request/response. Raw (truncated): %r",
+            snippet or "(empty)",
+        )
+        return None
+
     def _decision_only_reply_dismissal_excluded_gate_ids(
         self,
         provider,
@@ -2350,44 +2491,13 @@ class ReviewOrchestrator:
         trace_id: str,
     ) -> frozenset[str]:
         """Stable ids to exclude from the quality gate after optional reply-dismissal LLM."""
-        ctx = self._event_context
-        if not (
-            app_cfg.reply_dismissal_enabled
-            and ctx is not None
-            and (ctx.comment_id or "").strip()
-        ):
-            if app_cfg.reply_dismissal_enabled and logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "Reply-dismissal not run: requires CODE_REVIEW_EVENT_COMMENT_ID; "
-                    "got comment_id=%r ctx_present=%s",
-                    ((ctx.comment_id or "").strip() if ctx else "") or "",
-                    ctx is not None,
-                )
+        comment_id = self._reply_dismissal_comment_id_or_none(app_cfg)
+        if comment_id is None:
             return frozenset()
-
-        comment_id = ctx.comment_id.strip()
-        bot_id = provider.get_bot_attribution_identity(owner, repo, pr_number)
-        if _reply_added_event_authored_by_bot(ctx, bot_id):
-            observability.record_reply_dismissal_outcome("skipped_bot_author")
-            logger.info(
-                "Reply-dismissal skipped: reply_added actor matches bot "
-                "(actor_login=%r actor_id=%r)",
-                (ctx.actor_login or "").strip(),
-                (ctx.actor_id or "").strip(),
-            )
+        precheck = self._reply_dismissal_precheck(provider, owner, repo, pr_number, comment_id)
+        if precheck is None:
             return frozenset()
-
-        caps_rd = provider.capabilities()
-        if not caps_rd.supports_review_thread_dismissal_context:
-            observability.record_reply_dismissal_outcome("skipped_no_capability")
-            return frozenset()
-
-        dctx = provider.get_review_thread_dismissal_context(
-            owner, repo, pr_number, comment_id
-        )
-        if dctx is None or len(dctx.entries) < 2:
-            observability.record_reply_dismissal_outcome("skipped_insufficient_thread")
-            return frozenset()
+        bot_id, dctx = precheck
 
         user_msg = _format_reply_dismissal_user_message(dctx, bot_id)
         try:
@@ -2397,17 +2507,8 @@ class ReviewOrchestrator:
             observability.record_reply_dismissal_outcome("llm_error")
             return frozenset()
 
-        verdict = reply_dismissal_verdict_from_llm_text(raw_verdict)
+        verdict = self._reply_dismissal_parse_verdict(raw_verdict)
         if verdict is None:
-            observability.record_reply_dismissal_outcome("parse_failed")
-            snippet = (raw_verdict or "").strip()
-            if len(snippet) > 1500:
-                snippet = snippet[:1500] + "…"
-            logger.warning(
-                "Reply-dismissal LLM output could not be parsed as ReplyDismissalVerdictV1; "
-                "enable DEBUG for full request/response. Raw (truncated): %r",
-                snippet or "(empty)",
-            )
             return frozenset()
 
         logger.info(
@@ -2431,7 +2532,7 @@ class ReviewOrchestrator:
             observability.record_reply_dismissal_outcome("disagreed")
             self._decision_only_maybe_post_disagreed_thread_reply(
                 provider,
-                caps_rd,
+                provider.capabilities(),
                 owner,
                 repo,
                 pr_number,
@@ -2489,7 +2590,7 @@ class ReviewOrchestrator:
         if skip_early is not None:
             return skip_early
 
-        head_hint = _head_sha_hint_for_decision_only(self._event_context, self.head_sha)
+        head_hint = _head_sha_hint_for_decision_only(self.head_sha)
         head_sha = _resolve_head_sha_for_review_decision_submission(
             provider, owner, repo, pr_number, head_hint
         )
@@ -2609,22 +2710,15 @@ class ReviewOrchestrator:
             return idempotency_result
 
         ctx_cfg = get_context_aware_config()
-        if ctx_cfg.enabled:
-            try:
-                validate_context_aware_sources(ctx_cfg, cfg)
-            except ContextAwareFatalError as e:
-                logger.error("Context-aware review configuration error: %s", e)
-                observability.finish_run(
-                    run_handle,
-                    owner,
-                    repo,
-                    pr_number,
-                    files_count=0,
-                    findings_count=0,
-                    posts_count=0,
-                    duration_seconds=(time.perf_counter() - start_time),
-                )
-                raise
+        self._validate_context_sources_or_raise(
+            ctx_cfg,
+            cfg,
+            run_handle,
+            owner,
+            repo,
+            pr_number,
+            start_time,
+        )
 
         pr_info_for_metadata = provider.get_pr_info(owner, repo, pr_number)
 
@@ -2632,15 +2726,7 @@ class ReviewOrchestrator:
             provider, cfg, owner, repo, pr_number, head_sha
         )
         paths = self._build_ignore_set_and_filter_files(paths)
-        if incremental_base_sha:
-            logger.info(
-                "Fetched incremental diff base=%s head=%s, %d file(s) to review",
-                incremental_base_sha[:12],
-                (head_sha or "")[:12],
-                len(paths),
-            )
-        else:
-            logger.info("Fetched diff, %d file(s) to review", len(paths))
+        self._log_review_scope_fetch(incremental_base_sha, head_sha, paths)
         if not paths:
             logger.info("No files to review, skipping")
             return self._record_observability_and_build_result(
@@ -2685,26 +2771,17 @@ class ReviewOrchestrator:
         if context_brief:
             logger.info("context_aware: distilled context attached to review prompt")
 
-        use_file_by_file = _estimate_tokens(full_diff) > diff_budget
-        use_embedded_file_diffs = bool(incremental_base_sha and use_file_by_file)
-        diff_by_path = (
-            {
-                path: unified_diff_for_path(full_diff, path)
-                for path in paths
-            }
-            if use_embedded_file_diffs
-            else None
+        (
+            use_file_by_file,
+            use_embedded_file_diffs,
+            diff_by_path,
+        ) = self._build_review_execution_mode(
+            full_diff,
+            diff_budget,
+            incremental_base_sha,
+            paths,
         )
-        if use_file_by_file:
-            if use_embedded_file_diffs:
-                logger.info(
-                    "Running agent on %d file(s) (embedded file-by-file, incremental scope)",
-                    len(paths),
-                )
-            else:
-                logger.info("Running agent on %d file(s) (file-by-file)", len(paths))
-        else:
-            logger.info("Running agent (single shot)")
+        self._log_review_execution_mode(use_file_by_file, use_embedded_file_diffs, paths)
 
         session_id, session_service, runner = self._create_agent_and_runner(
             provider,
