@@ -30,6 +30,22 @@ def test_get_pr_diff(mock_client):
 
 
 @patch("code_review.providers.github.httpx.Client")
+def test_get_incremental_pr_diff_uses_compare_endpoint(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.text = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py"
+    mock_resp.headers = {}
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
+
+    assert "diff --git" in diff
+    call = mock_client.return_value.__enter__.return_value.get.call_args
+    assert "/compare/base123...head456" in call[0][0]
+    assert call[1]["headers"].get("Accept") == "application/vnd.github.v3.diff"
+
+
+@patch("code_review.providers.github.httpx.Client")
 def test_get_file_content(mock_client):
     content_b64 = base64.b64encode(b"print('hello')").decode()
     mock_resp = MagicMock()
@@ -76,6 +92,26 @@ def test_get_pr_files(mock_client):
     assert files[0].status == "modified"
     assert files[1].path == "bar.go"
     assert files[1].status == "added"
+
+
+@patch("code_review.providers.github.httpx.Client")
+def test_get_incremental_pr_files_uses_compare_endpoint(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "files": [
+            {"filename": "foo.py", "status": "modified", "additions": 1, "deletions": 0}
+        ]
+    }
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    files = p.get_incremental_pr_files("owner", "repo", 1, "base123", "head456")
+
+    assert len(files) == 1
+    assert files[0].path == "foo.py"
+    call = mock_client.return_value.__enter__.return_value.get.call_args
+    assert "/compare/base123...head456" in call[0][0]
 
 
 @patch("code_review.providers.github.httpx.Client")

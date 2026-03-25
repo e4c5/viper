@@ -267,6 +267,25 @@ class BitbucketServerProvider(ProviderInterface):
             return _bitbucket_json_diff_to_unified(out)
         return ""
 
+    def get_incremental_pr_diff(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> str:
+        """Return unified diff for the incremental compare range ``base_sha..head_sha``."""
+        if not base_sha or not head_sha or base_sha == head_sha:
+            return self.get_pr_diff(owner, repo, pr_number)
+        path = self._path(owner, repo, "compare", "diff")
+        out = self._get(path, params={"from": base_sha, "to": head_sha})
+        if isinstance(out, str):
+            return out
+        if isinstance(out, dict) and "diffs" in out:
+            return _bitbucket_json_diff_to_unified(out)
+        return ""
+
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
         """Return file content at ref (raw endpoint with at=ref)."""
         cache_key = (owner, repo, str(ref), path)
@@ -297,6 +316,25 @@ class BitbucketServerProvider(ProviderInterface):
     def get_pr_files(self, owner: str, repo: str, pr_number: int) -> list[FileInfo]:
         """Return list of changed files by parsing the PR diff."""
         diff_text = self.get_pr_diff(owner, repo, pr_number)
+        return self._file_infos_from_diff_text(diff_text)
+
+    def get_incremental_pr_files(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> list[FileInfo]:
+        """Return changed files in the incremental compare range ``base_sha..head_sha``."""
+        if not base_sha or not head_sha or base_sha == head_sha:
+            return self.get_pr_files(owner, repo, pr_number)
+        return self._file_infos_from_diff_text(
+            self.get_incremental_pr_diff(owner, repo, pr_number, base_sha, head_sha)
+        )
+
+    def _file_infos_from_diff_text(self, diff_text: str) -> list[FileInfo]:
+        """Return FileInfo objects by parsing a unified diff string."""
         seen: set[str] = set()
         result: list[FileInfo] = []
         for hunk in parse_unified_diff(diff_text):

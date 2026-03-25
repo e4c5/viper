@@ -112,6 +112,10 @@ To run the review when a PR is opened or updated, use the **Generic Webhook Trig
 | `SCM_HEAD_SHA` | `$.pull_request.head.sha` |
 | `PR_ACTION` | `$.action` |
 
+Optional for incremental reviews on synchronize/update events:
+
+- `SCM_BASE_SHA` → map your webhook's previous-head field when available so Viper reviews only the new commit range instead of the full PR diff. If your SCM payload does not expose it, leave it unset and Viper falls back to the full PR diff.
+
 Suggested filter:
 
 - Text: `$PR_ACTION`
@@ -128,6 +132,10 @@ GitLab merge request webhooks use `object_attributes.*` fields instead of GitHub
 | `SCM_PR_NUM` | `$.object_attributes.iid` |
 | `SCM_HEAD_SHA` | `$.object_attributes.last_commit.id` |
 | `PR_ACTION` | `$.object_attributes.action` |
+
+Optional for incremental reviews on update events:
+
+- `SCM_BASE_SHA` → map your webhook's previous-head field when available. If not set, Viper reviews the full MR diff.
 
 Suggested filter:
 

@@ -51,6 +51,7 @@ from code_review.providers.base import (
     RateLimitError,
     ReviewDecision,
     UnresolvedReviewItem,
+    unified_diff_for_path,
 )
 from code_review.schemas.findings import FindingV1
 from code_review.schemas.reply_dismissal import ReplyDismissalVerdictV1
@@ -1569,12 +1570,41 @@ class ReviewOrchestrator:
         observability.finish_run(run_handle, owner, repo, pr_number, 0, 0, 0, _duration_ms / 1000.0)
         return []
 
-    def _fetch_pr_files_and_diffs(self, provider, owner: str, repo: str, pr_number: int):
-        """Fetch PR file list and full diff from the provider. Returns (files, paths, full_diff)."""
+    @staticmethod
+    def _incremental_base_sha(cfg, head_sha: str) -> str:
+        """Return a usable incremental review base SHA, else ``""`` for full-PR review."""
+        raw_base_sha = getattr(cfg, "base_sha", "")
+        base_sha = raw_base_sha.strip() if isinstance(raw_base_sha, str) else ""
+        head_sha = (head_sha or "").strip()
+        if not base_sha or not head_sha or base_sha == head_sha:
+            return ""
+        return base_sha
+
+    def _fetch_review_files_and_diffs(
+        self,
+        provider,
+        cfg,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        head_sha: str,
+    ) -> tuple[list[object], list[str], str, str]:
+        """Fetch the file list and diff for the active review scope.
+
+        Returns ``(files, paths, full_diff, incremental_base_sha)`` where
+        ``incremental_base_sha`` is non-empty only when the review was scoped to
+        ``SCM_BASE_SHA..SCM_HEAD_SHA``.
+        """
+        base_sha = self._incremental_base_sha(cfg, head_sha)
+        if base_sha:
+            files = provider.get_incremental_pr_files(owner, repo, pr_number, base_sha, head_sha)
+            paths = [f.path for f in files]
+            full_diff = provider.get_incremental_pr_diff(owner, repo, pr_number, base_sha, head_sha)
+            return (files, paths, full_diff, base_sha)
         files = provider.get_pr_files(owner, repo, pr_number)
         paths = [f.path for f in files]
         full_diff = provider.get_pr_diff(owner, repo, pr_number)
-        return (files, paths, full_diff)
+        return (files, paths, full_diff, "")
 
     def _build_ignore_set_and_filter_files(self, paths: list[str]) -> list[str]:
         """
@@ -1599,13 +1629,14 @@ class ReviewOrchestrator:
         pr_number: int,
         *,
         use_file_by_file: bool = False,
+        disable_tools: bool | None = None,
         context_brief_attached: bool = False,
     ):
         """
         Build the findings-only agent, session service, and ADK Runner.
         Returns (session_id, session_service, runner).
 
-        IMPORTANT: this method must be called AFTER determining use_file_by_file,
+        IMPORTANT: this method must be called AFTER determining the execution mode,
         because the mode directly controls tool and instruction configuration:
 
         - Single-shot mode (use_file_by_file=False): tools are disabled and the
@@ -1621,15 +1652,20 @@ class ReviewOrchestrator:
         - File-by-file mode (use_file_by_file=True): tools are enabled and
           FINDINGS_ONLY_INSTRUCTION is used.  The agent calls get_pr_diff_for_file
           per file, which is the expected workflow.
+
+        - Incremental large-diff mode may still set ``use_file_by_file=True`` but
+          also force ``disable_tools=True`` so each per-file prompt embeds the
+          already-scoped diff slice rather than fetching the file's full PR diff.
         """
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
 
+        disable_tools_effective = disable_tools if disable_tools is not None else not use_file_by_file
         agent = create_review_agent(
             provider,
             review_standards,
             findings_only=True,
-            disable_tools=not use_file_by_file,
+            disable_tools=disable_tools_effective,
             context_brief_attached=context_brief_attached,
         )
         session_id = f"{owner}/{repo}/pr-{pr_number}/{uuid.uuid4().hex[:12]}"
@@ -1654,6 +1690,7 @@ class ReviewOrchestrator:
         use_file_by_file: bool,
         full_diff: str = "",
         prompt_suffix: str = "",
+        diff_by_path: dict[str, str] | None = None,
     ) -> list[FindingV1]:
         """
         Run the agent (file-by-file or single shot), parse response into FindingV1 list.
@@ -1664,6 +1701,18 @@ class ReviewOrchestrator:
         JSON parsing or filtering.
         """
         if use_file_by_file and paths:
+            if diff_by_path is not None:
+                return self._run_embedded_file_by_file_mode(
+                    runner,
+                    session_service,
+                    owner,
+                    repo,
+                    pr_number,
+                    head_sha,
+                    paths,
+                    diff_by_path=diff_by_path,
+                    prompt_suffix=prompt_suffix,
+                )
             return self._run_file_by_file_mode(
                 runner,
                 session_service,
@@ -1685,6 +1734,77 @@ class ReviewOrchestrator:
             full_diff,
             prompt_suffix=prompt_suffix,
         )
+
+    def _run_embedded_file_by_file_mode(
+        self,
+        runner,
+        session_service,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        head_sha: str,
+        paths: list[str],
+        *,
+        diff_by_path: dict[str, str],
+        prompt_suffix: str = "",
+    ) -> list[FindingV1]:
+        """Review one file at a time using already-scoped embedded diffs (tools disabled)."""
+        all_findings: list[FindingV1] = []
+        for file_path in paths:
+            file_session_id = f"{owner}/{repo}/pr-{pr_number}/file/{uuid.uuid4().hex[:12]}"
+            file_diff = diff_by_path.get(file_path, "")
+            if not file_diff:
+                continue
+            head_sha_clause = f" head_sha={head_sha}." if head_sha else ""
+            msg = (
+                "Review exactly one file from this PR. "
+                f"owner={owner}, repo={repo}, pr_number={pr_number}."
+                + head_sha_clause
+                + f' Use path "{file_path}" in every finding. '
+                "The diff below is already scoped to the current review range for this file. "
+                "Output a JSON array of findings for this file only. "
+                "If there are no issues in this file, output exactly []."
+            )
+            annotated = annotate_diff_with_line_numbers(file_diff)
+            msg += f"\n\nHere is the unified diff for this file:\n```diff\n{annotated}\n```"
+            if prompt_suffix:
+                msg = msg + "\n\n" + prompt_suffix
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "LLM request (embedded file-by-file) session=%s file=%s prompt=%s",
+                    file_session_id,
+                    file_path,
+                    msg,
+                )
+            content = types.Content(role="user", parts=[types.Part(text=msg)])
+            try:
+                response_text = _run_agent_and_collect_response(
+                    runner, session_service, file_session_id, content
+                )
+            except AuthenticationError as e:
+                logger.error(
+                    "LLM authentication failed while reviewing file=%s; aborting run: %s",
+                    file_path,
+                    e,
+                )
+                raise
+            except RateLimitError as e:
+                logger.warning(
+                    "Rate limit hit while reviewing file=%s (skipping): %s",
+                    file_path,
+                    e,
+                )
+                continue
+            except Exception as e:
+                logger.warning(
+                    "Error reviewing file=%s (skipping): %s",
+                    file_path,
+                    e,
+                    exc_info=logger.isEnabledFor(logging.DEBUG),
+                )
+                continue
+            all_findings.extend(_findings_from_response(response_text))
+        return all_findings
 
     def _run_file_by_file_mode(
         self,
@@ -2497,9 +2617,19 @@ class ReviewOrchestrator:
 
         pr_info_for_metadata = provider.get_pr_info(owner, repo, pr_number)
 
-        _, paths, full_diff = self._fetch_pr_files_and_diffs(provider, owner, repo, pr_number)
+        _, paths, full_diff, incremental_base_sha = self._fetch_review_files_and_diffs(
+            provider, cfg, owner, repo, pr_number, head_sha
+        )
         paths = self._build_ignore_set_and_filter_files(paths)
-        logger.info("Fetched diff, %d file(s) to review", len(paths))
+        if incremental_base_sha:
+            logger.info(
+                "Fetched incremental diff base=%s head=%s, %d file(s) to review",
+                incremental_base_sha[:12],
+                (head_sha or "")[:12],
+                len(paths),
+            )
+        else:
+            logger.info("Fetched diff, %d file(s) to review", len(paths))
         if not paths:
             logger.info("No files to review, skipping")
             return self._record_observability_and_build_result(
@@ -2545,8 +2675,23 @@ class ReviewOrchestrator:
             logger.info("context_aware: distilled context attached to review prompt")
 
         use_file_by_file = _estimate_tokens(full_diff) > diff_budget
+        use_embedded_file_diffs = bool(incremental_base_sha and use_file_by_file)
+        diff_by_path = (
+            {
+                path: unified_diff_for_path(full_diff, path)
+                for path in paths
+            }
+            if use_embedded_file_diffs
+            else None
+        )
         if use_file_by_file:
-            logger.info("Running agent on %d file(s) (file-by-file)", len(paths))
+            if use_embedded_file_diffs:
+                logger.info(
+                    "Running agent on %d file(s) (embedded file-by-file, incremental scope)",
+                    len(paths),
+                )
+            else:
+                logger.info("Running agent on %d file(s) (file-by-file)", len(paths))
         else:
             logger.info("Running agent (single shot)")
 
@@ -2557,6 +2702,7 @@ class ReviewOrchestrator:
             repo,
             pr_number,
             use_file_by_file=use_file_by_file,
+            disable_tools=True if use_embedded_file_diffs else None,
             context_brief_attached=bool(context_brief and "<context>" in prompt_suffix),
         )
 
@@ -2572,6 +2718,7 @@ class ReviewOrchestrator:
             use_file_by_file,
             full_diff=full_diff,
             prompt_suffix=prompt_suffix,
+            diff_by_path=diff_by_path,
         )
 
         all_findings = self._filter_findings_by_diff_scope(all_findings, paths, full_diff)

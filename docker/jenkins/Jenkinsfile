@@ -33,6 +33,7 @@ pipeline {
         string(name: 'SCM_REPO', description: 'Repo name / slug')
         string(name: 'SCM_PR_NUM', description: 'PR number / id')
         string(name: 'SCM_HEAD_SHA', description: 'Head commit SHA')
+        string(name: 'SCM_BASE_SHA', description: 'Optional review base SHA for incremental PR updates')
         string(name: 'PR_ACTION', description: 'Webhook action or eventKey')
         string(name: 'SCM_PROVIDER_OVERRIDE', defaultValue: '', description: 'Optional: overrides env SCM_PROVIDER (set provider via folder/global env; do not use a param named SCM_PROVIDER — it shadows env)')
         string(name: 'SCM_URL_OVERRIDE', defaultValue: '', description: 'Optional: overrides env SCM_URL')
@@ -56,6 +57,7 @@ pipeline {
                     def scmRepo = params.SCM_REPO ?: env.SCM_REPO
                     def scmPrNum = params.SCM_PR_NUM ?: env.SCM_PR_NUM
                     def scmHeadSha = params.SCM_HEAD_SHA ?: env.SCM_HEAD_SHA
+                    def scmBaseSha = params.SCM_BASE_SHA ?: env.SCM_BASE_SHA
                     def prAction = params.PR_ACTION ?: env.PR_ACTION
                     def llmProvider = params.LLM_PROVIDER_OVERRIDE?.trim() ?: env.LLM_PROVIDER?.trim() ?: 'gemini'
                     def llmModel = env.LLM_MODEL?.trim() ?: 'gemini-2.5-flash'
@@ -157,6 +159,7 @@ pipeline {
                             "REVIEW_SCM_REPO=${scmRepo}",
                             "REVIEW_SCM_PR_NUM=${scmPrNum}",
                             "REVIEW_SCM_HEAD_SHA=${scmHeadSha}",
+                            "REVIEW_SCM_BASE_SHA=${scmBaseSha}",
                             "REVIEW_SCM_PROVIDER=${scmProvider}",
                             "REVIEW_SCM_URL=${scmUrl}",
                             "REVIEW_SCM_BITBUCKET_SERVER_USER_SLUG=${bbServerUserSlug}",
@@ -179,6 +182,7 @@ pipeline {
                                 if [ "$USE_INLINE_AGENT" = "true" ] || [ "$USE_INLINE_AGENT" = "1" ]; then
                                     export SCM_PROVIDER="$REVIEW_SCM_PROVIDER" SCM_URL="$REVIEW_SCM_URL" SCM_TOKEN="$SCM_TOKEN"
                                     export SCM_BITBUCKET_SERVER_USER_SLUG="${REVIEW_SCM_BITBUCKET_SERVER_USER_SLUG:-}"
+                                    export SCM_BASE_SHA="${REVIEW_SCM_BASE_SHA:-}"
                                     [ -n "${REVIEW_SCM_REVIEW_DECISION_ENABLED:-}" ] && export SCM_REVIEW_DECISION_ENABLED="$REVIEW_SCM_REVIEW_DECISION_ENABLED"
                                     [ -n "${REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD:-}" ] && export SCM_REVIEW_DECISION_HIGH_THRESHOLD="$REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD"
                                     [ -n "${REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD:-}" ] && export SCM_REVIEW_DECISION_MEDIUM_THRESHOLD="$REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"
@@ -215,6 +219,7 @@ pipeline {
                                         -e SCM_REPO="$REVIEW_SCM_REPO" \
                                         -e SCM_PR_NUM="$REVIEW_SCM_PR_NUM" \
                                         -e SCM_HEAD_SHA="$REVIEW_SCM_HEAD_SHA" \
+                                        -e SCM_BASE_SHA="${REVIEW_SCM_BASE_SHA:-}" \
                                         -e LLM_PROVIDER="$REVIEW_LLM_PROVIDER" \
                                         -e LLM_MODEL="$REVIEW_LLM_MODEL" \
                                         -e LLM_API_KEY="${LLM_API_KEY:-}" \

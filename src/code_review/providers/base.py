@@ -285,6 +285,40 @@ def file_infos_from_pull_file_list(files: list) -> list[FileInfo]:
     return result
 
 
+def unified_diff_for_path(diff_text: str, path: str) -> str:
+    """Return a single-file unified diff slice from *diff_text*.
+
+    Matches paths using the same normalization used for diff anchors so callers
+    can safely pass paths with or without provider-specific prefixes.
+    """
+    wanted_path = normalize_diff_anchor_path(path)
+    hunks = parse_unified_diff(diff_text)
+    lines: list[str] = []
+    headers_emitted = False
+    for hunk in hunks:
+        hunk_path = normalize_diff_anchor_path(hunk.path)
+        if hunk_path != wanted_path:
+            continue
+        if not headers_emitted:
+            lines.append(f"diff --git a/{hunk.path} b/{hunk.path}")
+            lines.append(f"--- a/{hunk.path}")
+            lines.append(f"+++ b/{hunk.path}")
+            headers_emitted = True
+        lines.append(
+            f"@@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},{hunk.new_count} @@"
+        )
+        for content, old_ln, new_ln in hunk.lines:
+            if old_ln is not None and new_ln is not None:
+                lines.append(" " + content)
+            elif new_ln is not None:
+                lines.append("+" + content)
+            elif old_ln is not None:
+                lines.append("-" + content)
+            else:
+                lines.append("\\" + content)
+    return "\n".join(lines) if lines else ""
+
+
 class ReviewComment(BaseModel):
     """A review comment with resolved status for fingerprinting."""
 
@@ -392,30 +426,37 @@ class ProviderInterface(ABC):
         Default implementation parses the full PR diff and slices by file path.
         Providers with native per-file diff endpoints may override for efficiency.
         """
-        full_diff = self.get_pr_diff(owner, repo, pr_number)
-        hunks = parse_unified_diff(full_diff)
-        lines: list[str] = []
-        headers_emitted = False
-        for hunk in hunks:
-            if hunk.path != path:
-                continue
-            if not headers_emitted:
-                lines.append(f"--- a/{hunk.path}")
-                lines.append(f"+++ b/{hunk.path}")
-                headers_emitted = True
-            lines.append(
-                f"@@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},{hunk.new_count} @@"
-            )
-            for content, old_ln, new_ln in hunk.lines:
-                if old_ln is not None and new_ln is not None:
-                    lines.append(" " + content)
-                elif new_ln is not None:
-                    lines.append("+" + content)
-                elif old_ln is not None:
-                    lines.append("-" + content)
-                else:
-                    lines.append("\\" + content)
-        return "\n".join(lines) if lines else ""
+        return unified_diff_for_path(self.get_pr_diff(owner, repo, pr_number), path)
+
+    def get_incremental_pr_diff(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> str:
+        """Return the review diff for the incremental range ``base_sha..head_sha``.
+
+        Default fallback returns the full PR diff so providers that do not yet
+        implement range compares preserve current behavior.
+        """
+        return self.get_pr_diff(owner, repo, pr_number)
+
+    def get_incremental_pr_diff_for_file(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        path: str,
+        base_sha: str,
+        head_sha: str,
+    ) -> str:
+        """Return a single-file diff slice for the incremental review range."""
+        return unified_diff_for_path(
+            self.get_incremental_pr_diff(owner, repo, pr_number, base_sha, head_sha),
+            path,
+        )
 
     @abstractmethod
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
@@ -449,6 +490,17 @@ class ProviderInterface(ABC):
     def get_pr_files(self, owner: str, repo: str, pr_number: int) -> list[FileInfo]:
         """Return list of changed files in the PR."""
         ...
+
+    def get_incremental_pr_files(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> list[FileInfo]:
+        """Return changed files for the incremental review range ``base_sha..head_sha``."""
+        return self.get_pr_files(owner, repo, pr_number)
 
     @abstractmethod
     def post_review_comments(

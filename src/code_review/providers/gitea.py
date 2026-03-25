@@ -105,6 +105,20 @@ class GiteaProvider(ProviderInterface):
         path = f"/repos/{owner}/{repo}/pulls/{pr_number}.diff"
         return self._get_text(path)
 
+    def get_incremental_pr_diff(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> str:
+        """Return unified diff for the incremental compare range ``base_sha...head_sha``."""
+        if not base_sha or not head_sha or base_sha == head_sha:
+            return self.get_pr_diff(owner, repo, pr_number)
+        path = f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}.diff"
+        return self._get_text(path)
+
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
         """Return file content at ref; truncated with delimiter if over max size."""
         import base64
@@ -126,6 +140,23 @@ class GiteaProvider(ProviderInterface):
         path = f"/repos/{owner}/{repo}/pulls/{pr_number}/files"
         data = self._get(path)
         return file_infos_from_pull_file_list(data) if isinstance(data, list) else []
+
+    def get_incremental_pr_files(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> list[FileInfo]:
+        """Return files changed in the incremental compare range ``base_sha...head_sha``."""
+        if not base_sha or not head_sha or base_sha == head_sha:
+            return self.get_pr_files(owner, repo, pr_number)
+        path = f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}"
+        data = self._get(path)
+        if not isinstance(data, dict):
+            return []
+        return file_infos_from_pull_file_list(data.get("files") or [])
 
     def post_review_comments(
         self,

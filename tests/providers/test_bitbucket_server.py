@@ -234,6 +234,38 @@ def test_get_pr_diff_returns_text_response_as_is(mock_client):
 
 
 @patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_incremental_pr_diff_uses_compare_endpoint(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {
+        "diffs": [
+            {
+                "source": {"toString": "src/Main.java"},
+                "destination": {"toString": "src/Main.java"},
+                "hunks": [
+                    {
+                        "sourceLine": 1,
+                        "sourceSpan": 1,
+                        "destinationLine": 1,
+                        "destinationSpan": 2,
+                        "segments": [{"type": "ADDED", "lines": [{"line": "// new comment"}]}],
+                    }
+                ],
+            }
+        ]
+    }
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    diff = p.get_incremental_pr_diff("PROJ", "my-repo", 42, "base123", "head456")
+
+    assert "+// new comment" in diff
+    call = mock_client.return_value.__enter__.return_value.get.call_args
+    assert call[0][0].endswith("/compare/diff")
+    assert call[1]["params"] == {"from": "base123", "to": "head456"}
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
 def test_get_pr_files_uses_json_diff(mock_client):
     """get_pr_files correctly extracts files when diff comes back as Bitbucket JSON."""
     mock_resp = MagicMock()
@@ -281,6 +313,36 @@ def test_get_pr_files_uses_json_diff(mock_client):
     paths = [f.path for f in files]
     assert "src/Foo.java" in paths
     assert "src/Bar.java" in paths
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_incremental_pr_files_parse_compare_diff(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {
+        "diffs": [
+            {
+                "source": {"toString": "src/Foo.java"},
+                "destination": {"toString": "src/Foo.java"},
+                "hunks": [
+                    {
+                        "sourceLine": 1,
+                        "sourceSpan": 1,
+                        "destinationLine": 1,
+                        "destinationSpan": 2,
+                        "segments": [{"type": "ADDED", "lines": [{"line": "// added"}]}],
+                    }
+                ],
+            }
+        ]
+    }
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    files = p.get_incremental_pr_files("PROJ", "my-repo", 42, "base123", "head456")
+
+    assert len(files) == 1
+    assert files[0].path == "src/Foo.java"
 
 
 # ---------------------------------------------------------------------------

@@ -227,6 +227,11 @@ class GitLabProvider(ProviderInterface):
         """Return unified diff by concatenating MR diffs."""
         path = self._path(owner, repo, "merge_requests", str(pr_number), "diffs")
         data = self._get(path)
+        return self._unified_diff_from_diff_entries(data)
+
+    @staticmethod
+    def _unified_diff_from_diff_entries(data: Any) -> str:
+        """Build unified diff text from GitLab diff-entry payloads."""
         if not isinstance(data, list):
             return ""
         parts: list[str] = []
@@ -238,6 +243,23 @@ class GitLabProvider(ProviderInterface):
                 parts.append(f"diff --git a/{old_path} b/{new_path}")
                 parts.append(diff)
         return "\n".join(parts)
+
+    def get_incremental_pr_diff(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> str:
+        """Return unified diff for the incremental compare range ``base_sha..head_sha``."""
+        if not base_sha or not head_sha or base_sha == head_sha:
+            return self.get_pr_diff(owner, repo, pr_number)
+        path = self._path(owner, repo, "repository", "compare")
+        data = self._get(f"{path}?from={quote(base_sha, safe='')}&to={quote(head_sha, safe='')}")
+        if not isinstance(data, dict):
+            return ""
+        return self._unified_diff_from_diff_entries(data.get("diffs"))
 
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
         """Return file content at ref (raw endpoint)."""
@@ -277,6 +299,10 @@ class GitLabProvider(ProviderInterface):
         """Return list of changed files from MR diffs."""
         path = self._path(owner, repo, "merge_requests", str(pr_number), "diffs")
         data = self._get(path)
+        return self._file_infos_from_diff_entries(data)
+
+    def _file_infos_from_diff_entries(self, data: Any) -> list[FileInfo]:
+        """Return FileInfo objects from GitLab MR/compare diff entries."""
         if not isinstance(data, list):
             return []
         result: list[FileInfo] = []
@@ -297,6 +323,23 @@ class GitLabProvider(ProviderInterface):
                 FileInfo(path=new_path, status=status, additions=additions, deletions=deletions)
             )
         return result
+
+    def get_incremental_pr_files(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> list[FileInfo]:
+        """Return files changed in the incremental compare range ``base_sha..head_sha``."""
+        if not base_sha or not head_sha or base_sha == head_sha:
+            return self.get_pr_files(owner, repo, pr_number)
+        path = self._path(owner, repo, "repository", "compare")
+        data = self._get(f"{path}?from={quote(base_sha, safe='')}&to={quote(head_sha, safe='')}")
+        if not isinstance(data, dict):
+            return []
+        return self._file_infos_from_diff_entries(data.get("diffs"))
 
     def _get_mr_diff_refs(self, owner: str, repo: str, pr_number: int) -> dict | None:
         """Fetch MR to get diff_refs (base_sha, head_sha, start_sha) for positioning comments."""

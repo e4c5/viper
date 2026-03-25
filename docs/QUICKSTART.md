@@ -130,6 +130,10 @@ In **Build Triggers**:
 - `SCM_HEAD_SHA` → `$.pull_request.head.sha`
 - `PR_ACTION` → `$.action`
 
+Optional for incremental reviews on PR update events:
+
+- `SCM_BASE_SHA` → map the webhook field that contains the previous PR head when your SCM exposes it. If omitted, Viper reviews the full PR diff.
+
 1. For each variable, set:
    `Variable` = the name above
    `Expression` = the matching JSONPath above

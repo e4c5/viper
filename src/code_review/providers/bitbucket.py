@@ -107,6 +107,21 @@ class BitbucketProvider(ProviderInterface):
         out = self._get(path)
         return out if isinstance(out, str) else ""
 
+    def get_incremental_pr_diff(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> str:
+        """Return unified diff for the incremental compare range ``base_sha..head_sha``."""
+        if not base_sha or not head_sha or base_sha == head_sha:
+            return self.get_pr_diff(owner, repo, pr_number)
+        spec = f"{base_sha}..{head_sha}"
+        out = self._get(self._path(owner, repo, "diff", spec))
+        return out if isinstance(out, str) else ""
+
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
         """Return file content at ref (Bitbucket src endpoint)."""
         url = self._path(owner, repo, "src", ref, path)
@@ -117,6 +132,24 @@ class BitbucketProvider(ProviderInterface):
     def get_pr_files(self, owner: str, repo: str, pr_number: int) -> list[FileInfo]:
         """Return list of changed files from PR diffstat (paginated)."""
         url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "diffstat")
+        return self._get_diffstat_files(url)
+
+    def get_incremental_pr_files(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> list[FileInfo]:
+        """Return files changed in the incremental compare range ``base_sha..head_sha``."""
+        if not base_sha or not head_sha or base_sha == head_sha:
+            return self.get_pr_files(owner, repo, pr_number)
+        spec = f"{base_sha}..{head_sha}"
+        return self._get_diffstat_files(self._path(owner, repo, "diffstat", spec))
+
+    def _get_diffstat_files(self, url: str | None) -> list[FileInfo]:
+        """Return FileInfo objects from a Bitbucket Cloud diffstat URL."""
         result: list[FileInfo] = []
         visited: set[str] = set()
         while url:

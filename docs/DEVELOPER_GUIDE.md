@@ -240,7 +240,7 @@ For a **single consolidated table** of every environment variable (including con
 | `SCM_REPO` | No | Repo name (can be passed via CLI `--repo`) |
 | `SCM_PR_NUM` | No | PR number (can be passed via CLI `--pr`) |
 | `SCM_HEAD_SHA` | No | Head commit SHA (can be passed via CLI `--head-sha`); required when posting comments |
-| `SCM_BASE_SHA` | No | Base commit SHA |
+| `SCM_BASE_SHA` | No | Optional review base SHA. When paired with `SCM_HEAD_SHA`, the runner reviews only the incremental `base..head` diff; otherwise it reviews the full PR diff. |
 | `SCM_SKIP_LABEL` | No | If PR has this label, skip review (default `skip-review`; empty = disabled) |
 | `SCM_SKIP_TITLE_PATTERN` | No | If PR title contains this, skip review (default `[skip-review]`) |
 

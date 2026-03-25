@@ -51,7 +51,7 @@ Loaded via `SCMConfig` (`env_prefix="SCM_"`). Field names map to env vars in **U
 | `SCM_REPO` | `""` | Repository name or slug. |
 | `SCM_PR_NUM` | — | PR/MR number (integer). |
 | `SCM_HEAD_SHA` | `""` | Head commit SHA (needed to post comments). |
-| `SCM_BASE_SHA` | `""` | Base commit SHA. |
+| `SCM_BASE_SHA` | `""` | Optional review base SHA. When set with `SCM_HEAD_SHA`, Viper reviews only the incremental `SCM_BASE_SHA..SCM_HEAD_SHA` changes; if unset, it reviews the full PR diff. |
 | `SCM_EVENT` | `""` | Webhook event (e.g. `opened`). |
 | `SCM_SKIP_LABEL` | `skip-review` | If PR has this label, skip review (empty disables). |
 | `SCM_SKIP_TITLE_PATTERN` | `[skip-review]` | If title contains this substring, skip review (empty disables). |

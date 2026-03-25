@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from code_review.providers.base import FileInfo
+from code_review.providers.base import FileInfo, ProviderCapabilities
 from tests.conftest import runner_run_async_returning
 
 
@@ -345,3 +345,104 @@ def test_file_by_file_mode_creates_agent_with_tools(
         "file-by-file mode must pass disable_tools=False so the agent can call "
         "get_pr_diff_for_file to fetch each file's diff"
     )
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_llm_config")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_incremental_large_review_uses_embedded_file_diffs(
+    mock_scm, mock_get_provider, mock_llm, mock_context_window
+):
+    """Large incremental reviews must stay scoped to the incremental diff, not the full PR diff."""
+    from code_review.runner import run_review
+
+    mock_scm.return_value = MagicMock(
+        provider="gitea",
+        url="https://x.com",
+        token="x",
+        skip_label="",
+        skip_title_pattern="",
+        base_sha="base123",
+    )
+    mock_llm.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
+    provider = MagicMock()
+    provider.get_incremental_pr_files.return_value = [
+        FileInfo(path="a.py", status="modified"),
+        FileInfo(path="b.py", status="modified"),
+    ]
+    provider.get_incremental_pr_diff.return_value = (
+        "diff --git a/a.py b/a.py\n"
+        "--- a/a.py\n+++ b/a.py\n"
+        "@@ -1,1 +1,2 @@\n"
+        " old_a\n"
+        "+new_a\n"
+        " context_a\n"
+        "diff --git a/b.py b/b.py\n"
+        "--- a/b.py\n+++ b/b.py\n"
+        "@@ -5,1 +5,2 @@\n"
+        " old_b\n"
+        "+new_b\n"
+        " context_b\n"
+    )
+    provider.get_pr_files.return_value = [FileInfo(path="legacy.py", status="modified")]
+    provider.get_pr_diff.return_value = "FULL PR DIFF SHOULD NOT BE USED"
+    provider.get_existing_review_comments.return_value = []
+    provider.post_review_comments = MagicMock()
+    provider.post_pr_summary_comment = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        resolvable_comments=False,
+        supports_suggestions=False,
+    )
+    mock_get_provider.return_value = provider
+    mock_context_window.return_value = 100  # budget 25 chars => force file-by-file
+
+    agents_created = []
+    messages_sent = []
+
+    def capture_create_review_agent(
+        provider,
+        standards="",
+        findings_only=True,
+        *,
+        disable_tools=False,
+        context_brief_attached=False,
+    ):
+        agents_created.append({"disable_tools": disable_tools})
+        mock_agent = MagicMock()
+        mock_agent.name = "code_review_agent"
+        mock_agent.instruction = "..."
+        mock_agent.tools = []
+        return mock_agent
+
+    def capture_run(*, new_message, **kwargs):
+        messages_sent.append(new_message.parts[0].text if new_message.parts else "")
+        mock_event = MagicMock()
+        mock_event.is_final_response.return_value = True
+        mock_event.content = MagicMock()
+        mock_event.content.parts = [MagicMock(text="[]")]
+        return runner_run_async_returning([mock_event])()
+
+    mock_runner_instance = MagicMock()
+    mock_runner_instance.run_async = capture_run
+
+    with (
+        patch("code_review.runner.create_review_agent", side_effect=capture_create_review_agent),
+        patch("google.adk.runners.Runner", return_value=mock_runner_instance),
+    ):
+        run_review("o", "r", 1, head_sha="head456", dry_run=True)
+
+    provider.get_incremental_pr_files.assert_called_once_with("o", "r", 1, "base123", "head456")
+    provider.get_incremental_pr_diff.assert_called_once_with("o", "r", 1, "base123", "head456")
+    provider.get_pr_files.assert_not_called()
+    provider.get_pr_diff.assert_not_called()
+    assert len(agents_created) == 1
+    assert agents_created[0]["disable_tools"] is True, (
+        "large incremental reviews must disable tools so each file prompt embeds the "
+        "already-scoped diff instead of fetching the full PR file diff"
+    )
+    assert len(messages_sent) == 2
+    assert all("Here is the unified diff for this file:" in msg for msg in messages_sent)
+    assert all("get_pr_diff_for_file" not in msg for msg in messages_sent)
+    assert any("<L2>+new_a" in msg for msg in messages_sent)
+    assert any("<L6>+new_b" in msg for msg in messages_sent)
