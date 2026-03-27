@@ -1,54 +1,35 @@
 // Single-SCM: set SCM_PROVIDER and SCM_URL in Manage Jenkins → Global properties → Environment variables.
-// Multi-SCM / Bitbucket folder: set SCM_PROVIDER, SCM_URL, optional LLM_* on the folder via Folder Properties
-//   (plugin). options { withFolderProperties() } exposes them as env (see docs/JENKINS-MULTIPLE-SCMS.md).
-//   Do not use job parameter defaults for SCM/LLM—Jenkins reapplies Jenkinsfile defaults when the script loads.
-//   Generic Webhook Trigger: do not map SCM_URL (or similar) from JSONPath if the value can be empty.
-//   Do not declare pipeline parameters named LLM_PROVIDER / LLM_MODEL / SCM_PROVIDER / SCM_URL — Jenkins
-//   injects parameters into env and would overwrite folder/global env; use *_OVERRIDE parameters instead.
+// Multi-SCM: use one job per SCM; same Script Path (this file). Set SCM_PROVIDER and SCM_URL on the
+//   folder that contains the job (folder → Configure → Environment variables). Do not use job
+//   parameter defaults—they get overwritten when the script is loaded from SCM.
 // Credentials: ID "SCM_TOKEN" always; ID "LLM_API_KEY" required for non-ollama providers.
-// Optional review decisions (global/folder/job env): SCM_REVIEW_DECISION_ENABLED, SCM_REVIEW_DECISION_HIGH_THRESHOLD,
-// SCM_REVIEW_DECISION_MEDIUM_THRESHOLD, SCM_BITBUCKET_SERVER_USER_SLUG (Bitbucket Server/DC only for submit).
-// Optional: CODE_REVIEW_LOG_LEVEL on the agent (e.g. DEBUG); default INFO if unset.
-// Comment / thread webhooks → review-decision-only (no LLM): no extra config needed.
-//   The pipeline auto-detects comment/thread events from PR_ACTION and routes them to
-//   `code-review --review-decision-only`. PR lifecycle events (opened, synchronize, pr:opened, etc.)
-//   run a full review. See docs/JENKINS-REVIEW-DECISION-ONLY.md §1.4 for the full derivation table.
-//   Set SCM_REVIEW_DECISION_ENABLED on the job so the gate decision is submitted.
-//   Optional: map payload fields into CODE_REVIEW_EVENT_* for reply-dismissal context
-//   (see docs/CONFIGURATION-REFERENCE.md).
-//   Optional: CODE_REVIEW_REPLY_DISMISSAL_ENABLED=true on supported providers for reply events
-//   (see docs/CONFIGURATION-REFERENCE.md for provider coverage).
 //
 // Self-contained; no load. Pipeline script from SCM (Script Path: docker/jenkins/Jenkinsfile) or paste inline.
 
 pipeline {
     agent any
 
-    options {
-        withFolderProperties()
-    }
-
     parameters {
         string(name: 'SCM_OWNER', description: 'Repo owner / project key')
         string(name: 'SCM_REPO', description: 'Repo name / slug')
         string(name: 'SCM_PR_NUM', description: 'PR number / id')
         string(name: 'SCM_HEAD_SHA', description: 'Head commit SHA')
-        string(name: 'SCM_BASE_SHA', description: 'Optional review base SHA for incremental PR updates')
         string(name: 'PR_ACTION', description: 'Webhook action or eventKey')
-        string(name: 'SCM_PROVIDER_OVERRIDE', defaultValue: '', description: 'Optional: overrides env SCM_PROVIDER (set provider via folder/global env; do not use a param named SCM_PROVIDER — it shadows env)')
-        string(name: 'SCM_URL_OVERRIDE', defaultValue: '', description: 'Optional: overrides env SCM_URL')
-        string(name: 'LLM_PROVIDER_OVERRIDE', defaultValue: '', description: 'Optional: overrides env LLM_PROVIDER (folder/global env; LLM_API_KEY credential unchanged)')
+        string(name: 'SCM_PROVIDER', defaultValue: '', description: 'SCM provider (optional; for multi-SCM set per-job default here)')
+        string(name: 'SCM_URL', defaultValue: '', description: 'SCM API URL (optional; for multi-SCM set per-job default here)')
+        string(name: 'LLM_PROVIDER', defaultValue: 'gemini', description: 'LLM provider')
+        string(name: 'LLM_MODEL', defaultValue: 'gemini-2.5-flash', description: 'LLM model')
         string(name: 'COMPOSE_PROJECT_NAME', defaultValue: 'code-review', description: 'Docker Compose project name')
-        string(name: 'IMAGE_NAME', defaultValue: 'code-review-agent', description: 'Container image name (e.g. user/name:tag). Defaults to the local code-review-agent tag used throughout the docs; set a pinned remote image explicitly if you prefer.')
+        string(name: 'IMAGE_NAME', defaultValue: 'e4c5/code-review-agent:1.0.0', description: 'Container image name (e.g. user/name:tag); must match published image when using container agent. Pinning to a specific version (e.g. :1.2.3) is recommended over :latest.')
     }
 
     stages {
         stage('Code Review') {
             steps {
                 script {
-                    // Optional one-off overrides (params must not reuse env names — Jenkins would shadow folder env)
-                    if (params.SCM_PROVIDER_OVERRIDE?.trim()) env.SCM_PROVIDER = params.SCM_PROVIDER_OVERRIDE.trim()
-                    if (params.SCM_URL_OVERRIDE?.trim()) env.SCM_URL = params.SCM_URL_OVERRIDE.trim()
+                    // Per-job SCM (multi-SCM): if this job has parameter defaults set, use them
+                    if (params.SCM_PROVIDER?.trim()) env.SCM_PROVIDER = params.SCM_PROVIDER.trim()
+                    if (params.SCM_URL?.trim()) env.SCM_URL = params.SCM_URL.trim()
 
                     def image = env.IMAGE_NAME?.trim() ?: params.IMAGE_NAME?.trim() ?: 'code-review-agent'
                     def projectName = env.COMPOSE_PROJECT_NAME ?: params.COMPOSE_PROJECT_NAME
@@ -57,18 +38,10 @@ pipeline {
                     def scmRepo = params.SCM_REPO ?: env.SCM_REPO
                     def scmPrNum = params.SCM_PR_NUM ?: env.SCM_PR_NUM
                     def scmHeadSha = params.SCM_HEAD_SHA ?: env.SCM_HEAD_SHA
-                    def scmBaseSha = params.SCM_BASE_SHA ?: env.SCM_BASE_SHA
                     def prAction = params.PR_ACTION ?: env.PR_ACTION
-                    def llmProvider = params.LLM_PROVIDER_OVERRIDE?.trim() ?: env.LLM_PROVIDER?.trim() ?: 'gemini'
-                    def llmModel = env.LLM_MODEL?.trim() ?: 'gemini-2.5-flash'
-                    echo "Resolved LLM_PROVIDER=${llmProvider} LLM_MODEL=${llmModel} (override params or folder/global env LLM_*)"
+                    def llmProvider = params.LLM_PROVIDER ?: env.LLM_PROVIDER
+                    def llmModel = params.LLM_MODEL ?: env.LLM_MODEL
                     def containerRuntime = env.CONTAINER_RUNTIME ?: 'docker'
-                    // Optional Bitbucket Server/DC: username slug of SCM_TOKEN user (review decisions); from global/folder/job env
-                    def bbServerUserSlug = env.SCM_BITBUCKET_SERVER_USER_SLUG?.trim() ?: ''
-                    // Optional review decision gate (omit env vars in Jenkins to keep app defaults)
-                    def reviewDecisionEnabled = env.SCM_REVIEW_DECISION_ENABLED?.trim() ?: ''
-                    def reviewDecisionHigh = env.SCM_REVIEW_DECISION_HIGH_THRESHOLD?.trim() ?: ''
-                    def reviewDecisionMedium = env.SCM_REVIEW_DECISION_MEDIUM_THRESHOLD?.trim() ?: ''
 
                     def scmProvider = env.SCM_PROVIDER ?: 'gitea'
                     // Bitbucket Data Center sends eventKey like pr:opened; infer provider if not set
@@ -77,47 +50,18 @@ pipeline {
                     def scmUrl = isBitbucket
                         ? (env.SCM_URL ?: env.SCM_URL_BITBUCKET ?: '')
                         : (env.SCM_URL ?: 'http://gitea:3000')
-                    // Full-review allowed actions per provider. Comment/thread events are auto-detected below.
+                    // Bitbucket Data Center uses pr:* for all PR eventKeys; allow any pr:* when Bitbucket
                     def allowedActions = isBitbucket
-                        ? ['pr:opened', 'pr:modified', 'pr:from_ref_updated']
-                        : (scmProvider == 'gitlab'
-                            ? ['open', 'reopen', 'update']
-                            : ['opened', 'reopened', 'synchronize', 'synchronized'])
+                        ? []  // any pr:* allowed; checked below with startsWith('pr:')
+                        : ['opened', 'reopened', 'synchronize', 'synchronized']
                     def credId = 'SCM_TOKEN'
                     def unresolvedMarker = isBitbucket ? '$.pullRequest' : '$.pull_request'
 
-                    // Derive CODE_REVIEW_EVENT_KIND from PR_ACTION to classify this event.
-                    // Explicit GWT mappings (CODE_REVIEW_EVENT_KIND in env) always take precedence.
-                    def effectiveEventKind = env.CODE_REVIEW_EVENT_KIND?.trim() ?: ''
-                    if (!effectiveEventKind && prAction) {
-                        def pa = prAction.toLowerCase()
-                        if (pa.endsWith(':deleted') || pa == 'deleted') {
-                            effectiveEventKind = 'comment_deleted'
-                        } else if (pa.endsWith(':resolved') || pa == 'resolved') {
-                            effectiveEventKind = 'thread_resolved'
-                        } else if (pa.endsWith(':outdated') || pa == 'outdated') {
-                            effectiveEventKind = 'thread_outdated'
-                        } else if (pa in ['pr:comment:added', 'created', 'create',
-                                          'issue_comment', 'pull_request_review_comment']) {
-                            effectiveEventKind = 'reply_added'
-                        } else if (pa.contains('comment') || pa.contains('note')) {
-                            effectiveEventKind = 'other'  // unclassified comment/note activity
-                        }
-                        // PR lifecycle events leave effectiveEventKind empty → full review
-                    }
-
-                    // Non-empty event kind = comment/thread event → decision-only.
-                    // Empty event kind = PR lifecycle event → full review (checked against allowedActions).
-                    def runDecisionOnly = effectiveEventKind as boolean
-                    if (runDecisionOnly) {
-                        echo "Comment/thread event detected: CODE_REVIEW_EVENT_KIND=${effectiveEventKind} → --review-decision-only"
-                    }
-
-                    if (prAction && !runDecisionOnly) {
-                        def allowed = allowedActions.contains(prAction)
+                    if (prAction) {
+                        def allowed = isBitbucket ? prAction.startsWith('pr:') : allowedActions.contains(prAction)
                         if (!allowed) {
                             currentBuild.description = "Skipped PR action: ${prAction}"
-                            echo "Skipping PR action '${prAction}'. Allowed full-review actions: ${allowedActions.join(', ')}."
+                            echo "Skipping PR action '${prAction}'. Allowed: ${isBitbucket ? 'any pr:* (Bitbucket)' : allowedActions.join(', ')}."
                             return
                         }
                     }
@@ -135,16 +79,11 @@ pipeline {
                     if (!scmPrNum || scmPrNum.contains(unresolvedMarker)) {
                         error('SCM_PR_NUM not resolved. Check Generic Webhook Trigger JSONPath.')
                     }
-                    if (!runDecisionOnly) {
-                        if (!scmHeadSha || scmHeadSha.contains(unresolvedMarker)) {
-                            error('SCM_HEAD_SHA not resolved. Check Generic Webhook Trigger JSONPath.')
-                        }
-                    } else if (!scmHeadSha || scmHeadSha.contains(unresolvedMarker)) {
-                        scmHeadSha = ''
+                    if (!scmHeadSha || scmHeadSha.contains(unresolvedMarker)) {
+                        error('SCM_HEAD_SHA not resolved. Check Generic Webhook Trigger JSONPath.')
                     }
 
                     def useInlineAgent = env.USE_INLINE_AGENT == 'true' || env.USE_INLINE_AGENT == '1'
-                    def codeReviewLogLevel = env.CODE_REVIEW_LOG_LEVEL?.trim() ?: 'INFO'
                     def bindings = [string(credentialsId: credId, variable: 'SCM_TOKEN')]
                     if (llmProvider != 'ollama') {
                         bindings << string(credentialsId: 'LLM_API_KEY', variable: 'LLM_API_KEY')
@@ -159,43 +98,20 @@ pipeline {
                             "REVIEW_SCM_REPO=${scmRepo}",
                             "REVIEW_SCM_PR_NUM=${scmPrNum}",
                             "REVIEW_SCM_HEAD_SHA=${scmHeadSha}",
-                            "REVIEW_SCM_BASE_SHA=${scmBaseSha}",
                             "REVIEW_SCM_PROVIDER=${scmProvider}",
                             "REVIEW_SCM_URL=${scmUrl}",
-                            "REVIEW_SCM_BITBUCKET_SERVER_USER_SLUG=${bbServerUserSlug}",
-                            "REVIEW_SCM_REVIEW_DECISION_ENABLED=${reviewDecisionEnabled}",
-                            "REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD=${reviewDecisionHigh}",
-                            "REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD=${reviewDecisionMedium}",
                             "REVIEW_LLM_PROVIDER=${llmProvider}",
                             "REVIEW_LLM_MODEL=${llmModel}",
-                            "REVIEW_CODE_REVIEW_LOG_LEVEL=${codeReviewLogLevel}",
                             "USE_INLINE_AGENT=${useInlineAgent}",
-                            "REVIEW_RUN_DECISION_ONLY=${runDecisionOnly ? '1' : '0'}",
                         ]) {
                             sh '''
                                 set -eu
                                 set -o pipefail 2>/dev/null || true
-                                RD_EXTRA=""
-                                if [ "${REVIEW_RUN_DECISION_ONLY:-0}" = "1" ]; then
-                                    RD_EXTRA=" --review-decision-only"
-                                fi
                                 if [ "$USE_INLINE_AGENT" = "true" ] || [ "$USE_INLINE_AGENT" = "1" ]; then
                                     export SCM_PROVIDER="$REVIEW_SCM_PROVIDER" SCM_URL="$REVIEW_SCM_URL" SCM_TOKEN="$SCM_TOKEN"
-                                    export SCM_BITBUCKET_SERVER_USER_SLUG="${REVIEW_SCM_BITBUCKET_SERVER_USER_SLUG:-}"
-                                    export SCM_BASE_SHA="${REVIEW_SCM_BASE_SHA:-}"
-                                    [ -n "${REVIEW_SCM_REVIEW_DECISION_ENABLED:-}" ] && export SCM_REVIEW_DECISION_ENABLED="$REVIEW_SCM_REVIEW_DECISION_ENABLED"
-                                    [ -n "${REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD:-}" ] && export SCM_REVIEW_DECISION_HIGH_THRESHOLD="$REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD"
-                                    [ -n "${REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD:-}" ] && export SCM_REVIEW_DECISION_MEDIUM_THRESHOLD="$REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"
                                     export LLM_PROVIDER="$REVIEW_LLM_PROVIDER" LLM_MODEL="$REVIEW_LLM_MODEL" LLM_API_KEY="${LLM_API_KEY:-}"
-                                    export CODE_REVIEW_LOG_LEVEL="$REVIEW_CODE_REVIEW_LOG_LEVEL"
-                                    [ -n "${CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING:-}" ] && export CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING="$CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING"
-                                    [ -n "${CODE_REVIEW_REPLY_DISMISSAL_ENABLED:-}" ] && export CODE_REVIEW_REPLY_DISMISSAL_ENABLED="$CODE_REVIEW_REPLY_DISMISSAL_ENABLED"
-                                    export CODE_REVIEW_EVENT_COMMENT_ID="${CODE_REVIEW_EVENT_COMMENT_ID:-}"
-                                    export CODE_REVIEW_EVENT_THREAD_ID="${CODE_REVIEW_EVENT_THREAD_ID:-}"
-                                    export CODE_REVIEW_EVENT_ACTOR_LOGIN="${CODE_REVIEW_EVENT_ACTOR_LOGIN:-}"
-                                    export CODE_REVIEW_EVENT_ACTOR_ID="${CODE_REVIEW_EVENT_ACTOR_ID:-}"
-                                    export CODE_REVIEW_EVENT_SOURCE="${CODE_REVIEW_EVENT_SOURCE:-}"
-                                    code-review --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA"$RD_EXTRA --print-findings
+                                    export CODE_REVIEW_LOG_LEVEL=INFO
+                                    code-review --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA" --print-findings
                                 else
                                     runtime="$CONTAINER_RUNTIME"
                                     if [ -z "$runtime" ] || ! command -v "$runtime" >/dev/null 2>&1; then
@@ -203,36 +119,20 @@ pipeline {
                                         elif command -v podman >/dev/null 2>&1; then runtime=podman
                                         else echo "ERROR: No container runtime. Set CONTAINER_RUNTIME or USE_INLINE_AGENT=true (docs/QUICKSTART.md)."; exit 1; fi
                                     fi
-                                    RD_ENV=""
-                                    [ -n "${REVIEW_SCM_REVIEW_DECISION_ENABLED:-}" ] && RD_ENV="$RD_ENV -e SCM_REVIEW_DECISION_ENABLED=$REVIEW_SCM_REVIEW_DECISION_ENABLED"
-                                    [ -n "${REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD:-}" ] && RD_ENV="$RD_ENV -e SCM_REVIEW_DECISION_HIGH_THRESHOLD=$REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD"
-                                    [ -n "${REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD:-}" ] && RD_ENV="$RD_ENV -e SCM_REVIEW_DECISION_MEDIUM_THRESHOLD=$REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"
-                                    APP_ENV=""
-                                    [ -n "${CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING:-}" ] && APP_ENV="$APP_ENV -e CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING=$CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING"
-                                    [ -n "${CODE_REVIEW_REPLY_DISMISSAL_ENABLED:-}" ] && APP_ENV="$APP_ENV -e CODE_REVIEW_REPLY_DISMISSAL_ENABLED=$CODE_REVIEW_REPLY_DISMISSAL_ENABLED"
                                     "$runtime" run --rm --network "$REVIEW_NETWORK" \
                                         -e SCM_PROVIDER="$REVIEW_SCM_PROVIDER" \
                                         -e SCM_URL="$REVIEW_SCM_URL" \
                                         -e SCM_TOKEN="$SCM_TOKEN" \
-                                        -e SCM_BITBUCKET_SERVER_USER_SLUG="${REVIEW_SCM_BITBUCKET_SERVER_USER_SLUG:-}" \
                                         -e SCM_OWNER="$REVIEW_SCM_OWNER" \
                                         -e SCM_REPO="$REVIEW_SCM_REPO" \
                                         -e SCM_PR_NUM="$REVIEW_SCM_PR_NUM" \
                                         -e SCM_HEAD_SHA="$REVIEW_SCM_HEAD_SHA" \
-                                        -e SCM_BASE_SHA="${REVIEW_SCM_BASE_SHA:-}" \
                                         -e LLM_PROVIDER="$REVIEW_LLM_PROVIDER" \
                                         -e LLM_MODEL="$REVIEW_LLM_MODEL" \
                                         -e LLM_API_KEY="${LLM_API_KEY:-}" \
                                         -e PYTHONUNBUFFERED=1 \
-                                        -e CODE_REVIEW_LOG_LEVEL="$REVIEW_CODE_REVIEW_LOG_LEVEL" \
-                                        -e CODE_REVIEW_EVENT_COMMENT_ID="${CODE_REVIEW_EVENT_COMMENT_ID:-}" \
-                                        -e CODE_REVIEW_EVENT_THREAD_ID="${CODE_REVIEW_EVENT_THREAD_ID:-}" \
-                                        -e CODE_REVIEW_EVENT_ACTOR_LOGIN="${CODE_REVIEW_EVENT_ACTOR_LOGIN:-}" \
-                                        -e CODE_REVIEW_EVENT_ACTOR_ID="${CODE_REVIEW_EVENT_ACTOR_ID:-}" \
-                                        -e CODE_REVIEW_EVENT_SOURCE="${CODE_REVIEW_EVENT_SOURCE:-}" \
-                                        $APP_ENV \
-                                        $RD_ENV \
-                                        "$REVIEW_IMAGE" --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA"$RD_EXTRA --print-findings \
+                                        -e CODE_REVIEW_LOG_LEVEL=INFO \
+                                        "$REVIEW_IMAGE" --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA" --print-findings \
                                     || { echo "HINT: Podman issues? Set USE_INLINE_AGENT=true (docs/QUICKSTART.md)."; exit 1; }
                                 fi
                             '''

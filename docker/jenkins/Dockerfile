@@ -27,7 +27,7 @@ RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
 # Seed admin user and optional credentials on first boot.
 COPY docker/jenkins/init.groovy.d/ /usr/share/jenkins/ref/init.groovy.d/
 
-# Entrypoint fixes JENKINS_HOME ownership for rootless Podman, then runs Jenkins as jenkins user.
+# Entrypoint launches Jenkins under tini as the non-root jenkins user.
 COPY docker/jenkins/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 USER jenkins

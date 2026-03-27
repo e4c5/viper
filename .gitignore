@@ -35,4 +35,4 @@ ruff_cache/
 .vscode/
 *.swp
 *.swo
-scripts/jenkins_sync_inline_pipeline.py
+#scripts/jenkins_sync_inline_pipeline.py
