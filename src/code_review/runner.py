@@ -1328,6 +1328,14 @@ def _log_review_decision_event_if_present(ctx: ReviewDecisionEventContext | None
     )
 
 
+def _reply_dismissal_response_log_snippet(text: str, limit: int = 1000) -> str:
+    """Return a bounded single-string snippet for reply-dismissal logs."""
+    snippet = (text or "").strip()
+    if len(snippet) > limit:
+        snippet = snippet[:limit] + "…"
+    return snippet or "(empty)"
+
+
 def _head_sha_hint_for_decision_only(
     cli_head_sha: str,
 ) -> str:
@@ -2663,6 +2671,7 @@ class ReviewOrchestrator:
         verdict: ReplyDismissalVerdictV1,
     ) -> None:
         if not caps_rd.supports_review_thread_reply:
+            logger.info("Reply-dismissal disagreed: provider does not support thread replies")
             return
         if dry_run:
             truncated = (verdict.reply_text or "")[:500]
@@ -2675,21 +2684,64 @@ class ReviewOrchestrator:
             provider.post_review_thread_reply(
                 owner, repo, pr_number, comment_id, verdict.reply_text
             )
+            logger.info("Reply-dismissal disagreed: posted follow-up reply to comment_id=%s", comment_id)
         except Exception as e:
             logger.warning("post_review_thread_reply failed: %s", e)
+
+    def _decision_only_maybe_resolve_agreed_thread(
+        self,
+        provider,
+        caps_rd,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        dry_run: bool,
+        comment_id: str,
+        dctx: ReviewThreadDismissalContext,
+    ) -> None:
+        if not caps_rd.supports_review_thread_resolution:
+            logger.info(
+                "Reply-dismissal agreed: provider does not support resolving the review thread; "
+                "keeping exclusion local to this run"
+            )
+            return
+        if dry_run:
+            logger.info(
+                "Dry-run: would resolve review thread stable_id=%s thread_id=%s",
+                dctx.gate_exclusion_stable_id,
+                (dctx.thread_id or "").strip(),
+            )
+            return
+        try:
+            provider.resolve_review_thread(owner, repo, pr_number, dctx, comment_id)
+            logger.info(
+                "Reply-dismissal agreed: resolved review thread stable_id=%s thread_id=%s",
+                dctx.gate_exclusion_stable_id,
+                (dctx.thread_id or "").strip(),
+            )
+        except Exception as e:
+            logger.warning("resolve_review_thread failed: %s", e)
 
     def _reply_dismissal_comment_id_or_none(self, app_cfg) -> str | None:
         """Return event comment id when reply-dismissal should run, else ``None``."""
         ctx = self._event_context
+        comment_id = ((ctx.comment_id or "").strip() if ctx else "")
+        if not app_cfg.reply_dismissal_enabled:
+            if comment_id:
+                logger.info(
+                    "Reply-dismissal disabled: CODE_REVIEW_REPLY_DISMISSAL_ENABLED is false; "
+                    "skipping LLM for comment_id=%s",
+                    comment_id,
+                )
+            return None
         if app_cfg.reply_dismissal_enabled and ctx is not None and (ctx.comment_id or "").strip():
             return ctx.comment_id.strip()
-        if app_cfg.reply_dismissal_enabled and logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "Reply-dismissal not run: requires CODE_REVIEW_EVENT_COMMENT_ID; "
-                "got comment_id=%r ctx_present=%s",
-                ((ctx.comment_id or "").strip() if ctx else "") or "",
-                ctx is not None,
-            )
+        logger.info(
+            "Reply-dismissal enabled but not run: requires CODE_REVIEW_EVENT_COMMENT_ID; "
+            "got comment_id=%r ctx_present=%s",
+            comment_id or "",
+            ctx is not None,
+        )
         return None
 
     def _reply_dismissal_precheck(
@@ -2703,7 +2755,12 @@ class ReviewOrchestrator:
         """Return bot identity and dismissal context when reply-dismissal can proceed."""
         ctx = self._event_context
         if ctx is None:
+            logger.info("Reply-dismissal skipped: no event context present")
             return None
+        logger.info(
+            "Reply-dismissal candidate: loading thread context for comment_id=%s",
+            comment_id,
+        )
         bot_id = provider.get_bot_attribution_identity(owner, repo, pr_number)
         if _reply_added_event_authored_by_bot(ctx, bot_id):
             observability.record_reply_dismissal_outcome("skipped_bot_author")
@@ -2717,11 +2774,27 @@ class ReviewOrchestrator:
         caps_rd = provider.capabilities()
         if not caps_rd.supports_review_thread_dismissal_context:
             observability.record_reply_dismissal_outcome("skipped_no_capability")
+            logger.info(
+                "Reply-dismissal skipped: provider does not support review-thread context"
+            )
             return None
         dctx = provider.get_review_thread_dismissal_context(owner, repo, pr_number, comment_id)
         if dctx is None or len(dctx.entries) < 2:
             observability.record_reply_dismissal_outcome("skipped_insufficient_thread")
+            logger.info(
+                "Reply-dismissal skipped: insufficient thread context for comment_id=%s "
+                "(entries=%s)",
+                comment_id,
+                len(dctx.entries) if dctx is not None else 0,
+            )
             return None
+        logger.info(
+            "Reply-dismissal thread loaded: comment_id=%s entries=%d stable_id=%s thread_id=%s",
+            comment_id,
+            len(dctx.entries),
+            dctx.gate_exclusion_stable_id,
+            (dctx.thread_id or "").strip(),
+        )
         return bot_id, dctx
 
     @staticmethod
@@ -2761,12 +2834,27 @@ class ReviewOrchestrator:
         bot_id, dctx = precheck
 
         user_msg = _format_reply_dismissal_user_message(dctx, bot_id)
+        logger.info(
+            "Reply-dismissal sending thread to LLM: comment_id=%s entries=%d stable_id=%s",
+            comment_id,
+            len(dctx.entries),
+            dctx.gate_exclusion_stable_id,
+        )
         try:
             raw_verdict = _run_reply_dismissal_llm(user_msg)
         except Exception as e:
             logger.warning("Reply-dismissal LLM run failed: %s", e)
             observability.record_reply_dismissal_outcome("llm_error")
             return frozenset()
+        logger.info(
+            "Reply-dismissal LLM completed: response_chars=%d",
+            len((raw_verdict or "").strip()),
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Reply-dismissal raw LLM response: %s",
+                _reply_dismissal_response_log_snippet(raw_verdict, limit=4000),
+            )
 
         verdict = self._reply_dismissal_parse_verdict(raw_verdict)
         if verdict is None:
@@ -2783,6 +2871,16 @@ class ReviewOrchestrator:
 
         if verdict.verdict == "agreed":
             observability.record_reply_dismissal_outcome("agreed")
+            self._decision_only_maybe_resolve_agreed_thread(
+                provider,
+                provider.capabilities(),
+                owner,
+                repo,
+                pr_number,
+                dry_run,
+                comment_id,
+                dctx,
+            )
             logger.info(
                 "Reply-dismissal agreed; excluding gate stable_id=%s",
                 dctx.gate_exclusion_stable_id,

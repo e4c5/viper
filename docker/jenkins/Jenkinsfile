@@ -93,10 +93,12 @@ pipeline {
                     def unresolvedMarker = isBitbucket ? '$.pullRequest' : '$.pull_request'
 
                     if (prAction) {
-                        def allowed = isBitbucket ? prAction.startsWith('pr:') : allowedActions.contains(prAction)
+                        def allowed = isBitbucket
+                            ? prAction.startsWith('pr:')
+                            : (allowedActions.contains(prAction) || reviewDecisionOnly)
                         if (!allowed) {
                             currentBuild.description = "Skipped PR action: ${prAction}"
-                            echo "Skipping PR action '${prAction}'. Allowed: ${isBitbucket ? 'any pr:* (Bitbucket)' : allowedActions.join(', ')}."
+                            echo "Skipping PR action '${prAction}'. Allowed: ${isBitbucket ? 'any pr:* (Bitbucket)' : allowedActions.join(', ') + ', or comment/thread events routed to review-decision-only'}."
                             return
                         }
                     }
@@ -162,6 +164,13 @@ pipeline {
                                     [ -n "${REVIEW_SCM_REVIEW_DECISION_ENABLED:-}" ] && export SCM_REVIEW_DECISION_ENABLED="$REVIEW_SCM_REVIEW_DECISION_ENABLED"
                                     [ -n "${REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD:-}" ] && export SCM_REVIEW_DECISION_HIGH_THRESHOLD="$REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD"
                                     [ -n "${REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD:-}" ] && export SCM_REVIEW_DECISION_MEDIUM_THRESHOLD="$REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"
+                                    [ -n "${CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING:-}" ] && export CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING="$CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING"
+                                    [ -n "${CODE_REVIEW_REPLY_DISMISSAL_ENABLED:-}" ] && export CODE_REVIEW_REPLY_DISMISSAL_ENABLED="$CODE_REVIEW_REPLY_DISMISSAL_ENABLED"
+                                    export CODE_REVIEW_EVENT_COMMENT_ID="${CODE_REVIEW_EVENT_COMMENT_ID:-}"
+                                    export CODE_REVIEW_EVENT_THREAD_ID="${CODE_REVIEW_EVENT_THREAD_ID:-}"
+                                    export CODE_REVIEW_EVENT_ACTOR_LOGIN="${CODE_REVIEW_EVENT_ACTOR_LOGIN:-}"
+                                    export CODE_REVIEW_EVENT_ACTOR_ID="${CODE_REVIEW_EVENT_ACTOR_ID:-}"
+                                    export CODE_REVIEW_EVENT_SOURCE="${CODE_REVIEW_EVENT_SOURCE:-}"
                                     export LLM_PROVIDER="$REVIEW_LLM_PROVIDER" LLM_MODEL="$REVIEW_LLM_MODEL" LLM_API_KEY="${LLM_API_KEY:-}"
                                     export CODE_REVIEW_LOG_LEVEL="$REVIEW_CODE_REVIEW_LOG_LEVEL"
                                     code-review --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "${REVIEW_SCM_HEAD_SHA:-}" --print-findings $review_args
@@ -176,6 +185,8 @@ pipeline {
                                     [ -n "${REVIEW_SCM_REVIEW_DECISION_ENABLED:-}" ] && RD_ENV="$RD_ENV -e SCM_REVIEW_DECISION_ENABLED=$REVIEW_SCM_REVIEW_DECISION_ENABLED"
                                     [ -n "${REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD:-}" ] && RD_ENV="$RD_ENV -e SCM_REVIEW_DECISION_HIGH_THRESHOLD=$REVIEW_SCM_REVIEW_DECISION_HIGH_THRESHOLD"
                                     [ -n "${REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD:-}" ] && RD_ENV="$RD_ENV -e SCM_REVIEW_DECISION_MEDIUM_THRESHOLD=$REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"
+                                    [ -n "${CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING:-}" ] && RD_ENV="$RD_ENV -e CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING=$CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING"
+                                    [ -n "${CODE_REVIEW_REPLY_DISMISSAL_ENABLED:-}" ] && RD_ENV="$RD_ENV -e CODE_REVIEW_REPLY_DISMISSAL_ENABLED=$CODE_REVIEW_REPLY_DISMISSAL_ENABLED"
                                     "$runtime" run --rm --network "$REVIEW_NETWORK" \
                                         -e SCM_PROVIDER="$REVIEW_SCM_PROVIDER" \
                                         -e SCM_URL="$REVIEW_SCM_URL" \
@@ -191,8 +202,6 @@ pipeline {
                                         -e LLM_API_KEY="${LLM_API_KEY:-}" \
                                         -e PYTHONUNBUFFERED=1 \
                                         -e CODE_REVIEW_LOG_LEVEL="$REVIEW_CODE_REVIEW_LOG_LEVEL" \
-                                        -e CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING="${CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING:-}" \
-                                        -e CODE_REVIEW_REPLY_DISMISSAL_ENABLED="${CODE_REVIEW_REPLY_DISMISSAL_ENABLED:-}" \
                                         -e CODE_REVIEW_EVENT_COMMENT_ID="${CODE_REVIEW_EVENT_COMMENT_ID:-}" \
                                         -e CODE_REVIEW_EVENT_THREAD_ID="${CODE_REVIEW_EVENT_THREAD_ID:-}" \
                                         -e CODE_REVIEW_EVENT_ACTOR_LOGIN="${CODE_REVIEW_EVENT_ACTOR_LOGIN:-}" \

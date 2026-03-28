@@ -470,6 +470,7 @@ def test_get_review_thread_dismissal_context_finds_thread(mock_gql):
     ctx = p.get_review_thread_dismissal_context("o", "r", 1, "200")
     assert ctx is not None
     assert ctx.gate_exclusion_stable_id == "github:thread:PRRT_kwDOABC"
+    assert ctx.thread_id == "PRRT_kwDOABC"
     assert len(ctx.entries) == 2
 
 
@@ -528,6 +529,7 @@ def test_get_review_thread_dismissal_context_fetches_extra_comment_pages(mock_gq
     p = GitHubProvider("https://api.github.com", "tok")
     ctx = p.get_review_thread_dismissal_context("o", "r", 1, "9999")
     assert ctx is not None
+    assert ctx.thread_id == "PRRT_kwLONG"
     assert len(ctx.entries) == 51
     assert ctx.entries[-1].comment_id == "9999"
 
@@ -552,4 +554,26 @@ def test_post_review_thread_reply_github(mock_post):
     mock_post.assert_called_once_with(
         "/repos/o/r/pulls/1/comments",
         {"body": "hello", "in_reply_to": 99},
+    )
+
+
+@patch.object(GitHubProvider, "_graphql")
+def test_resolve_review_thread_github(mock_gql):
+    from code_review.schemas.review_thread_dismissal import ReviewThreadDismissalContext
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    p.resolve_review_thread(
+        "o",
+        "r",
+        1,
+        ReviewThreadDismissalContext(
+            gate_exclusion_stable_id="github:thread:PRRT_kwDOABC",
+            thread_id="PRRT_kwDOABC",
+            entries=[],
+        ),
+        "200",
+    )
+    mock_gql.assert_called_once_with(
+        GitHubProvider._RESOLVE_REVIEW_THREAD_GQL,
+        {"threadId": "PRRT_kwDOABC"},
     )

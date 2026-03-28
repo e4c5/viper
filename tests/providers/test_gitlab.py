@@ -15,6 +15,61 @@ def test_get_provider_gitlab():
     assert isinstance(p, GitLabProvider)
 
 
+def test_get_review_thread_dismissal_context_gitlab():
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p._get_mr_discussions_paginated = MagicMock(
+        return_value=[
+            {
+                "id": "disc-123",
+                "notes": [
+                    {
+                        "id": 10,
+                        "body": "[High] x",
+                        "created_at": "t1",
+                        "author": {"username": "bot"},
+                    },
+                    {
+                        "id": 11,
+                        "body": "fixed",
+                        "created_at": "t2",
+                        "author": {"username": "dev"},
+                    },
+                ],
+            }
+        ]
+    )
+
+    ctx = p.get_review_thread_dismissal_context("owner", "repo", 1, "11")
+
+    assert ctx is not None
+    assert ctx.gate_exclusion_stable_id == "gitlab:discussion:disc-123"
+    assert ctx.thread_id == "disc-123"
+    assert [e.comment_id for e in ctx.entries] == ["10", "11"]
+
+
+@patch.object(GitLabProvider, "_put")
+def test_resolve_review_thread_gitlab(mock_put):
+    from code_review.schemas.review_thread_dismissal import ReviewThreadDismissalContext
+
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p.resolve_review_thread(
+        "owner",
+        "repo",
+        7,
+        ReviewThreadDismissalContext(
+            gate_exclusion_stable_id="gitlab:discussion:disc-123",
+            thread_id="disc-123",
+            entries=[],
+        ),
+        "11",
+    )
+
+    mock_put.assert_called_once_with(
+        "https://gitlab.example.com/api/v4/projects/owner%2Frepo/merge_requests/7/discussions/disc-123",
+        {"resolved": True},
+    )
+
+
 @patch("code_review.providers.http_shortcuts.httpx.Client")
 def test_get_pr_diff(mock_client):
     mock_resp = MagicMock()

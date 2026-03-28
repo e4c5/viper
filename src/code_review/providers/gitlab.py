@@ -125,6 +125,7 @@ def _gitlab_dismissal_context_for_discussion(
     stable = f"gitlab:discussion:{did}" if did else f"gitlab:discussion:{pr_number}"
     return ReviewThreadDismissalContext(
         gate_exclusion_stable_id=stable,
+        thread_id=did,
         entries=entries,
     )
 
@@ -527,6 +528,23 @@ class GitLabProvider(ProviderInterface):
         """
         pass
 
+    def resolve_review_thread(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        thread_context: ReviewThreadDismissalContext,
+        triggered_comment_id: str,
+    ) -> None:
+        discussion_id = (thread_context.thread_id or "").strip()
+        if not discussion_id:
+            ctx = self.get_review_thread_dismissal_context(owner, repo, pr_number, triggered_comment_id)
+            discussion_id = (ctx.thread_id or "").strip() if ctx is not None else ""
+        if not discussion_id:
+            raise ValueError("GitLab discussion id is required to resolve the thread")
+        path = self._path(owner, repo, "merge_requests", str(pr_number), "discussions", discussion_id)
+        self._put(path, {"resolved": True})
+
     def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
         """Post MR-level note (no position)."""
         self._post(
@@ -758,4 +776,5 @@ class GitLabProvider(ProviderInterface):
             supports_bot_attribution_identity_query=True,
             supports_review_thread_dismissal_context=True,
             supports_review_thread_reply=True,
+            supports_review_thread_resolution=True,
         )

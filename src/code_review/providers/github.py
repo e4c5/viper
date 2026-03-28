@@ -177,6 +177,17 @@ class GitHubProvider(ProviderInterface):
     }
     """
 
+    _RESOLVE_REVIEW_THREAD_GQL = """
+    mutation($threadId: ID!) {
+      resolveReviewThread(input: {threadId: $threadId}) {
+        thread {
+          id
+          isResolved
+        }
+      }
+    }
+    """
+
     _THREAD_COMMENTS_PAGE_GQL = """
     query($threadId: ID!, $commentCursor: String) {
       node(id: $threadId) {
@@ -672,6 +683,7 @@ class GitHubProvider(ProviderInterface):
             return None
         return ReviewThreadDismissalContext(
             gate_exclusion_stable_id=f"github:thread:{thread_graphql_id}",
+            thread_id=thread_graphql_id,
             entries=entries,
         )
 
@@ -763,6 +775,22 @@ class GitHubProvider(ProviderInterface):
             {"body": body, "in_reply_to": rid},
         )
 
+    def resolve_review_thread(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        thread_context: ReviewThreadDismissalContext,
+        triggered_comment_id: str,
+    ) -> None:
+        thread_id = (thread_context.thread_id or "").strip()
+        if not thread_id:
+            ctx = self.get_review_thread_dismissal_context(owner, repo, pr_number, triggered_comment_id)
+            thread_id = (ctx.thread_id or "").strip() if ctx is not None else ""
+        if not thread_id:
+            raise ValueError("GitHub review thread id is required to resolve the thread")
+        self._graphql(self._RESOLVE_REVIEW_THREAD_GQL, {"threadId": thread_id})
+
     def submit_review_decision(
         self,
         owner: str,
@@ -820,4 +848,5 @@ class GitHubProvider(ProviderInterface):
             supports_bot_attribution_identity_query=True,
             supports_review_thread_dismissal_context=True,
             supports_review_thread_reply=True,
+            supports_review_thread_resolution=True,
         )

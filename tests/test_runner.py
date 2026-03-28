@@ -862,6 +862,7 @@ def test_run_review_decision_only_reply_dismissal_agreed_excludes_thread(
         supports_bot_attribution_identity_query=True,
         supports_review_thread_dismissal_context=True,
         supports_review_thread_reply=True,
+        supports_review_thread_resolution=True,
     )
     provider = _provider_with_review_decisions(capabilities=caps)
     provider.get_pr_info = MagicMock(return_value=PRInfo(head_sha="sha"))
@@ -881,6 +882,7 @@ def test_run_review_decision_only_reply_dismissal_agreed_excludes_thread(
     provider.get_review_thread_dismissal_context = MagicMock(
         return_value=ReviewThreadDismissalContext(
             gate_exclusion_stable_id="github:thread:PRRT_1",
+            thread_id="PRRT_1",
             entries=[
                 ReviewThreadDismissalEntry(
                     comment_id="10", author_login="viper-bot", body="[High] fix it"
@@ -892,6 +894,7 @@ def test_run_review_decision_only_reply_dismissal_agreed_excludes_thread(
     provider.get_bot_attribution_identity = MagicMock(
         return_value=BotAttributionIdentity(login="viper-bot")
     )
+    provider.resolve_review_thread = MagicMock()
     _wire_standard_runner_mocks(
         mock_get_scm_config,
         mock_get_provider,
@@ -914,6 +917,7 @@ def test_run_review_decision_only_reply_dismissal_agreed_excludes_thread(
     )
 
     mock_llm.assert_called_once()
+    provider.resolve_review_thread.assert_called_once()
     provider.submit_review_decision.assert_called_once()
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 

@@ -23,4 +23,8 @@ class ReviewThreadDismissalContext(BaseModel):
         ...,
         description="Matches UnresolvedReviewItem.stable_id when agreed verdict excludes thread",
     )
+    thread_id: str = Field(
+        default="",
+        description="Provider thread/discussion id when the SCM supports resolving the thread",
+    )
     entries: list[ReviewThreadDismissalEntry] = Field(default_factory=list)

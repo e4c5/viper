@@ -108,6 +108,7 @@ class ProviderCapabilities(BaseModel):
     - supports_review_thread_dismissal_context: provider can load ordered thread comments
       for reply-dismissal classification (Phase E.1).
     - supports_review_thread_reply: provider can post a reply on an existing review comment.
+    - supports_review_thread_resolution: provider can mark a review thread/discussion resolved.
     """
 
     resolvable_comments: bool = False
@@ -122,6 +123,7 @@ class ProviderCapabilities(BaseModel):
     supports_bot_attribution_identity_query: bool = False
     supports_review_thread_dismissal_context: bool = False
     supports_review_thread_reply: bool = False
+    supports_review_thread_resolution: bool = False
 
 
 ReviewDecision = Literal["APPROVE", "REQUEST_CHANGES"]
@@ -639,6 +641,17 @@ class ProviderInterface(ABC):
     ) -> None:
         """Post a reply on an existing PR review comment (e.g. disagreed dismissal text)."""
         raise NotImplementedError("post_review_thread_reply not implemented for this provider")
+
+    def resolve_review_thread(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        thread_context: ReviewThreadDismissalContext,
+        triggered_comment_id: str,
+    ) -> None:  # noqa: B027
+        """Resolve a review thread/discussion after an agreed dismissal verdict."""
+        pass
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """
