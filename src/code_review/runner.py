@@ -3251,7 +3251,29 @@ class ReviewOrchestrator:
         paths = self._build_ignore_set_and_filter_files(paths)
         self._log_review_scope_fetch(incremental_base_sha, head_sha, paths)
         if not paths:
-            logger.info("No files to review, skipping")
+            logger.info("No files to review")
+            if bool(getattr(cfg, "review_decision_enabled", False)):
+                logger.info(
+                    "Recomputing PR review decision from unresolved SCM state despite empty review scope"
+                )
+                gate_outcome = _compute_quality_gate_review_outcome(
+                    provider,
+                    owner,
+                    repo,
+                    pr_number,
+                    [],
+                    cfg,
+                )
+                _maybe_submit_review_decision(
+                    provider,
+                    owner,
+                    repo,
+                    pr_number,
+                    head_sha,
+                    dry_run,
+                    cfg,
+                    gate_outcome=gate_outcome,
+                )
             return self._record_observability_and_build_result(
                 trace_id,
                 owner,

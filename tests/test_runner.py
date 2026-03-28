@@ -643,6 +643,37 @@ def test_run_review_request_changes_from_pre_existing_unresolved_high_comment(
 @patch("code_review.runner.get_context_window")
 @patch("code_review.runner.get_provider")
 @patch("code_review.runner.get_scm_config")
+def test_run_review_empty_incremental_scope_still_recomputes_review_decision(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    """Empty incremental diffs must still refresh the PR-level quality gate."""
+    from code_review.runner import run_review
+
+    provider = _provider_with_review_decisions()
+    provider.get_incremental_pr_files = MagicMock(return_value=[])
+    provider.get_incremental_pr_diff = MagicMock(return_value="")
+    provider.get_unresolved_review_items_for_quality_gate = MagicMock(return_value=[])
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(base_sha="base123"),
+        provider=provider,
+    )
+
+    posted = run_review("o", "r", 1, head_sha="head456", dry_run=False)
+
+    assert posted == []
+    provider.get_incremental_pr_files.assert_called_once_with("o", "r", 1, "base123", "head456")
+    provider.get_incremental_pr_diff.assert_called_once_with("o", "r", 1, "base123", "head456")
+    provider.post_review_comments.assert_not_called()
+    provider.submit_review_decision.assert_called_once()
+    assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
+
+
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
 def test_run_review_decision_only_skips_agent_and_inline(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
