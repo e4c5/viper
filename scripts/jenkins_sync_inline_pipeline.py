@@ -2,7 +2,9 @@
 """Sync or bootstrap inline Jenkins Pipeline jobs from docker/jenkins/Jenkinsfile.
 
 By default this script updates existing inline Pipeline jobs' ``config.xml`` so the
-embedded Jenkinsfile stays in sync with ``docker/jenkins/Jenkinsfile``.
+embedded Jenkinsfile stays in sync with ``docker/jenkins/Jenkinsfile``. When syncing
+the documented default Bitbucket jobs, it also enforces the matching Generic Webhook
+Trigger mappings and parameter defaults.
 
 It can also bootstrap the default Bitbucket two-job setup used by the docs:
 
@@ -180,6 +182,7 @@ BITBUCKET_PR_PARAMS = {
     "SCM_REPO": "$.pullRequest.toRef.repository.slug",
     "SCM_PR_NUM": "$.pullRequest.id",
     "SCM_HEAD_SHA": "$.pullRequest.fromRef.latestCommit",
+    "SCM_BASE_SHA": "$.previousFromHash",
     "PR_ACTION": "$.eventKey",
 }
 
@@ -959,6 +962,30 @@ def sync_jobs(
         print("Approved inline Jenkinsfile in Script Security.")
 
 
+def select_default_job_settings(
+    jobs: list[str],
+    trigger_specs_by_job: dict[str, WebhookTriggerSpec],
+    parameter_defaults_by_job: dict[str, dict[str, str]],
+) -> tuple[dict[str, WebhookTriggerSpec], dict[str, dict[str, str]]]:
+    """Return trigger/default mappings only for the selected jobs.
+
+    This keeps custom ad-hoc job syncs script-only, while ensuring the documented
+    default Bitbucket jobs always receive their webhook/parameter configuration.
+    """
+    selected_jobs = {job.strip("/") for job in jobs}
+    selected_trigger_specs = {
+        job_path: spec
+        for job_path, spec in trigger_specs_by_job.items()
+        if job_path in selected_jobs
+    }
+    selected_parameter_defaults = {
+        job_path: dict(defaults)
+        for job_path, defaults in parameter_defaults_by_job.items()
+        if job_path in selected_jobs
+    }
+    return selected_trigger_specs, selected_parameter_defaults
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -1050,14 +1077,20 @@ def main() -> int:
             print("Default Bitbucket folder/jobs already existed; enforcing webhook config via config.xml sync.")
 
     jobs = [job.strip("/") for job in (args.jobs or default_jobs)]
+    selected_trigger_specs, selected_parameter_defaults = select_default_job_settings(
+        jobs,
+        trigger_specs,
+        parameter_defaults_by_job,
+    )
+
     sync_jobs(
         base_url,
         user,
         password,
         jobs,
         script_body,
-        trigger_specs_by_job=trigger_specs if args.ensure_default_bitbucket_setup else None,
-        parameter_defaults_by_job=parameter_defaults_by_job if args.ensure_default_bitbucket_setup else None,
+        trigger_specs_by_job=selected_trigger_specs or None,
+        parameter_defaults_by_job=selected_parameter_defaults or None,
     )
     return 0
 

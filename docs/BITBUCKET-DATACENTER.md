@@ -78,7 +78,10 @@ In the job → **Configure** → **Build Triggers** → **Generic Webhook Trigge
 | `SCM_REPO` | `$.pullRequest.toRef.repository.slug` |
 | `SCM_PR_NUM` | `$.pullRequest.id` |
 | `SCM_HEAD_SHA` | `$.pullRequest.fromRef.latestCommit` |
+| `SCM_BASE_SHA` | `$.previousFromHash` |
 | `PR_ACTION` | `$.eventKey` |
+
+`SCM_BASE_SHA` is especially useful for `pr:from_ref_updated` events, including commits created by Bitbucket's pull-request "Apply suggestion" action. When Jenkins forwards both `SCM_BASE_SHA` and `SCM_HEAD_SHA`, Viper reviews only the new commit range instead of re-reviewing the full pull request.
 
 **Optional filter** (so only PR events trigger a build):
 

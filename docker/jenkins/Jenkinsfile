@@ -14,6 +14,7 @@ pipeline {
         string(name: 'SCM_REPO', description: 'Repo name / slug')
         string(name: 'SCM_PR_NUM', description: 'PR number / id')
         string(name: 'SCM_HEAD_SHA', description: 'Head commit SHA')
+        string(name: 'SCM_BASE_SHA', description: 'Optional review base SHA for incremental PR updates')
         string(name: 'PR_ACTION', description: 'Webhook action or eventKey')
         string(name: 'SCM_PROVIDER', defaultValue: '', description: 'SCM provider (optional; for multi-SCM set per-job default here)')
         string(name: 'SCM_URL', defaultValue: '', description: 'SCM API URL (optional; for multi-SCM set per-job default here)')
@@ -38,6 +39,7 @@ pipeline {
                     def scmRepo = params.SCM_REPO ?: env.SCM_REPO
                     def scmPrNum = params.SCM_PR_NUM ?: env.SCM_PR_NUM
                     def scmHeadSha = params.SCM_HEAD_SHA ?: env.SCM_HEAD_SHA
+                    def scmBaseSha = params.SCM_BASE_SHA ?: env.SCM_BASE_SHA
                     def prAction = params.PR_ACTION ?: env.PR_ACTION
                     def llmProvider = params.LLM_PROVIDER ?: env.LLM_PROVIDER
                     def llmModel = params.LLM_MODEL ?: env.LLM_MODEL
@@ -98,6 +100,7 @@ pipeline {
                             "REVIEW_SCM_REPO=${scmRepo}",
                             "REVIEW_SCM_PR_NUM=${scmPrNum}",
                             "REVIEW_SCM_HEAD_SHA=${scmHeadSha}",
+                            "REVIEW_SCM_BASE_SHA=${scmBaseSha}",
                             "REVIEW_SCM_PROVIDER=${scmProvider}",
                             "REVIEW_SCM_URL=${scmUrl}",
                             "REVIEW_LLM_PROVIDER=${llmProvider}",
@@ -109,6 +112,7 @@ pipeline {
                                 set -o pipefail 2>/dev/null || true
                                 if [ "$USE_INLINE_AGENT" = "true" ] || [ "$USE_INLINE_AGENT" = "1" ]; then
                                     export SCM_PROVIDER="$REVIEW_SCM_PROVIDER" SCM_URL="$REVIEW_SCM_URL" SCM_TOKEN="$SCM_TOKEN"
+                                    export SCM_BASE_SHA="$REVIEW_SCM_BASE_SHA"
                                     export LLM_PROVIDER="$REVIEW_LLM_PROVIDER" LLM_MODEL="$REVIEW_LLM_MODEL" LLM_API_KEY="${LLM_API_KEY:-}"
                                     export CODE_REVIEW_LOG_LEVEL=INFO
                                     code-review --owner "$REVIEW_SCM_OWNER" --repo "$REVIEW_SCM_REPO" --pr "$REVIEW_SCM_PR_NUM" --head-sha "$REVIEW_SCM_HEAD_SHA" --print-findings
@@ -127,6 +131,7 @@ pipeline {
                                         -e SCM_REPO="$REVIEW_SCM_REPO" \
                                         -e SCM_PR_NUM="$REVIEW_SCM_PR_NUM" \
                                         -e SCM_HEAD_SHA="$REVIEW_SCM_HEAD_SHA" \
+                                        -e SCM_BASE_SHA="$REVIEW_SCM_BASE_SHA" \
                                         -e LLM_PROVIDER="$REVIEW_LLM_PROVIDER" \
                                         -e LLM_MODEL="$REVIEW_LLM_MODEL" \
                                         -e LLM_API_KEY="${LLM_API_KEY:-}" \

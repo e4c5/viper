@@ -124,7 +124,7 @@ Optional. When any of these is non-empty, the runner builds a `ReviewDecisionEve
 The bundled Jenkinsfile automatically routes events based on `PR_ACTION`:
 
 - **Comment/thread events** (`PR_ACTION` values like `pr:comment:added`, `issue_comment`, `pull_request_review_comment`, etc.) are routed to `code-review --review-decision-only`. `SCM_HEAD_SHA` may be omitted (resolved via SCM API).
-- **PR lifecycle events** (`opened`, `synchronize`, `pr:opened`, `pr:from_ref_updated`, etc.) run a full review.
+- **PR lifecycle events** (`opened`, `synchronize`, `pr:opened`, `pr:from_ref_updated`, etc.) run the main review flow. When `SCM_BASE_SHA` is also provided, that flow is scoped to the incremental `base..head` range instead of the full PR diff.
 
 Set `SCM_REVIEW_DECISION_ENABLED=true` on the job so the quality-gate decision is submitted for both paths.
 
