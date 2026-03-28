@@ -113,6 +113,8 @@ Loaded via `LLMConfig` (`env_prefix="LLM_"`).
 
 Optional. When any of these is non-empty, the runner builds a `ReviewDecisionEventContext` (see `src/code_review/schemas/review_decision_event.py`) for **review-decision-only** runs: structured logging and bot-reply guard. Map from your webhook payload in CI (Generic Webhook Trigger, GitHub Actions `env`, etc.).
 
+When `CODE_REVIEW_EVENT_ACTOR_LOGIN` or `CODE_REVIEW_EVENT_ACTOR_ID` identifies the same SCM user as the review token, review-decision-only runs short-circuit before recomputing the quality gate. This prevents Viper's own comment or reply activity from triggering a second bot pass.
+
 | Variable | Description |
 |----------|-------------|
 | `CODE_REVIEW_EVENT_COMMENT_ID` | Comment id as string. |
@@ -125,6 +127,7 @@ The bundled Jenkinsfile automatically routes events based on `PR_ACTION`:
 
 - **Comment/thread events** (`PR_ACTION` values like `pr:comment:added`, `issue_comment`, `pull_request_review_comment`, etc.) are routed to `code-review --review-decision-only`. `SCM_HEAD_SHA` may be omitted (resolved via SCM API).
 - **PR lifecycle events** (`opened`, `synchronize`, `pr:opened`, `pr:from_ref_updated`, etc.) run the main review flow. When `SCM_BASE_SHA` is also provided, that flow is scoped to the incremental `base..head` range instead of the full PR diff.
+- Optional Jenkins-only bot guard: set `CODE_REVIEW_BOT_USER_LOGIN` and/or `CODE_REVIEW_BOT_USER_ID` on the job or folder to skip bot-authored comment/thread webhook builds before Jenkins starts the agent. For Bitbucket Server / DC, `SCM_BITBUCKET_SERVER_USER_SLUG` is used as the login fallback automatically.
 
 Set `SCM_REVIEW_DECISION_ENABLED=true` on the job so the quality-gate decision is submitted for both paths.
 

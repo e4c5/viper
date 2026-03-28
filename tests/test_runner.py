@@ -1004,7 +1004,7 @@ def test_run_review_decision_only_reply_dismissal_disagreed_posts_reply(
 @patch("code_review.runner.get_context_window")
 @patch("code_review.runner.get_provider")
 @patch("code_review.runner.get_scm_config")
-def test_run_review_decision_only_reply_dismissal_skipped_when_actor_is_bot(
+def test_run_review_decision_only_skips_entire_run_when_actor_is_bot(
     mock_get_scm_config,
     mock_get_provider,
     mock_get_context_window,
@@ -1012,7 +1012,7 @@ def test_run_review_decision_only_reply_dismissal_skipped_when_actor_is_bot(
     mock_app_cfg,
     mock_record_rd,
 ):
-    """Bot-authored reply_added must not run reply-dismissal LLM or thread fetch."""
+    """Bot-authored comment events must short-circuit review-decision-only runs."""
     from code_review.runner import run_review
     from code_review.schemas.review_decision_event import ReviewDecisionEventContext
 
@@ -1072,7 +1072,9 @@ def test_run_review_decision_only_reply_dismissal_skipped_when_actor_is_bot(
     )
 
     mock_llm.assert_not_called()
+    provider.get_unresolved_review_items_for_quality_gate.assert_not_called()
     provider.get_review_thread_dismissal_context.assert_not_called()
+    provider.submit_review_decision.assert_not_called()
     mock_record_rd.assert_any_call("skipped_bot_author")
 
 

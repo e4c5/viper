@@ -561,6 +561,31 @@ class BitbucketServerProvider(ProviderInterface):
         return comments, next_start
 
     @staticmethod
+    def _bbs_merge_nested_comment_dicts_into(
+        by_id: dict[str, dict],
+        comment: Any,
+        *,
+        parent_id: str | None = None,
+    ) -> None:
+        if not isinstance(comment, dict):
+            return
+        cid = str(comment.get("id") or "").strip()
+        synthesized_parent = parent_id.strip() if isinstance(parent_id, str) else ""
+        current = dict(by_id.get(cid) or {}) if cid else {}
+        current.update(comment)
+        if synthesized_parent and not BitbucketServerProvider._bbs_comment_parent_id(current):
+            current["parentComment"] = {"id": synthesized_parent}
+        if cid:
+            by_id[cid] = current
+        child_parent_id = cid or synthesized_parent or None
+        for child in comment.get("comments") or []:
+            BitbucketServerProvider._bbs_merge_nested_comment_dicts_into(
+                by_id,
+                child,
+                parent_id=child_parent_id,
+            )
+
+    @staticmethod
     def _bbs_merge_commented_activities_into(by_id: dict[str, dict], data: dict) -> None:
         for act in data.get("values") or []:
             if not isinstance(act, dict) or act.get("action") != "COMMENTED":
@@ -568,10 +593,7 @@ class BitbucketServerProvider(ProviderInterface):
             c = act.get("comment")
             if not isinstance(c, dict):
                 continue
-            cid = str(c.get("id") or "").strip()
-            if not cid:
-                continue
-            by_id[cid] = c
+            BitbucketServerProvider._bbs_merge_nested_comment_dicts_into(by_id, c)
 
     @staticmethod
     def _bbs_activities_next_start(data: dict, start: int) -> int | None:

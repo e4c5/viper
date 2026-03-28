@@ -2582,6 +2582,53 @@ class ReviewOrchestrator:
             to_post=[],
         )
 
+    def _decision_only_try_skip_when_event_actor_is_bot(
+        self,
+        provider,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        trace_id: str,
+        start_time: float,
+        run_handle,
+    ) -> list[FindingV1] | None:
+        """Skip review-decision-only runs triggered by the bot's own comment activity."""
+        ctx = self._event_context
+        if ctx is None:
+            return None
+        actor_login = (ctx.actor_login or "").strip()
+        actor_id = (ctx.actor_id or "").strip()
+        if not actor_login and not actor_id:
+            return None
+        caps = provider.capabilities()
+        if not caps.supports_bot_attribution_identity_query:
+            return None
+        bot_id = provider.get_bot_attribution_identity(owner, repo, pr_number)
+        if not _reply_added_event_authored_by_bot(ctx, bot_id):
+            return None
+        if (ctx.comment_id or "").strip():
+            observability.record_reply_dismissal_outcome("skipped_bot_author")
+        logger.info(
+            "Review-decision-only: skipping bot-authored webhook event "
+            "(actor_login=%r actor_id=%r comment_id=%r source=%r)",
+            actor_login,
+            actor_id,
+            (ctx.comment_id or "").strip(),
+            (ctx.source or "").strip(),
+        )
+        return self._record_observability_and_build_result(
+            trace_id,
+            owner,
+            repo,
+            pr_number,
+            start_time,
+            run_handle,
+            paths=[],
+            all_findings=[],
+            successful_post_count=0,
+            to_post=[],
+        )
+
     def _validate_context_sources_or_raise(
         self,
         ctx_cfg,
@@ -2935,6 +2982,18 @@ class ReviewOrchestrator:
         )
         if skip_result is not None:
             return skip_result
+
+        skip_bot_event = self._decision_only_try_skip_when_event_actor_is_bot(
+            provider,
+            owner,
+            repo,
+            pr_number,
+            trace_id,
+            start_time,
+            run_handle,
+        )
+        if skip_bot_event is not None:
+            return skip_bot_event
 
         skip_early = self._decision_only_try_skip_when_bot_not_blocking(
             provider,

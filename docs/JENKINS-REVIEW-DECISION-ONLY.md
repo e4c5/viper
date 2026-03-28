@@ -46,8 +46,11 @@ Optional:
 
 - `CODE_REVIEW_REPLY_DISMISSAL_ENABLED=false` if you want to disable reply-dismissal on `reply_added`
 - `CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING=true` to skip reply-driven runs when the bot is not currently blocking
+- `CODE_REVIEW_BOT_USER_LOGIN` and/or `CODE_REVIEW_BOT_USER_ID` if you want Jenkins itself to skip webhook builds caused by Viper's own comments before the agent starts
 - `SCM_REVIEW_DECISION_HIGH_THRESHOLD` and `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD` as needed
 - `SCM_BITBUCKET_SERVER_USER_SLUG` for Bitbucket Server / DC
+
+For Bitbucket Server / DC, the bundled Jenkinsfile already uses `SCM_BITBUCKET_SERVER_USER_SLUG` as the fallback bot login for that skip check, so `CODE_REVIEW_BOT_USER_LOGIN` is mainly needed for other SCMs or when you prefer matching by a different login.
 
 See the [Configuration reference](CONFIGURATION-REFERENCE.md) for definitions and provider-specific notes.
 
@@ -101,6 +104,8 @@ Add these Generic Webhook Trigger **Post content parameters** to the comment-eve
 
 See [Configuration reference](CONFIGURATION-REFERENCE.md#51-review-decision-webhook-context-code_review_event_) for the variable definitions.
 
+When Jenkins also knows the bot identity (`CODE_REVIEW_BOT_USER_LOGIN`, `CODE_REVIEW_BOT_USER_ID`, or `SCM_BITBUCKET_SERVER_USER_SLUG` on Bitbucket Server / DC), the bundled Jenkinsfile skips those bot-authored comment/thread events before it launches the agent. The runner still keeps its own SCM-backed bot guard as a fallback.
+
 ### 1.5 Point comment webhooks to the second job
 
 Keep the existing full-review webhook pointed at the original job. Point comment or thread events at the copied job.
@@ -117,6 +122,8 @@ Trigger a comment or reply event on a test PR and confirm:
 - the comment-events job runs
 - the logs show `--review-decision-only`
 - the job recomputes the quality gate without posting normal inline findings
+
+Trigger a bot-authored follow-up comment (for example a Viper reply-dismissal reply) and confirm the build is skipped early with a message about a bot-authored comment or thread event.
 
 If you need a non-posting check first, run `code-review --review-decision-only --dry-run` manually outside Jenkins with the same environment.
 

@@ -8,6 +8,8 @@
 // Credentials: ID "SCM_TOKEN" always; ID "LLM_API_KEY" required for non-ollama providers.
 // Optional review decisions (global/folder/job env): SCM_REVIEW_DECISION_ENABLED, SCM_REVIEW_DECISION_HIGH_THRESHOLD,
 // SCM_REVIEW_DECISION_MEDIUM_THRESHOLD, SCM_BITBUCKET_SERVER_USER_SLUG (Bitbucket Server/DC only for submit).
+// Optional Jenkins-side bot-event skip for comment jobs: CODE_REVIEW_BOT_USER_LOGIN and/or CODE_REVIEW_BOT_USER_ID.
+// Bitbucket Server/DC falls back to SCM_BITBUCKET_SERVER_USER_SLUG when CODE_REVIEW_BOT_USER_LOGIN is unset.
 // Optional: CODE_REVIEW_LOG_LEVEL on the agent (e.g. DEBUG); default INFO if unset.
 // Comment/thread webhooks are auto-routed to `code-review --review-decision-only` based on PR_ACTION
 // (or CODE_REVIEW_EVENT_COMMENT_ID when provided by the webhook mapping). PR lifecycle events keep
@@ -55,6 +57,8 @@ pipeline {
                     def scmBaseSha = params.SCM_BASE_SHA ?: env.SCM_BASE_SHA ?: ''
                     def prAction = params.PR_ACTION ?: env.PR_ACTION
                     def eventCommentId = env.CODE_REVIEW_EVENT_COMMENT_ID?.trim() ?: ''
+                    def eventActorLogin = env.CODE_REVIEW_EVENT_ACTOR_LOGIN?.trim() ?: ''
+                    def eventActorId = env.CODE_REVIEW_EVENT_ACTOR_ID?.trim() ?: ''
                     def llmProvider = params.LLM_PROVIDER_OVERRIDE?.trim() ?: env.LLM_PROVIDER?.trim() ?: 'gemini'
                     def llmModel = env.LLM_MODEL?.trim() ?: 'gemini-2.5-flash'
                     echo "Resolved LLM_PROVIDER=${llmProvider} LLM_MODEL=${llmModel} (override params or folder/global env LLM_*)"
@@ -89,6 +93,12 @@ pipeline {
                             'discussion_comment',
                         ].contains(prActionLower)
                     )
+                    def botActorLogin = env.CODE_REVIEW_BOT_USER_LOGIN?.trim() ?: bbServerUserSlug
+                    def botActorId = env.CODE_REVIEW_BOT_USER_ID?.trim() ?: ''
+                    def actorMatchesBot = reviewDecisionOnly && (
+                        (eventActorLogin && botActorLogin && eventActorLogin.equalsIgnoreCase(botActorLogin))
+                        || (eventActorId && botActorId && eventActorId == botActorId)
+                    )
                     def credId = 'SCM_TOKEN'
                     def unresolvedMarker = isBitbucket ? '$.pullRequest' : '$.pull_request'
 
@@ -101,6 +111,13 @@ pipeline {
                             echo "Skipping PR action '${prAction}'. Allowed: ${isBitbucket ? 'any pr:* (Bitbucket)' : allowedActions.join(', ') + ', or comment/thread events routed to review-decision-only'}."
                             return
                         }
+                    }
+
+                    if (actorMatchesBot) {
+                        def who = eventActorLogin ?: eventActorId
+                        currentBuild.description = "Skipped bot-authored comment event"
+                        echo "Skipping bot-authored comment/thread event from '${who}'. Configure CODE_REVIEW_BOT_USER_LOGIN / CODE_REVIEW_BOT_USER_ID for non-Bitbucket providers; Bitbucket Server/DC falls back to SCM_BITBUCKET_SERVER_USER_SLUG."
+                        return
                     }
 
                     if (isBitbucket && !scmUrl?.trim()) {

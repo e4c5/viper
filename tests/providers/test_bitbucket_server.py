@@ -947,6 +947,46 @@ def test_bbs_build_dismissal_context_thread():
 
 
 @patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_review_thread_dismissal_context_server_with_nested_activity_comments(mock_client):
+    mock_r = MagicMock()
+    mock_r.headers = {"content-type": "application/json"}
+    mock_r.raise_for_status = MagicMock()
+    mock_r.json.return_value = {
+        "isLastPage": True,
+        "values": [
+            {
+                "action": "COMMENTED",
+                "comment": {
+                    "id": 10,
+                    "text": "top",
+                    "state": "OPEN",
+                    "author": {"name": "a"},
+                    "createdDate": 1,
+                    "anchor": {"path": "f.java", "line": 1},
+                    "comments": [
+                        {
+                            "id": 11,
+                            "text": "child",
+                            "state": "OPEN",
+                            "author": {"name": "b"},
+                            "createdDate": 2,
+                            "anchor": {"path": "f.java", "line": 1},
+                            "comments": [],
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_r
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    ctx = p.get_review_thread_dismissal_context("PROJ", "repo", 7, "11")
+    assert ctx is not None
+    assert ctx.gate_exclusion_stable_id == "comment:10"
+    assert [e.comment_id for e in ctx.entries] == ["10", "11"]
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
 def test_get_review_thread_dismissal_context_server(mock_client):
     mock_r = MagicMock()
     mock_r.headers = {"content-type": "application/json"}
