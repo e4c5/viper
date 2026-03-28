@@ -469,6 +469,41 @@ def test_get_existing_review_comments_uses_activities_endpoint(mock_client):
 
 
 @patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_existing_review_comments_uses_activity_comment_anchor_when_comment_anchor_missing(
+    mock_client,
+):
+    mock_resp = MagicMock()
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_resp.json.return_value = {
+        "isLastPage": True,
+        "values": [
+            {
+                "action": "COMMENTED",
+                "comment": {
+                    "id": 482,
+                    "text": "[Medium] suggestion",
+                    "state": "OPEN",
+                },
+                "commentAnchor": {
+                    "path": "src/main/java/example/Foo.java",
+                    "line": 104,
+                    "orphaned": True,
+                },
+            }
+        ],
+    }
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    comments = p.get_existing_review_comments("PROJ", "my-repo", 42)
+
+    assert len(comments) == 1
+    assert comments[0].path == "src/main/java/example/Foo.java"
+    assert comments[0].line == 104
+    assert comments[0].outdated is True
+
+
+@patch("code_review.providers.bitbucket_server.httpx.Client")
 def test_get_unresolved_review_items_merges_comments_and_open_tasks(mock_client):
     """Quality gate includes non-RESOLVED activity comments plus OPEN PR tasks."""
 

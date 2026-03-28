@@ -270,7 +270,13 @@ def list_pull_request_comments(
                 continue
             comment = activity.get("comment")
             if isinstance(comment, dict):
-                comments.append(comment)
+                merged = dict(comment)
+                anchor = merged.get("anchor")
+                if not isinstance(anchor, dict):
+                    activity_anchor = activity.get("commentAnchor")
+                    if isinstance(activity_anchor, dict):
+                        merged["anchor"] = activity_anchor
+                comments.append(merged)
         next_start = _next_page_start(result, start)
         if next_start is None:
             break
@@ -279,8 +285,54 @@ def list_pull_request_comments(
         raise RuntimeError(
             f"Bitbucket comment pagination exceeded max_pages={max_pages} while listing "
             "pull request comments."
-        )
+    )
     return comments
+
+
+def list_pull_request_activities(
+    project_key: str,
+    repo_slug: str,
+    pull_request_id: int | str,
+    *,
+    username: str,
+    password: str,
+) -> list[dict[str, Any]]:
+    """List raw pull request activities via the paginated activities endpoint."""
+    activities: list[dict[str, Any]] = []
+    start = 0
+    seen_starts: set[int] = set()
+    max_pages = 500
+    for _ in range(max_pages):
+        if start in seen_starts:
+            raise RuntimeError(
+                "Bitbucket activity pagination cycle detected while listing pull request activities: "
+                f"repeated start={start}."
+            )
+        seen_starts.add(start)
+        result = bitbucket_request(
+            "GET",
+            pull_request_comments_url(project_key, repo_slug, pull_request_id, activities=True),
+            username=username,
+            password=password,
+            params={"start": start, "limit": 100},
+        )
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                "Bitbucket returned an unexpected response while listing pull request activities."
+            )
+        for activity in result.get("values") or []:
+            if isinstance(activity, dict):
+                activities.append(activity)
+        next_start = _next_page_start(result, start)
+        if next_start is None:
+            break
+        start = next_start
+    else:
+        raise RuntimeError(
+            f"Bitbucket activity pagination exceeded max_pages={max_pages} while listing "
+            "pull request activities."
+        )
+    return activities
 
 
 def pull_request_version(pull_request: dict[str, Any]) -> int:

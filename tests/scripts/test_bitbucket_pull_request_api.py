@@ -114,6 +114,48 @@ def test_list_pull_request_comments_reads_all_activity_pages(monkeypatch: pytest
     ]
 
 
+def test_list_pull_request_comments_merges_activity_comment_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_module()
+
+    def fake_bitbucket_request(method, url, *, username, payload=None, params=None, **kwargs):
+        assert method == "GET"
+        assert url == module.pull_request_comments_url("PRJ", "demo-repo", 17, activities=True)
+        assert username == TEST_USERNAME
+        assert kwargs[AUTH_SECRET_FIELD] == TEST_AUTH_SECRET
+        assert params == {"start": 0, "limit": 100}
+        return {
+            "values": [
+                {
+                    "action": "COMMENTED",
+                    "comment": {"id": 42, "text": "raw comment", "state": "OPEN"},
+                    "commentAnchor": {"path": "src/Foo.java", "line": 5, "orphaned": True},
+                }
+            ],
+            "isLastPage": True,
+        }
+
+    monkeypatch.setattr(module, "bitbucket_request", fake_bitbucket_request)
+
+    credentials = {"username": TEST_USERNAME, AUTH_SECRET_FIELD: TEST_AUTH_SECRET}
+    result = module.list_pull_request_comments(
+        "PRJ",
+        "demo-repo",
+        17,
+        **credentials,
+    )
+
+    assert result == [
+        {
+            "id": 42,
+            "text": "raw comment",
+            "state": "OPEN",
+            "anchor": {"path": "src/Foo.java", "line": 5, "orphaned": True},
+        }
+    ]
+
+
 def test_list_pull_request_comments_raises_on_pagination_cycle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -286,6 +328,54 @@ def test_list_pull_request_tasks_reads_all_pages(monkeypatch: pytest.MonkeyPatch
         (
             "GET",
             module.pull_request_tasks_url("PRJ", "demo-repo", 17),
+            {"start": 100, "limit": 100},
+        ),
+    ]
+
+
+def test_list_pull_request_activities_reads_all_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_module()
+    requests: list[tuple[str, str, dict[str, int]]] = []
+    responses = iter(
+        [
+            {
+                "values": [{"id": 1, "action": "COMMENTED"}],
+                "isLastPage": False,
+                "nextPageStart": 100,
+            },
+            {
+                "values": [{"id": 2, "action": "APPROVED"}],
+                "isLastPage": True,
+            },
+        ]
+    )
+
+    def fake_bitbucket_request(method, url, *, username, payload=None, params=None, **kwargs):
+        requests.append((method, url, params or {}))
+        assert username == TEST_USERNAME
+        assert kwargs[AUTH_SECRET_FIELD] == TEST_AUTH_SECRET
+        return next(responses)
+
+    monkeypatch.setattr(module, "bitbucket_request", fake_bitbucket_request)
+
+    credentials = {"username": TEST_USERNAME, AUTH_SECRET_FIELD: TEST_AUTH_SECRET}
+    result = module.list_pull_request_activities(
+        "PRJ",
+        "demo-repo",
+        17,
+        **credentials,
+    )
+
+    assert result == [{"id": 1, "action": "COMMENTED"}, {"id": 2, "action": "APPROVED"}]
+    assert requests == [
+        (
+            "GET",
+            module.pull_request_comments_url("PRJ", "demo-repo", 17, activities=True),
+            {"start": 0, "limit": 100},
+        ),
+        (
+            "GET",
+            module.pull_request_comments_url("PRJ", "demo-repo", 17, activities=True),
             {"start": 100, "limit": 100},
         ),
     ]

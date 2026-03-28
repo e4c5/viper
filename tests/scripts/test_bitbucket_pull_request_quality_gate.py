@@ -122,3 +122,87 @@ def test_main_comment_prints_json_report(
     assert payload["comment_id"] == "42"
     assert payload["counts_for_quality_gate"] is False
     assert payload["quality_gate_reason"] == "outdated_or_orphaned"
+
+
+def test_build_comment_raw_report_collects_matching_activities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_module()
+
+    monkeypatch.setattr(
+        module,
+        "get_pull_request_comment",
+        lambda *args, **kwargs: {
+            "id": 42,
+            "text": "[Medium] apply this",
+            "state": "OPEN",
+            "anchor": {"path": "src/Foo.java", "line": 7},
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "list_pull_request_activities",
+        lambda *args, **kwargs: [
+            {"action": "UPDATED", "id": 1},
+            {
+                "action": "COMMENTED",
+                "comment": {
+                    "id": 41,
+                    "text": "root",
+                    "comments": [{"id": 42, "text": "reply"}],
+                },
+            },
+        ],
+    )
+
+    report = module.build_comment_raw_report(
+        "PRJ",
+        "demo-repo",
+        17,
+        42,
+        username="alice",
+        password="secret",
+    )
+
+    assert report["comment_id"] == "42"
+    assert report["comment_endpoint"]["id"] == 42
+    assert len(report["matching_activities"]) == 1
+    assert report["matching_activity_comments"][0]["id"] == 41
+    assert report["quality_gate_view"]["counts_for_quality_gate"] is True
+
+
+def test_main_raw_prints_json_report(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = load_module()
+
+    monkeypatch.setattr(module, "load_script_credentials", lambda: ("alice", "secret"))
+    monkeypatch.setattr(
+        module,
+        "build_comment_raw_report",
+        lambda *args, **kwargs: {
+            "comment_id": "42",
+            "comment_endpoint": {"id": 42},
+            "matching_activities": [{"action": "COMMENTED"}],
+        },
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "bitbucket_pull_request_quality_gate.py",
+            "raw",
+            "PRJ",
+            "demo-repo",
+            "17",
+            "42",
+        ],
+    )
+
+    assert module.main() == 0
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["comment_id"] == "42"
+    assert payload["comment_endpoint"]["id"] == 42

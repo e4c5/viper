@@ -548,15 +548,20 @@ class BitbucketServerProvider(ProviderInterface):
         c = act.get("comment")
         if not isinstance(c, dict):
             return None
-        anchor = c.get("anchor") or {}
+        anchor = c.get("anchor")
+        if not isinstance(anchor, dict):
+            anchor = act.get("commentAnchor") if isinstance(act.get("commentAnchor"), dict) else {}
         author = c.get("author") if isinstance(c.get("author"), dict) else {}
+        comment_for_status = dict(c)
+        if anchor and not isinstance(comment_for_status.get("anchor"), dict):
+            comment_for_status["anchor"] = anchor
         return ReviewComment(
             id=str(c.get("id", "")),
             path=anchor.get("path") or "",
             line=int(anchor.get("line", 0) or 0),
             body=c.get("text") or "",
             resolved=bool(c.get("state") == "RESOLVED"),
-            outdated=self._bbs_comment_is_outdated(c),
+            outdated=self._bbs_comment_is_outdated(comment_for_status),
             parent_id=self._bbs_comment_parent_id(c),
             author_login=str(author.get("name") or author.get("slug") or author.get("username") or ""),
             created_at=str(c.get("createdDate") or ""),

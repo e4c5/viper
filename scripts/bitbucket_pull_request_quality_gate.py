@@ -29,6 +29,7 @@ if str(SRC_DIR) not in sys.path:
 
 from bitbucket_pull_request_api import (
     get_pull_request_comment,
+    list_pull_request_activities,
     list_pull_request_comments,
     list_pull_request_tasks,
     load_script_credentials,
@@ -171,6 +172,77 @@ def build_pr_gate_report(
     }
 
 
+def _activity_contains_comment_id(node: Any, wanted: str) -> bool:
+    """Return True when a nested activity/comment structure references ``wanted``."""
+    if isinstance(node, dict):
+        if str(node.get("id") or "").strip() == wanted:
+            return True
+        for value in node.values():
+            if _activity_contains_comment_id(value, wanted):
+                return True
+        return False
+    if isinstance(node, list):
+        return any(_activity_contains_comment_id(item, wanted) for item in node)
+    return False
+
+
+def _activity_comment_tree(node: Any) -> dict[str, Any] | None:
+    """Return the raw comment tree attached to one activity, if present."""
+    if not isinstance(node, dict):
+        return None
+    comment = node.get("comment")
+    if isinstance(comment, dict):
+        return comment
+    return None
+
+
+def build_comment_raw_report(
+    project_key: str,
+    repo_slug: str,
+    pull_request_id: int,
+    comment_id: int,
+    *,
+    username: str,
+    password: str,
+) -> dict[str, Any]:
+    """Return raw API payloads for one comment from both /comments and /activities views."""
+    direct_comment = get_pull_request_comment(
+        project_key,
+        repo_slug,
+        pull_request_id,
+        comment_id,
+        username=username,
+        password=password,
+    )
+    wanted = str(comment_id)
+    matching_activities = [
+        activity
+        for activity in list_pull_request_activities(
+            project_key,
+            repo_slug,
+            pull_request_id,
+            username=username,
+            password=password,
+        )
+        if _activity_contains_comment_id(activity, wanted)
+    ]
+    matching_activity_comments = [
+        comment_tree
+        for activity in matching_activities
+        if (comment_tree := _activity_comment_tree(activity)) is not None
+    ]
+    return {
+        "project_key": project_key,
+        "repo_slug": repo_slug,
+        "pull_request_id": pull_request_id,
+        "comment_id": wanted,
+        "comment_endpoint": direct_comment,
+        "quality_gate_view": build_comment_report(direct_comment),
+        "matching_activities": matching_activities,
+        "matching_activity_comments": matching_activity_comments,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Inspect whether Bitbucket Server/DC PR comments or tasks count toward Viper's quality gate."
@@ -185,6 +257,15 @@ def build_parser() -> argparse.ArgumentParser:
     comment_parser.add_argument("repo_slug", help="Bitbucket repository slug")
     comment_parser.add_argument("pull_request_id", type=int, help="Pull request id")
     comment_parser.add_argument("comment_id", type=int, help="Pull request comment id")
+
+    raw_parser = subparsers.add_parser(
+        "raw",
+        help="Inspect one pull request comment via raw /comments and /activities API payloads",
+    )
+    raw_parser.add_argument("project_key", help="Bitbucket project key, for example PRJ")
+    raw_parser.add_argument("repo_slug", help="Bitbucket repository slug")
+    raw_parser.add_argument("pull_request_id", type=int, help="Pull request id")
+    raw_parser.add_argument("comment_id", type=int, help="Pull request comment id")
 
     pr_parser = subparsers.add_parser(
         "pr",
@@ -214,6 +295,18 @@ def main() -> int:
             password=password,
         )
         print(json.dumps(build_comment_report(comment), indent=2))
+        return 0
+
+    if args.command == "raw":
+        report = build_comment_raw_report(
+            args.project_key,
+            args.repo_slug,
+            args.pull_request_id,
+            args.comment_id,
+            username=username,
+            password=password,
+        )
+        print(json.dumps(report, indent=2))
         return 0
 
     report = build_pr_gate_report(
