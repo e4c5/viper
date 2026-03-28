@@ -116,6 +116,44 @@ def test_get_pr_files(mock_client):
 
 
 @patch("code_review.providers.github.httpx.Client")
+def test_get_pr_diff_for_file_uses_patch_from_matching_file(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = [
+        {
+            "filename": "src/Foo.java",
+            "status": "modified",
+            "patch": "@@ -4,2 +4,2 @@\n-old\n+new",
+        }
+    ]
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    diff = p.get_pr_diff_for_file("owner", "repo", 1, "src/Foo.java")
+
+    assert "diff --git a/src/Foo.java b/src/Foo.java" in diff
+    assert "@@ -4,2 +4,2 @@" in diff
+    call = mock_client.return_value.__enter__.return_value.get.call_args
+    assert "/pulls/1/files" in call[0][0]
+    assert call[1]["params"] == {"per_page": 100, "page": 1}
+
+
+@patch("code_review.providers.github.httpx.Client")
+def test_get_pr_diff_for_file_returns_empty_when_github_omits_patch(mock_client):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = [
+        {"filename": "src/Foo.java", "status": "modified"}
+    ]
+    mock_resp.headers = {"content-type": "application/json"}
+    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+
+    p = GitHubProvider("https://api.github.com", "tok")
+    diff = p.get_pr_diff_for_file("owner", "repo", 1, "src/Foo.java")
+
+    assert diff == ""
+
+
+@patch("code_review.providers.github.httpx.Client")
 def test_get_incremental_pr_files_uses_compare_endpoint(mock_client):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {

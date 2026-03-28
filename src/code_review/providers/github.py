@@ -27,6 +27,7 @@ from code_review.providers.base import (
     _log_pr_info_warning,
     commit_messages_from_commit_list,
     file_infos_from_pull_file_list,
+    normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
 from code_review.providers.bot_blocking_common import (
@@ -512,6 +513,41 @@ class GitHubProvider(ProviderInterface):
         data = self._get(path, params={"per_page": 100})
         return file_infos_from_pull_file_list(data) if isinstance(data, list) else []
 
+    def get_pr_diff_for_file(self, owner: str, repo: str, pr_number: int, path: str) -> str:
+        """Return a single-file diff using GitHub's per-file ``patch`` payload when available."""
+        wanted_path = normalize_diff_anchor_path(path)
+        if not wanted_path:
+            return ""
+        api_path = f"/repos/{owner}/{repo}/pulls/{pr_number}/files"
+        page = 1
+        for _ in range(100):
+            data = self._get(api_path, params={"per_page": 100, "page": page})
+            if not isinstance(data, list) or not data:
+                return ""
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                filename = normalize_diff_anchor_path(str(item.get("filename") or ""))
+                previous = normalize_diff_anchor_path(str(item.get("previous_filename") or ""))
+                if wanted_path not in {filename, previous}:
+                    continue
+                patch_text = str(item.get("patch") or "").strip()
+                if not patch_text:
+                    return ""
+                old_path = str(item.get("previous_filename") or item.get("filename") or "")
+                new_path = str(item.get("filename") or old_path)
+                lines = [
+                    f"diff --git a/{old_path} b/{new_path}",
+                    f"--- a/{old_path}",
+                    f"+++ b/{new_path}",
+                    patch_text,
+                ]
+                return "\n".join(lines)
+            if len(data) < 100:
+                return ""
+            page += 1
+        return ""
+
     def get_incremental_pr_files(
         self,
         owner: str,
@@ -858,6 +894,7 @@ class GitHubProvider(ProviderInterface):
             supports_bot_blocking_state_query=True,
             supports_bot_attribution_identity_query=True,
             supports_review_thread_dismissal_context=True,
+            supports_lightweight_pr_diff_for_file=True,
             supports_review_thread_reply=True,
             supports_review_thread_resolution=True,
         )

@@ -343,14 +343,14 @@ class BitbucketServerProvider(ProviderInterface):
         except Exception as e:
             logger.warning(
                 "Bitbucket Server single-file diff failed owner=%s repo=%s pr=%s path=%s: %s; "
-                "falling back to full PR diff slice",
+                "skipping diff context for this thread",
                 owner,
                 repo,
                 pr_number,
                 wanted_path,
                 e,
             )
-            return super().get_pr_diff_for_file(owner, repo, pr_number, wanted_path)
+            return ""
 
     def get_incremental_pr_diff(
         self,
@@ -1254,5 +1254,6 @@ class BitbucketServerProvider(ProviderInterface):
             supports_bot_blocking_state_query=bool(self._participant_user_slug),
             supports_bot_attribution_identity_query=bool(self._participant_user_slug),
             supports_review_thread_dismissal_context=True,
+            supports_lightweight_pr_diff_for_file=True,
             supports_review_thread_reply=True,
         )

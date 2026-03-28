@@ -192,6 +192,7 @@ def test_run_review_decision_only_reply_dismissal_sends_anchored_diff_context(
         supports_bot_blocking_state_query=True,
         supports_bot_attribution_identity_query=True,
         supports_review_thread_dismissal_context=True,
+        supports_lightweight_pr_diff_for_file=True,
         supports_review_thread_reply=True,
         supports_review_thread_resolution=True,
     )

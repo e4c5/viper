@@ -2965,7 +2965,8 @@ class ReviewOrchestrator:
             return frozenset()
         bot_id, dctx = precheck
         diff_context = ""
-        if (dctx.path or "").strip():
+        caps_rd = provider.capabilities()
+        if (dctx.path or "").strip() and caps_rd.supports_lightweight_pr_diff_for_file:
             try:
                 diff_context = _reply_dismissal_diff_context_for_thread(
                     provider.get_pr_diff_for_file(owner, repo, pr_number, dctx.path),

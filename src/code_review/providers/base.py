@@ -107,6 +107,8 @@ class ProviderCapabilities(BaseModel):
       (login, id, etc.) for matching comments and reviews (Phase E / §5.3).
     - supports_review_thread_dismissal_context: provider can load ordered thread comments
       for reply-dismissal classification (Phase E.1).
+    - supports_lightweight_pr_diff_for_file: provider can fetch a single-file PR diff without
+      first downloading the full PR diff (important for lightweight comment pipelines).
     - supports_review_thread_reply: provider can post a reply on an existing review comment.
     - supports_review_thread_resolution: provider can mark a review thread/discussion resolved.
     """
@@ -122,6 +124,7 @@ class ProviderCapabilities(BaseModel):
     supports_bot_blocking_state_query: bool = False
     supports_bot_attribution_identity_query: bool = False
     supports_review_thread_dismissal_context: bool = False
+    supports_lightweight_pr_diff_for_file: bool = False
     supports_review_thread_reply: bool = False
     supports_review_thread_resolution: bool = False
 
