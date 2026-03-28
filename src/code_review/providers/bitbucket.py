@@ -326,7 +326,9 @@ class BitbucketProvider(ProviderInterface):
         return bool(comment.path or int(comment.line or 0) > 0)
 
     @staticmethod
-    def _bbcloud_comment_is_bot_authored(comment: ReviewComment, bot: BotAttributionIdentity) -> bool:
+    def _bbcloud_comment_is_bot_authored(
+        comment: ReviewComment, bot: BotAttributionIdentity
+    ) -> bool:
         author_login = (comment.author_login or "").strip().lower()
         if not author_login:
             return False

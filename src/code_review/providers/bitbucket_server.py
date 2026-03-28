@@ -89,7 +89,9 @@ def bitbucket_server_persisted_dismissed_root_ids(
             continue
         root_id = BitbucketServerProvider._bbs_thread_root_comment_id(by_id, cid)
         current_latest = latest_by_root.get(root_id)
-        if current_latest is None or _comment_order_key(comment) >= _comment_order_key(current_latest):
+        if current_latest is None or _comment_order_key(comment) >= _comment_order_key(
+            current_latest
+        ):
             latest_by_root[root_id] = comment
     dismissed_roots = {
         root_id
@@ -632,7 +634,9 @@ class BitbucketServerProvider(ProviderInterface):
             or suggestion_state == "APPLIED",
             outdated=BitbucketServerProvider._bbs_comment_is_outdated(comment_for_status),
             parent_id=BitbucketServerProvider._bbs_comment_parent_id(c),
-            author_login=str(author.get("name") or author.get("slug") or author.get("username") or ""),
+            author_login=str(
+                author.get("name") or author.get("slug") or author.get("username") or ""
+            ),
             created_at=str(c.get("createdDate") or ""),
         )
 

@@ -2924,19 +2924,19 @@ class ReviewOrchestrator:
         pr_number: int,
         dry_run: bool,
         comment_id: str,
-    ) -> None:
+    ) -> bool:
         if not caps_rd.supports_review_thread_reply:
             logger.info(
                 "Reply-dismissal agreed: provider does not support thread replies; "
                 "cannot persist accepted thread state"
             )
-            return
+            return False
         if dry_run:
             logger.info(
                 "Dry-run: would post durable accepted-thread reply: %s",
                 REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT,
             )
-            return
+            return False
         try:
             provider.post_review_thread_reply(
                 owner,
@@ -2949,8 +2949,10 @@ class ReviewOrchestrator:
                 "Reply-dismissal agreed: posted durable accepted-thread reply to comment_id=%s",
                 comment_id,
             )
+            return True
         except Exception as e:
             logger.warning("post agreed accepted-thread reply failed: %s", e)
+            return False
 
     def _decision_only_maybe_resolve_agreed_thread(
         self,
@@ -2962,9 +2964,9 @@ class ReviewOrchestrator:
         dry_run: bool,
         comment_id: str,
         dctx: ReviewThreadDismissalContext,
-    ) -> None:
+    ) -> bool:
         if not caps_rd.supports_review_thread_resolution:
-            self._decision_only_maybe_post_agreed_thread_reply(
+            return self._decision_only_maybe_post_agreed_thread_reply(
                 provider,
                 caps_rd,
                 owner,
@@ -2973,14 +2975,13 @@ class ReviewOrchestrator:
                 dry_run,
                 comment_id,
             )
-            return
         if dry_run:
             logger.info(
                 "Dry-run: would resolve review thread stable_id=%s thread_id=%s",
                 dctx.gate_exclusion_stable_id,
                 (dctx.thread_id or "").strip(),
             )
-            return
+            return False
         try:
             provider.resolve_review_thread(owner, repo, pr_number, dctx, comment_id)
             logger.info(
@@ -2988,9 +2989,10 @@ class ReviewOrchestrator:
                 dctx.gate_exclusion_stable_id,
                 (dctx.thread_id or "").strip(),
             )
+            return True
         except Exception as e:
             logger.warning("resolve_review_thread failed: %s", e)
-            self._decision_only_maybe_post_agreed_thread_reply(
+            return self._decision_only_maybe_post_agreed_thread_reply(
                 provider,
                 caps_rd,
                 owner,
@@ -3166,7 +3168,7 @@ class ReviewOrchestrator:
     ) -> frozenset[str]:
         if verdict.verdict == "agreed":
             observability.record_reply_dismissal_outcome("agreed")
-            self._decision_only_maybe_resolve_agreed_thread(
+            persisted = self._decision_only_maybe_resolve_agreed_thread(
                 provider,
                 provider.capabilities(),
                 owner,
@@ -3176,11 +3178,18 @@ class ReviewOrchestrator:
                 comment_id,
                 dctx,
             )
+            if persisted:
+                logger.info(
+                    "Reply-dismissal agreed; excluding gate stable_id=%s",
+                    dctx.gate_exclusion_stable_id,
+                )
+                return frozenset({dctx.gate_exclusion_stable_id})
             logger.info(
-                "Reply-dismissal agreed; excluding gate stable_id=%s",
+                "Reply-dismissal agreed but SCM persistence failed; "
+                "keeping gate stable_id=%s in quality gate",
                 dctx.gate_exclusion_stable_id,
             )
-            return frozenset({dctx.gate_exclusion_stable_id})
+            return frozenset()
 
         if verdict.verdict == "disagreed":
             observability.record_reply_dismissal_outcome("disagreed")
@@ -3459,7 +3468,8 @@ class ReviewOrchestrator:
             logger.info("No files to review")
             if bool(getattr(cfg, "review_decision_enabled", False)):
                 logger.info(
-                    "Recomputing PR review decision from unresolved SCM state despite empty review scope"
+                    "Recomputing PR review decision from unresolved SCM state "
+                    "despite empty review scope"
                 )
                 gate_outcome = _compute_quality_gate_review_outcome(
                     provider,
@@ -3470,12 +3480,21 @@ class ReviewOrchestrator:
                     cfg,
                 )
                 _log_quality_gate_review_outcome("Empty-scope refresh", gate_outcome)
+                submission_head_sha = head_sha
+                if not submission_head_sha:
+                    submission_head_sha = (
+                        getattr(pr_info_for_metadata, "head_sha", None) or ""
+                    ).strip()
+                if not submission_head_sha:
+                    submission_head_sha = _resolve_head_sha_for_review_decision_submission(
+                        provider, owner, repo, pr_number, ""
+                    )
                 _maybe_submit_review_decision(
                     provider,
                     owner,
                     repo,
                     pr_number,
-                    head_sha,
+                    submission_head_sha,
                     dry_run,
                     cfg,
                     gate_outcome=gate_outcome,

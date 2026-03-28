@@ -451,7 +451,9 @@ def test_run_review_decision_only_reply_dismissal_sends_anchored_diff_context(
             ],
         )
     )
-    provider.get_bot_attribution_identity = MagicMock(return_value=BotAttributionIdentity(login="viper"))
+    provider.get_bot_attribution_identity = MagicMock(
+        return_value=BotAttributionIdentity(login="viper")
+    )
     provider.resolve_review_thread = MagicMock()
     _wire_standard_runner_mocks(
         mock_get_scm_config,
@@ -896,6 +898,34 @@ def test_run_review_empty_incremental_scope_still_recomputes_review_decision(
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_empty_scope_resolves_head_sha_before_submitting_review_decision(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    """Empty-scope refresh should resolve head_sha from provider state when the caller omits it."""
+    from code_review.runner import run_review
+
+    provider = _provider_with_review_decisions()
+    provider.get_pr_files = MagicMock(return_value=[])
+    provider.get_pr_diff = MagicMock(return_value="")
+    provider.get_pr_info = MagicMock(return_value=PRInfo(head_sha="from-api-sha"))
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    posted = run_review("o", "r", 1, head_sha="", dry_run=False)
+
+    assert posted == []
+    provider.submit_review_decision.assert_called_once()
+    assert provider.submit_review_decision.call_args.kwargs.get("head_sha") == "from-api-sha"
+
+
 @patch("code_review.providers.bitbucket_server.httpx.Client")
 @patch("code_review.runner.get_context_window")
 @patch("code_review.runner.get_provider")
@@ -907,9 +937,8 @@ def test_run_review_empty_incremental_scope_approves_when_bitbucket_suggestion_a
     mock_client,
 ):
     """Bitbucket Server empty-scope refresh must ignore applied suggestions in gate counts."""
-    from code_review.runner import run_review
-
-    mock_client.return_value.__enter__.return_value.get.side_effect = _bitbucket_http_get_side_effect(
+    mock_client.return_value.__enter__.return_value.get.side_effect = (
+        _bitbucket_http_get_side_effect(
         activities=[
             _bbs_test_activity(
                 _bbs_test_comment(
@@ -919,6 +948,7 @@ def test_run_review_empty_incremental_scope_approves_when_bitbucket_suggestion_a
                 )
             )
         ]
+        )
     )
 
     provider = _make_bitbucket_empty_scope_provider()
@@ -947,17 +977,17 @@ def test_run_review_empty_incremental_scope_uses_comments_endpoint_state_for_bit
     mock_client,
 ):
     """Empty-scope Bitbucket refresh should honor richer /comments state over stale activities."""
-    from code_review.runner import run_review
-
-    mock_client.return_value.__enter__.return_value.get.side_effect = _bitbucket_http_get_side_effect(
-        activities=[_bbs_test_activity(_bbs_test_comment(482, "[High] already applied"))],
-        comments=[
-            _bbs_test_comment(
-                482,
-                "[High] already applied",
-                properties={"suggestionState": "APPLIED"},
-            )
-        ],
+    mock_client.return_value.__enter__.return_value.get.side_effect = (
+        _bitbucket_http_get_side_effect(
+            activities=[_bbs_test_activity(_bbs_test_comment(482, "[High] already applied"))],
+            comments=[
+                _bbs_test_comment(
+                    482,
+                    "[High] already applied",
+                    properties={"suggestionState": "APPLIED"},
+                )
+            ],
+        )
     )
 
     provider = _make_bitbucket_empty_scope_provider()
@@ -1317,7 +1347,10 @@ def test_run_review_decision_only_reply_dismissal_skips_llm_when_scm_already_add
     mock_app_cfg.return_value = _reply_dismissal_app_cfg()
 
     provider = _configure_reply_dismissal_provider(
-        capabilities=_reply_dismissal_caps(supports_suggestions=True, supports_review_thread_resolution=False),
+        capabilities=_reply_dismissal_caps(
+            supports_suggestions=True,
+            supports_review_thread_resolution=False,
+        ),
         unresolved_items=[
             _reply_dismissal_unresolved_item(
                 stable_id="comment:482",
@@ -1358,6 +1391,47 @@ def test_run_review_decision_only_reply_dismissal_skips_llm_when_scm_already_add
     provider.resolve_review_thread.assert_not_called()
     provider.submit_review_decision.assert_called_once()
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
+
+
+@patch("code_review.runner.get_code_review_app_config")
+@patch("code_review.runner._run_reply_dismissal_llm")
+@patch("code_review.runner.get_context_window")
+@patch("code_review.runner.get_provider")
+@patch("code_review.runner.get_scm_config")
+def test_run_review_decision_only_reply_dismissal_keeps_gate_when_persistence_fails(
+    mock_get_scm_config,
+    mock_get_provider,
+    mock_get_context_window,
+    mock_llm,
+    mock_app_cfg,
+):
+    mock_app_cfg.return_value = _reply_dismissal_app_cfg()
+    mock_llm.return_value = '{"verdict": "agreed", "reply_text": ""}'
+
+    provider = _configure_reply_dismissal_provider(
+        capabilities=_reply_dismissal_caps(),
+        unresolved_items=[_reply_dismissal_unresolved_item()],
+        dismissal_context=_reply_dismissal_context(),
+    )
+    provider.resolve_review_thread = MagicMock(side_effect=RuntimeError("boom"))
+    provider.post_review_thread_reply = MagicMock(side_effect=RuntimeError("boom"))
+    _run_review_decision_only_with_provider(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        provider=provider,
+    )
+
+    provider.resolve_review_thread.assert_called_once()
+    provider.post_review_thread_reply.assert_called_once_with(
+        "o",
+        "r",
+        1,
+        "11",
+        REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT,
+    )
+    provider.submit_review_decision.assert_called_once()
+    assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
 
 
 @patch("code_review.runner.get_code_review_app_config")

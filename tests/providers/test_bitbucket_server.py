@@ -67,7 +67,9 @@ def test_get_pr_diff_for_file_falls_back_to_full_pr_diff_slice_on_single_file_er
                 httpx.HTTPStatusError("400 Bad Request", request=request, response=response),
             ],
         ),
-        patch.object(BitbucketServerProvider, "get_pr_diff", return_value=full_diff) as mock_get_pr_diff,
+        patch.object(
+            BitbucketServerProvider, "get_pr_diff", return_value=full_diff
+        ) as mock_get_pr_diff,
     ):
         diff_text = p.get_pr_diff_for_file("PROJ", "repo", 7, "src/Foo.java")
 

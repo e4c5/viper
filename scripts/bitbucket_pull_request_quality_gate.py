@@ -78,7 +78,13 @@ def comment_is_outdated(comment: dict[str, Any]) -> bool:
 
 
 def comment_gate_status(comment: dict[str, Any]) -> tuple[bool, str]:
-    """Return whether the comment counts for the quality gate and why."""
+    """Return whether the comment counts for the quality gate and why.
+
+    This convenience wrapper calls `_comment_gate_status_with_provider_context()`
+    without `review_comments_by_id` or `dismissed_stable_ids`, so it cannot
+    detect dismissed threads. Use the context-aware path when those provider
+    inputs are available.
+    """
     return _comment_gate_status_with_provider_context(comment)
 
 
@@ -94,7 +100,17 @@ def task_gate_status(task: dict[str, Any]) -> tuple[bool, str]:
 
 
 def build_comment_report(comment: dict[str, Any]) -> dict[str, Any]:
-    """Return a JSON-friendly quality-gate report for one PR comment."""
+    """Return a JSON-friendly quality-gate report for one PR comment.
+
+    This standalone helper uses `comment_gate_status()`, which calls
+    `_comment_gate_status_with_provider_context()` without
+    `review_comments_by_id` and `dismissed_stable_ids`. As a result it can
+    report resolved/orphaned status, but it cannot classify dismissed threads
+    as `"dismissed_thread"`.
+
+    Callers with full provider context should prefer
+    `_build_comment_report_with_provider_context()`.
+    """
     counts, reason = comment_gate_status(comment)
     return _comment_report(comment, counts=counts, reason=reason)
 
