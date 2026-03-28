@@ -236,8 +236,15 @@ def list_pull_request_comments(
     """List pull request comments via the activities endpoint for compatibility."""
     comments: list[dict[str, Any]] = []
     start = 0
+    seen_starts: set[int] = set()
     max_pages = 500
     for _ in range(max_pages):
+        if start in seen_starts:
+            raise RuntimeError(
+                f"Bitbucket comment pagination cycle detected while listing pull request comments: "
+                f"repeated start={start}."
+            )
+        seen_starts.add(start)
         result = bitbucket_request(
             "GET",
             pull_request_comments_url(project_key, repo_slug, pull_request_id, activities=True),
@@ -259,6 +266,11 @@ def list_pull_request_comments(
         if next_start is None:
             break
         start = next_start
+    else:
+        raise RuntimeError(
+            f"Bitbucket comment pagination exceeded max_pages={max_pages} while listing "
+            "pull request comments."
+        )
     return comments
 
 

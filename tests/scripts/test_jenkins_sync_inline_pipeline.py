@@ -259,6 +259,45 @@ def test_patch_config_sets_parameter_defaults_for_existing_jobs() -> None:
     assert "<defaultValue>http://localhost:7990/rest/api/1.0</defaultValue>" in out
 
 
+def test_default_parameter_defaults_omits_empty_scm_overrides() -> None:
+    module = load_module()
+
+    defaults = module.default_parameter_defaults(scm_provider="  ", scm_url="")
+
+    assert defaults == {}
+
+
+def test_select_default_job_settings_filters_empty_scm_override_defaults() -> None:
+    module = load_module()
+    review_path, comments_path = module.build_default_job_paths()
+
+    trigger_specs, parameter_defaults = module.select_default_job_settings(
+        [review_path, comments_path],
+        {
+            review_path: module.default_full_review_webhook_spec(),
+            comments_path: module.default_comments_webhook_spec(),
+        },
+        {
+            review_path: {
+                "SCM_PROVIDER_OVERRIDE": "  ",
+                "SCM_URL_OVERRIDE": "",
+            },
+            comments_path: {
+                "SCM_PROVIDER_OVERRIDE": "bitbucket_server",
+                "SCM_URL_OVERRIDE": "http://localhost:7990/rest/api/1.0",
+            },
+        },
+    )
+
+    assert review_path in trigger_specs
+    assert comments_path in trigger_specs
+    assert review_path not in parameter_defaults
+    assert parameter_defaults[comments_path] == {
+        "SCM_PROVIDER_OVERRIDE": "bitbucket_server",
+        "SCM_URL_OVERRIDE": "http://localhost:7990/rest/api/1.0",
+    }
+
+
 def test_main_applies_default_bitbucket_trigger_settings_without_bootstrap(monkeypatch) -> None:
     module = load_module()
 
@@ -280,6 +319,30 @@ def test_main_applies_default_bitbucket_trigger_settings_without_bootstrap(monke
     assert kwargs["parameter_defaults_by_job"]["job/bitbucket/job/bitbucket"][
         "SCM_PROVIDER_OVERRIDE"
     ] == "bitbucket_server"
+
+
+def test_main_does_not_pass_empty_scm_override_defaults_to_sync_jobs(monkeypatch) -> None:
+    module = load_module()
+
+    sync_jobs_mock = MagicMock()
+    monkeypatch.setattr(module, "sync_jobs", sync_jobs_mock)
+    monkeypatch.setattr(module, "load_local_env", lambda: None)
+    monkeypatch.setattr(module, "JENKINSFILE", MagicMock(read_text=lambda encoding="utf-8": "pipeline {}"))
+    monkeypatch.setattr(
+        module,
+        "default_parameter_defaults",
+        lambda *, scm_provider, scm_url: {
+            "SCM_PROVIDER_OVERRIDE": "",
+            "SCM_URL_OVERRIDE": "  ",
+        },
+    )
+    monkeypatch.setattr(sys, "argv", ["jenkins_sync_inline_pipeline.py"])
+
+    rc = module.main()
+
+    assert rc == 0
+    kwargs = sync_jobs_mock.call_args.kwargs
+    assert kwargs["parameter_defaults_by_job"] is None
 
 
 def test_default_bootstrap_secret_text_credentials_requires_scm_token(monkeypatch) -> None:

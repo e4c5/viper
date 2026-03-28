@@ -114,6 +114,97 @@ def test_list_pull_request_comments_reads_all_activity_pages(monkeypatch: pytest
     ]
 
 
+def test_list_pull_request_comments_raises_on_pagination_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_module()
+    requests: list[tuple[str, str, dict[str, int]]] = []
+    responses = iter(
+        [
+            {
+                "values": [
+                    {"action": "COMMENTED", "comment": {"id": 10, "text": "first"}},
+                ],
+                "isLastPage": False,
+                "nextPageStart": 100,
+            },
+            {
+                "values": [
+                    {"action": "COMMENTED", "comment": {"id": 11, "text": "second"}},
+                ],
+                "isLastPage": False,
+                "nextPageStart": 0,
+            },
+        ]
+    )
+
+    def fake_bitbucket_request(method, url, *, username, payload=None, params=None, **kwargs):
+        requests.append((method, url, params or {}))
+        assert username == TEST_USERNAME
+        assert kwargs[AUTH_SECRET_FIELD] == TEST_AUTH_SECRET
+        return next(responses)
+
+    monkeypatch.setattr(module, "bitbucket_request", fake_bitbucket_request)
+
+    credentials = {"username": TEST_USERNAME, AUTH_SECRET_FIELD: TEST_AUTH_SECRET}
+    with pytest.raises(RuntimeError, match="pagination cycle detected"):
+        module.list_pull_request_comments(
+            "PRJ",
+            "demo-repo",
+            17,
+            **credentials,
+        )
+
+    assert requests == [
+        (
+            "GET",
+            module.pull_request_comments_url("PRJ", "demo-repo", 17, activities=True),
+            {"start": 0, "limit": 100},
+        ),
+        (
+            "GET",
+            module.pull_request_comments_url("PRJ", "demo-repo", 17, activities=True),
+            {"start": 100, "limit": 100},
+        ),
+    ]
+
+
+def test_list_pull_request_comments_raises_when_max_pages_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_module()
+    request_count = 0
+
+    def fake_bitbucket_request(method, url, *, username, payload=None, params=None, **kwargs):
+        nonlocal request_count
+        request_count += 1
+        assert method == "GET"
+        assert url == module.pull_request_comments_url("PRJ", "demo-repo", 17, activities=True)
+        assert username == TEST_USERNAME
+        assert kwargs[AUTH_SECRET_FIELD] == TEST_AUTH_SECRET
+        assert params == {"start": request_count - 1, "limit": 100}
+        return {
+            "values": [
+                {"action": "COMMENTED", "comment": {"id": request_count, "text": f"comment-{request_count}"}},
+            ],
+            "isLastPage": False,
+            "nextPageStart": request_count,
+        }
+
+    monkeypatch.setattr(module, "bitbucket_request", fake_bitbucket_request)
+
+    credentials = {"username": TEST_USERNAME, AUTH_SECRET_FIELD: TEST_AUTH_SECRET}
+    with pytest.raises(RuntimeError, match="exceeded max_pages=500"):
+        module.list_pull_request_comments(
+            "PRJ",
+            "demo-repo",
+            17,
+            **credentials,
+        )
+
+    assert request_count == 500
+
+
 def test_delete_pull_request_comment_passes_version_query_param(monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_module()
     requests: list[tuple[str, str, dict[str, int]]] = []

@@ -255,8 +255,12 @@ def default_parameter_defaults(
 ) -> dict[str, str]:
     """Return default Jenkins parameter values for generated Bitbucket jobs."""
     return {
-        "SCM_PROVIDER_OVERRIDE": scm_provider,
-        "SCM_URL_OVERRIDE": scm_url,
+        name: value
+        for name, value in {
+            "SCM_PROVIDER_OVERRIDE": scm_provider.strip(),
+            "SCM_URL_OVERRIDE": scm_url.strip(),
+        }.items()
+        if value
     }
 
 
@@ -978,11 +982,20 @@ def select_default_job_settings(
         for job_path, spec in trigger_specs_by_job.items()
         if job_path in selected_jobs
     }
-    selected_parameter_defaults = {
-        job_path: dict(defaults)
-        for job_path, defaults in parameter_defaults_by_job.items()
-        if job_path in selected_jobs
-    }
+    selected_parameter_defaults: dict[str, dict[str, str]] = {}
+    for job_path, defaults in parameter_defaults_by_job.items():
+        if job_path not in selected_jobs:
+            continue
+        filtered_defaults = {
+            name: value
+            for name, value in defaults.items()
+            if not (
+                name in {"SCM_PROVIDER_OVERRIDE", "SCM_URL_OVERRIDE"}
+                and not value.strip()
+            )
+        }
+        if filtered_defaults:
+            selected_parameter_defaults[job_path] = filtered_defaults
     return selected_trigger_specs, selected_parameter_defaults
 
 
