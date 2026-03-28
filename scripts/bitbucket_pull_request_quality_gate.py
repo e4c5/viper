@@ -96,22 +96,7 @@ def task_gate_status(task: dict[str, Any]) -> tuple[bool, str]:
 def build_comment_report(comment: dict[str, Any]) -> dict[str, Any]:
     """Return a JSON-friendly quality-gate report for one PR comment."""
     counts, reason = comment_gate_status(comment)
-    anchor = comment.get("anchor") if isinstance(comment.get("anchor"), dict) else {}
-    body = str(comment.get("text") or comment.get("body") or "")
-    return {
-        "kind": "comment",
-        "comment_id": str(comment.get("id") or ""),
-        "parent_comment_id": _comment_parent_id(comment),
-        "state": str(comment.get("state") or ""),
-        "counts_for_quality_gate": counts,
-        "quality_gate_reason": reason,
-        "inferred_severity": infer_severity_from_comment_body(body),
-        "path": str(anchor.get("path") or ""),
-        "line": int(anchor.get("line") or 0),
-        "anchor_orphaned": comment_is_outdated(comment),
-        "anchor_state": str(anchor.get("state") or anchor.get("anchorState") or ""),
-        "body": body,
-    }
+    return _comment_report(comment, counts=counts, reason=reason)
 
 
 def _provider_comment_gate_context(
@@ -199,6 +184,16 @@ def _build_comment_report_with_provider_context(
         review_comments_by_id=review_comments_by_id,
         dismissed_stable_ids=dismissed_stable_ids,
     )
+    return _comment_report(comment, counts=counts, reason=reason)
+
+
+def _comment_report(
+    comment: dict[str, Any],
+    *,
+    counts: bool,
+    reason: str,
+) -> dict[str, Any]:
+    """Return the normalized JSON report payload for one PR comment."""
     anchor = comment.get("anchor") if isinstance(comment.get("anchor"), dict) else {}
     body = str(comment.get("text") or comment.get("body") or "")
     return {
