@@ -1638,6 +1638,26 @@ def _reply_dismissal_original_comment_id(
     return ""
 
 
+def _reply_dismissal_existing_bot_reply_after_trigger(
+    ctx: ReviewThreadDismissalContext,
+    bot: BotAttributionIdentity,
+    triggering_comment_id: str,
+):
+    """Return a later bot-authored thread entry when this trigger was already handled."""
+    triggered_comment_id = (triggering_comment_id or "").strip()
+    if not triggered_comment_id:
+        return None
+    seen_trigger = False
+    for ent in ctx.entries:
+        cid = (ent.comment_id or "").strip()
+        if cid and cid == triggered_comment_id:
+            seen_trigger = True
+            continue
+        if seen_trigger and _reply_dismissal_entry_is_bot_authored(ent.author_login, bot):
+            return ent
+    return None
+
+
 def _reply_dismissal_diff_context_for_thread(
     full_diff: str,
     ctx: ReviewThreadDismissalContext,
@@ -2961,6 +2981,20 @@ class ReviewOrchestrator:
                 "(entries=%s)",
                 comment_id,
                 len(dctx.entries) if dctx is not None else 0,
+            )
+            return None
+        existing_bot_reply = _reply_dismissal_existing_bot_reply_after_trigger(
+            dctx,
+            bot_id,
+            comment_id,
+        )
+        if existing_bot_reply is not None:
+            observability.record_reply_dismissal_outcome("skipped_already_replied")
+            logger.info(
+                "Reply-dismissal skipped: triggering comment_id=%s already has a later "
+                "bot reply in thread (comment_id=%s)",
+                comment_id,
+                (existing_bot_reply.comment_id or "").strip(),
             )
             return None
         logger.info(
