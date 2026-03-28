@@ -1,6 +1,7 @@
 """Bitbucket Cloud API provider (workspace = owner, repo_slug = repo)."""
 
 import logging
+from datetime import datetime
 from typing import Any
 
 from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
@@ -351,7 +352,11 @@ class BitbucketProvider(ProviderInterface):
             if not cid:
                 continue
             root_id = self._bbcloud_thread_root_comment_id(by_id, cid)
-            latest_by_root[root_id] = c
+            current_latest = latest_by_root.get(root_id)
+            if current_latest is None or self._bbcloud_comment_order_key(
+                c
+            ) >= self._bbcloud_comment_order_key(current_latest):
+                latest_by_root[root_id] = c
         dismissed_roots = {
             root_id
             for root_id, comment in latest_by_root.items()
@@ -359,6 +364,25 @@ class BitbucketProvider(ProviderInterface):
             and is_reply_dismissal_accepted_reply(comment.body)
         }
         return frozenset(f"comment:{root_id}" for root_id in dismissed_roots if root_id)
+
+    @staticmethod
+    def _bbcloud_comment_order_key(comment: ReviewComment) -> tuple[int, int, str]:
+        raw_created_at = (comment.created_at or "").strip()
+        timestamp_micros = 0
+        if raw_created_at:
+            try:
+                normalized = (
+                    raw_created_at[:-1] + "+00:00"
+                    if raw_created_at.endswith("Z")
+                    else raw_created_at
+                )
+                timestamp_micros = int(datetime.fromisoformat(normalized).timestamp() * 1_000_000)
+            except ValueError:
+                timestamp_micros = 0
+
+        cid = (comment.id or "").strip()
+        numeric_id = int(cid) if cid.isdigit() else -1
+        return (timestamp_micros, numeric_id, cid.lower())
 
     @staticmethod
     def _bbcloud_open_task_from_value(t: Any, out_len: int) -> UnresolvedReviewItem | None:

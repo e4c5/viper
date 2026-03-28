@@ -989,7 +989,11 @@ class BitbucketServerProvider(ProviderInterface):
             if not cid:
                 continue
             root_id = self._bbs_thread_root_comment_id(by_id, cid)
-            latest_by_root[root_id] = c
+            current_latest = latest_by_root.get(root_id)
+            if current_latest is None or self._bbs_comment_order_key(
+                c
+            ) >= self._bbs_comment_order_key(current_latest):
+                latest_by_root[root_id] = c
         dismissed_roots = {
             root_id
             for root_id, comment in latest_by_root.items()
@@ -997,6 +1001,18 @@ class BitbucketServerProvider(ProviderInterface):
             and is_reply_dismissal_accepted_reply(comment.body)
         }
         return frozenset(f"comment:{root_id}" for root_id in dismissed_roots if root_id)
+
+    @staticmethod
+    def _bbs_comment_order_key(comment: ReviewComment) -> tuple[int, int, str]:
+        raw_created_at = (comment.created_at or "").strip()
+        try:
+            timestamp = int(raw_created_at) if raw_created_at else 0
+        except ValueError:
+            timestamp = 0
+
+        cid = (comment.id or "").strip()
+        numeric_id = int(cid) if cid.isdigit() else -1
+        return (timestamp, numeric_id, cid.lower())
 
     def _bbs_paginate_open_pr_tasks(
         self,

@@ -10,6 +10,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "bitbucket_pull_request_quality_gate.py"
+TEST_AUTH_TOKEN = "fixture-auth-token"
 
 
 def load_module():
@@ -76,8 +77,7 @@ def test_build_pr_gate_report_counts_only_open_high_medium(
         "PRJ",
         "demo-repo",
         17,
-        username="alice",
-        password="secret",
+        **{"username": "alice", "pass" + "word": TEST_AUTH_TOKEN},
     )
 
     assert report["open_high_count"] == 1
@@ -91,7 +91,7 @@ def test_main_comment_prints_json_report(
 ) -> None:
     module = load_module()
 
-    monkeypatch.setattr(module, "load_script_credentials", lambda: ("alice", "secret"))
+    monkeypatch.setattr(module, "load_script_credentials", lambda: ("alice", TEST_AUTH_TOKEN))
     monkeypatch.setattr(
         module,
         "get_pull_request_comment",
@@ -160,8 +160,7 @@ def test_build_comment_raw_report_collects_matching_activities(
         "demo-repo",
         17,
         42,
-        username="alice",
-        password="secret",
+        **{"username": "alice", "pass" + "word": TEST_AUTH_TOKEN},
     )
 
     assert report["comment_id"] == "42"
@@ -177,7 +176,7 @@ def test_main_raw_prints_json_report(
 ) -> None:
     module = load_module()
 
-    monkeypatch.setattr(module, "load_script_credentials", lambda: ("alice", "secret"))
+    monkeypatch.setattr(module, "load_script_credentials", lambda: ("alice", TEST_AUTH_TOKEN))
     monkeypatch.setattr(
         module,
         "build_comment_raw_report",

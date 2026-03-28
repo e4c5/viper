@@ -513,6 +513,38 @@ class GitHubProvider(ProviderInterface):
         data = self._get(path, params={"per_page": 100})
         return file_infos_from_pull_file_list(data) if isinstance(data, list) else []
 
+    @staticmethod
+    def _github_pr_file_matches_path(item: dict[str, Any], wanted_path: str) -> bool:
+        filename = normalize_diff_anchor_path(str(item.get("filename") or ""))
+        previous = normalize_diff_anchor_path(str(item.get("previous_filename") or ""))
+        return wanted_path in {filename, previous}
+
+    @staticmethod
+    def _github_single_file_diff_from_item(item: dict[str, Any]) -> str:
+        patch_text = str(item.get("patch") or "").strip()
+        if not patch_text:
+            return ""
+        old_path = str(item.get("previous_filename") or item.get("filename") or "")
+        new_path = str(item.get("filename") or old_path)
+        lines = [
+            f"diff --git a/{old_path} b/{new_path}",
+            f"--- a/{old_path}",
+            f"+++ b/{new_path}",
+            patch_text,
+        ]
+        return "\n".join(lines)
+
+    def _github_diff_for_matching_pr_file(
+        self, data: list[Any], wanted_path: str
+    ) -> str | None:
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            if not self._github_pr_file_matches_path(item, wanted_path):
+                continue
+            return self._github_single_file_diff_from_item(item)
+        return None
+
     def get_pr_diff_for_file(self, owner: str, repo: str, pr_number: int, path: str) -> str:
         """Return a single-file diff using GitHub's per-file ``patch`` payload when available."""
         wanted_path = normalize_diff_anchor_path(path)
@@ -524,25 +556,9 @@ class GitHubProvider(ProviderInterface):
             data = self._get(api_path, params={"per_page": 100, "page": page})
             if not isinstance(data, list) or not data:
                 return ""
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                filename = normalize_diff_anchor_path(str(item.get("filename") or ""))
-                previous = normalize_diff_anchor_path(str(item.get("previous_filename") or ""))
-                if wanted_path not in {filename, previous}:
-                    continue
-                patch_text = str(item.get("patch") or "").strip()
-                if not patch_text:
-                    return ""
-                old_path = str(item.get("previous_filename") or item.get("filename") or "")
-                new_path = str(item.get("filename") or old_path)
-                lines = [
-                    f"diff --git a/{old_path} b/{new_path}",
-                    f"--- a/{old_path}",
-                    f"+++ b/{new_path}",
-                    patch_text,
-                ]
-                return "\n".join(lines)
+            match = self._github_diff_for_matching_pr_file(data, wanted_path)
+            if match is not None:
+                return match
             if len(data) < 100:
                 return ""
             page += 1
@@ -701,31 +717,14 @@ class GitHubProvider(ProviderInterface):
     ) -> ReviewThreadDismissalContext | None:
         if not thread_graphql_id or not cnodes:
             return None
-        entries: list[ReviewThreadDismissalEntry] = []
-        path = ""
-        line = 0
-        for c in cnodes:
-            if not isinstance(c, dict):
-                continue
-            auth = c.get("author") if isinstance(c.get("author"), dict) else {}
-            login = str((auth or {}).get("login") or "")
-            if not path:
-                path = str(c.get("path") or "")
-            if not line:
-                try:
-                    line = int(c.get("line") or 0)
-                except (TypeError, ValueError):
-                    line = 0
-            entries.append(
-                ReviewThreadDismissalEntry(
-                    comment_id=str(c.get("databaseId") or ""),
-                    author_login=login,
-                    body=str(c.get("body") or ""),
-                    created_at=str(c.get("createdAt") or ""),
-                )
-            )
+        entries = [
+            self._github_dismissal_entry_from_comment_node(comment)
+            for comment in cnodes
+            if isinstance(comment, dict)
+        ]
         if len(entries) < 2:
             return None
+        path, line = self._github_thread_anchor_from_comment_nodes(cnodes)
         return ReviewThreadDismissalContext(
             gate_exclusion_stable_id=f"github:thread:{thread_graphql_id}",
             thread_id=thread_graphql_id,
@@ -733,6 +732,40 @@ class GitHubProvider(ProviderInterface):
             line=line,
             entries=entries,
         )
+
+    @staticmethod
+    def _github_dismissal_entry_from_comment_node(
+        comment: dict[str, Any]
+    ) -> ReviewThreadDismissalEntry:
+        author = comment.get("author") if isinstance(comment.get("author"), dict) else {}
+        return ReviewThreadDismissalEntry(
+            comment_id=str(comment.get("databaseId") or ""),
+            author_login=str(author.get("login") or ""),
+            body=str(comment.get("body") or ""),
+            created_at=str(comment.get("createdAt") or ""),
+        )
+
+    @staticmethod
+    def _github_thread_anchor_from_comment_nodes(cnodes: list[dict[str, Any]]) -> tuple[str, int]:
+        path = ""
+        line = 0
+        for comment in cnodes:
+            if not isinstance(comment, dict):
+                continue
+            if not path:
+                path = str(comment.get("path") or "")
+            if not line:
+                line = GitHubProvider._github_comment_line(comment)
+            if path and line:
+                break
+        return path, line
+
+    @staticmethod
+    def _github_comment_line(comment: dict[str, Any]) -> int:
+        try:
+            return int(comment.get("line") or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _github_dismissal_context_in_thread_nodes(
         self, nodes: list[Any], want_id: int

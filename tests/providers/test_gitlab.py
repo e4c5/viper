@@ -47,6 +47,38 @@ def test_get_review_thread_dismissal_context_gitlab():
     assert [e.comment_id for e in ctx.entries] == ["10", "11"]
 
 
+def test_get_review_thread_dismissal_context_gitlab_uses_position_anchor():
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p._get_mr_discussions_paginated = MagicMock(
+        return_value=[
+            {
+                "id": "disc-123",
+                "notes": [
+                    {
+                        "id": 10,
+                        "body": "[High] x",
+                        "created_at": "t1",
+                        "author": {"username": "bot"},
+                        "position": {"new_path": "src/a.py", "new_line": 17},
+                    },
+                    {
+                        "id": 11,
+                        "body": "fixed",
+                        "created_at": "t2",
+                        "author": {"username": "dev"},
+                    },
+                ],
+            }
+        ]
+    )
+
+    ctx = p.get_review_thread_dismissal_context("owner", "repo", 1, "11")
+
+    assert ctx is not None
+    assert ctx.path == "src/a.py"
+    assert ctx.line == 17
+
+
 @patch.object(GitLabProvider, "_put")
 def test_resolve_review_thread_gitlab(mock_put):
     from code_review.schemas.review_thread_dismissal import ReviewThreadDismissalContext

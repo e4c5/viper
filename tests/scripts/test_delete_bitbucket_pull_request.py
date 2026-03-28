@@ -9,6 +9,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "delete_bitbucket_pull_request.py"
+TEST_AUTH_TOKEN = "fixture-auth-token"
 
 
 def load_module():
@@ -26,7 +27,7 @@ def test_main_deletes_pull_request_and_prints_summary(
 ) -> None:
     module = load_module()
 
-    monkeypatch.setattr(module, "load_script_credentials", lambda: ("alice", "secret"))
+    monkeypatch.setattr(module, "load_script_credentials", lambda: ("alice", TEST_AUTH_TOKEN))
     monkeypatch.setattr(
         module,
         "delete_pull_request",

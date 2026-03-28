@@ -20,6 +20,7 @@ from local_env import load_local_env
 
 BITBUCKET_BASE_URL = "http://localhost:7990"
 BITBUCKET_REST_API_BASE = f"{BITBUCKET_BASE_URL}/rest/api/1.0"
+JSON_CONTENT_TYPE = "application/json"
 
 
 def load_script_credentials() -> tuple[str, str]:
@@ -130,8 +131,8 @@ def bitbucket_request(
         method=method,
         headers={
             "Authorization": auth_header(username, password),
-            "Accept": "application/json",
-            "Content-Type": "application/json",
+            "Accept": JSON_CONTENT_TYPE,
+            "Content-Type": JSON_CONTENT_TYPE,
         },
     )
     try:
@@ -141,7 +142,7 @@ def bitbucket_request(
                 return None
             text = body.decode("utf-8")
             content_type = response.headers.get("Content-Type", "")
-            if "application/json" in content_type or text.lstrip().startswith(("{", "[")):
+            if JSON_CONTENT_TYPE in content_type or text.lstrip().startswith(("{", "[")):
                 return json.loads(text)
             return text
     except HTTPError as exc:

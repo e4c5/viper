@@ -509,6 +509,8 @@ def test_get_review_thread_dismissal_context_finds_thread(mock_gql):
     assert ctx is not None
     assert ctx.gate_exclusion_stable_id == "github:thread:PRRT_kwDOABC"
     assert ctx.thread_id == "PRRT_kwDOABC"
+    assert ctx.path == "a.py"
+    assert ctx.line == 1
     assert len(ctx.entries) == 2
 
 

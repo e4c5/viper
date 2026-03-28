@@ -1717,6 +1717,50 @@ def _reply_dismissal_diff_context_for_thread(
     return "\n".join(lines)
 
 
+def _reply_dismissal_entry_tags(
+    ent,
+    *,
+    original_comment_id: str,
+    triggered_comment_id: str,
+    bot: BotAttributionIdentity,
+) -> list[str]:
+    tags: list[str] = []
+    cid = (ent.comment_id or "").strip()
+    if cid and cid == original_comment_id:
+        tags.append("original automated review comment")
+    if cid and cid == triggered_comment_id:
+        tags.append("triggering human reply")
+    if _reply_dismissal_entry_is_bot_authored(ent.author_login, bot):
+        tags.append("bot-authored")
+    return tags
+
+
+def _reply_dismissal_entry_lines(
+    ent,
+    index: int,
+    *,
+    original_comment_id: str,
+    triggered_comment_id: str,
+    bot: BotAttributionIdentity,
+) -> list[str]:
+    lines = [f"--- Comment {index} ---"]
+    tags = _reply_dismissal_entry_tags(
+        ent,
+        original_comment_id=original_comment_id,
+        triggered_comment_id=triggered_comment_id,
+        bot=bot,
+    )
+    cid = (ent.comment_id or "").strip()
+    if tags:
+        lines.append(f"Role: {', '.join(tags)}")
+    if cid:
+        lines.append(f"Comment id: {cid}")
+    lines.append(f"Author: {(ent.author_login or '').strip() or '(unknown)'}")
+    lines.append(ent.body or "")
+    lines.append("")
+    return lines
+
+
 def _format_reply_dismissal_user_message(
     ctx: ReviewThreadDismissalContext,
     bot: BotAttributionIdentity,
@@ -1738,22 +1782,15 @@ def _format_reply_dismissal_user_message(
         "Thread comments in chronological order:",
     ]
     for i, ent in enumerate(ctx.entries, start=1):
-        lines.append(f"--- Comment {i} ---")
-        tags: list[str] = []
-        cid = (ent.comment_id or "").strip()
-        if cid and cid == original_comment_id:
-            tags.append("original automated review comment")
-        if cid and cid == triggered_comment_id:
-            tags.append("triggering human reply")
-        if _reply_dismissal_entry_is_bot_authored(ent.author_login, bot):
-            tags.append("bot-authored")
-        if tags:
-            lines.append(f"Role: {', '.join(tags)}")
-        if cid:
-            lines.append(f"Comment id: {cid}")
-        lines.append(f"Author: {(ent.author_login or '').strip() or '(unknown)'}")
-        lines.append(ent.body or "")
-        lines.append("")
+        lines.extend(
+            _reply_dismissal_entry_lines(
+                ent,
+                i,
+                original_comment_id=original_comment_id,
+                triggered_comment_id=triggered_comment_id,
+                bot=bot,
+            )
+        )
     if diff_context:
         lines.append(diff_context)
     return "\n".join(lines)

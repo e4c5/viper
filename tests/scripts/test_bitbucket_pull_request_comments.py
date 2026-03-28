@@ -9,6 +9,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "bitbucket_pull_request_comments.py"
+TEST_AUTH_TOKEN = "fixture-auth-token"
 
 
 def load_module():
@@ -26,7 +27,7 @@ def test_main_lists_pull_request_comments_as_json(
 ) -> None:
     module = load_module()
 
-    monkeypatch.setattr(module, "load_script_credentials", lambda: ("alice", "secret"))
+    monkeypatch.setattr(module, "load_script_credentials", lambda: ("alice", TEST_AUTH_TOKEN))
     monkeypatch.setattr(
         module,
         "list_pull_request_comments",
@@ -55,7 +56,7 @@ def test_main_deletes_pull_request_comment_and_prints_summary(
 ) -> None:
     module = load_module()
 
-    monkeypatch.setattr(module, "load_script_credentials", lambda: ("alice", "secret"))
+    monkeypatch.setattr(module, "load_script_credentials", lambda: ("alice", TEST_AUTH_TOKEN))
     monkeypatch.setattr(
         module,
         "delete_pull_request_comment",
