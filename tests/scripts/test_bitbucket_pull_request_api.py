@@ -31,8 +31,8 @@ def test_delete_pull_request_reads_current_version_before_delete(monkeypatch: py
     def fake_get_pull_request(*args, **kwargs):
         return {"id": 17, "title": "feature/test -> main", "version": 4}
 
-    def fake_bitbucket_request(method, url, *, username, payload=None, **kwargs):
-        requests.append((method, url, payload or {}))
+    def fake_bitbucket_request(method, url, *, username, payload=None, params=None, **kwargs):
+        requests.append((method, url, params or {}))
         assert username == TEST_USERNAME
         assert kwargs[AUTH_SECRET_FIELD] == TEST_AUTH_SECRET
         return None

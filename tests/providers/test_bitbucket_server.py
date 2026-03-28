@@ -528,37 +528,31 @@ def test_get_incremental_pr_files_parse_compare_diff(mock_client):
 
 
 # ---------------------------------------------------------------------------
-# get_existing_review_comments starts from /activities and may enrich from /comments
+# get_existing_review_comments uses /activities (not /comments)
 # ---------------------------------------------------------------------------
 
 
 @patch("code_review.providers.bitbucket_server.httpx.Client")
 def test_get_existing_review_comments_uses_activities_endpoint(mock_client):
-    """get_existing_review_comments must still fetch the canonical thread list from /activities."""
+    """get_existing_review_comments must call /activities, not /comments.
 
-    def _get_side_effect(url: str, params=None, **kwargs):
-        u = str(url)
-        if u.endswith("/activities"):
-            return _mock_bb_json_response(
-                _bbs_page(
-                    _bbs_commented_activity(
-                        _bbs_comment(1, "Looks good", path="src/Foo.java", line=5)
-                    )
-                )
-            )
-        if u.endswith("/comments"):
-            return _mock_bb_json_response(_bbs_page())
-        return _mock_bb_json_response({})
-
-    mock_client.return_value.__enter__.return_value.get.side_effect = _get_side_effect
+    Bitbucket Server requires a 'path' query parameter for GET /comments and
+    returns 400/404 without it. The activities endpoint is the correct way to
+    retrieve all PR comments.
+    """
+    mock_client.return_value.__enter__.return_value.get.return_value = _mock_bb_json_response(
+        _bbs_page(
+            _bbs_commented_activity(_bbs_comment(1, "Looks good", path="src/Foo.java", line=5))
+        )
+    )
 
     p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
     comments = p.get_existing_review_comments("PROJ", "my-repo", 42)
 
-    called_urls = [
-        call.args[0] for call in mock_client.return_value.__enter__.return_value.get.call_args_list
-    ]
-    assert any(url.endswith("/activities") for url in called_urls), called_urls
+    call_args = mock_client.return_value.__enter__.return_value.get.call_args
+    called_url = call_args[0][0]
+    assert called_url.endswith("/activities"), f"Expected /activities endpoint, got: {called_url}"
+    assert "/comments" not in called_url
 
     assert len(comments) == 1
     assert comments[0].body == "Looks good"

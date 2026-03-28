@@ -383,7 +383,7 @@ def delete_pull_request(
         pull_requests_url(project_key, repo_slug, pull_request_id),
         username=username,
         password=password,
-        payload={"version": pull_request_version(pull_request)},
+        params={"version": pull_request_version(pull_request)},
     )
     return pull_request
 

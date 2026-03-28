@@ -977,11 +977,6 @@ class BitbucketServerProvider(ProviderInterface):
         with action COMMENTED are the supported way to list comments.
         """
         existing, _ = self._bbs_collect_activity_review_comments(owner, repo, pr_number)
-        endpoint_comments = self._bbs_collect_comments_endpoint_review_comments(
-            owner, repo, pr_number
-        )
-        if endpoint_comments:
-            return self._bbs_merge_review_comment_lists(existing, endpoint_comments)
         return existing
 
     def _bbs_collect_activity_review_comments(

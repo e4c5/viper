@@ -298,11 +298,22 @@ class BitbucketProvider(ProviderInterface):
         return str(content.get("raw") or "")
 
     @staticmethod
-    def _bbcloud_comment_author_login(comment: dict[str, Any]) -> str:
-        user = comment.get("user")
+    def _bbcloud_user_identity(user: dict[str, Any]) -> str:
+        """Best identifier for bot-matching on Bitbucket Cloud comments."""
         if not isinstance(user, dict):
             return ""
-        return str(user.get("nickname") or user.get("username") or user.get("display_name") or "")
+        return str(
+            user.get("username")
+            or user.get("uuid")
+            or user.get("nickname")
+            or user.get("display_name")
+            or ""
+        )
+
+    @classmethod
+    def _bbcloud_comment_author_login(cls, comment: dict[str, Any]) -> str:
+        user = comment.get("user")
+        return cls._bbcloud_user_identity(user if isinstance(user, dict) else {})
 
     @staticmethod
     def _bbcloud_is_inline_root_unresolved_comment(comment: ReviewComment) -> bool:
@@ -552,9 +563,7 @@ class BitbucketProvider(ProviderInterface):
         content = c.get("content") if isinstance(c.get("content"), dict) else {}
         body = str(content.get("raw") or "")
         user = c.get("user") if isinstance(c.get("user"), dict) else {}
-        login = str(
-            user.get("nickname") or user.get("username") or user.get("display_name") or ""
-        )
+        login = BitbucketProvider._bbcloud_user_identity(user)
         created = str(c.get("created_on") or "")
         path, line = BitbucketProvider._bbcloud_inline_path_line(c)
         return (cid, parent, body, login, created, path, line)
