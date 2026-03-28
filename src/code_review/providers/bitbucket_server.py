@@ -54,6 +54,51 @@ def _http_error_response_text(exc: httpx.HTTPStatusError, limit: int = 2000) -> 
     return ""
 
 
+def bitbucket_server_persisted_dismissed_root_ids(
+    comments: list[ReviewComment],
+    bot: BotAttributionIdentity,
+) -> frozenset[str]:
+    """Stable ids for threads whose latest reply is the durable accepted-thread marker."""
+    by_id = {str(c.id or "").strip(): c for c in comments if (c.id or "").strip()}
+    latest_by_root: dict[str, ReviewComment] = {}
+    bot_login = (bot.login or "").strip().lower()
+    bot_slug = (bot.slug or "").strip().lower()
+
+    def _comment_is_bot_authored(comment: ReviewComment) -> bool:
+        author_login = (comment.author_login or "").strip().lower()
+        if not author_login:
+            return False
+        if bot_login and author_login == bot_login:
+            return True
+        return bool(bot_slug and author_login == bot_slug)
+
+    def _comment_order_key(comment: ReviewComment) -> tuple[int, int, str]:
+        raw_created_at = (comment.created_at or "").strip()
+        try:
+            timestamp = int(raw_created_at) if raw_created_at else 0
+        except ValueError:
+            timestamp = 0
+
+        cid = (comment.id or "").strip()
+        numeric_id = int(cid) if cid.isdigit() else -1
+        return (timestamp, numeric_id, cid.lower())
+
+    for comment in comments:
+        cid = (comment.id or "").strip()
+        if not cid:
+            continue
+        root_id = BitbucketServerProvider._bbs_thread_root_comment_id(by_id, cid)
+        current_latest = latest_by_root.get(root_id)
+        if current_latest is None or _comment_order_key(comment) >= _comment_order_key(current_latest):
+            latest_by_root[root_id] = comment
+    dismissed_roots = {
+        root_id
+        for root_id, comment in latest_by_root.items()
+        if _comment_is_bot_authored(comment) and is_reply_dismissal_accepted_reply(comment.body)
+    }
+    return frozenset(f"comment:{root_id}" for root_id in dismissed_roots if root_id)
+
+
 def _bbs_blocking_state_for_one_entry(
     rev: dict, want_slug_lower: str
 ) -> BotBlockingState | None:
@@ -1022,25 +1067,7 @@ class BitbucketServerProvider(ProviderInterface):
         comments: list[ReviewComment],
         bot: BotAttributionIdentity,
     ) -> frozenset[str]:
-        by_id = {str(c.id or "").strip(): c for c in comments if (c.id or "").strip()}
-        latest_by_root: dict[str, ReviewComment] = {}
-        for c in comments:
-            cid = (c.id or "").strip()
-            if not cid:
-                continue
-            root_id = self._bbs_thread_root_comment_id(by_id, cid)
-            current_latest = latest_by_root.get(root_id)
-            if current_latest is None or self._bbs_comment_order_key(
-                c
-            ) >= self._bbs_comment_order_key(current_latest):
-                latest_by_root[root_id] = c
-        dismissed_roots = {
-            root_id
-            for root_id, comment in latest_by_root.items()
-            if self._bbs_comment_is_bot_authored(comment, bot)
-            and is_reply_dismissal_accepted_reply(comment.body)
-        }
-        return frozenset(f"comment:{root_id}" for root_id in dismissed_roots if root_id)
+        return bitbucket_server_persisted_dismissed_root_ids(comments, bot)
 
     @staticmethod
     def _bbs_comment_order_key(comment: ReviewComment) -> tuple[int, int, str]:

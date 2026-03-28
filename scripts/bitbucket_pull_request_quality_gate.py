@@ -35,6 +35,11 @@ from bitbucket_pull_request_api import (
     load_script_credentials,
 )
 from code_review.formatters.comment import infer_severity_from_comment_body
+from code_review.providers.base import BotAttributionIdentity, ReviewComment
+from code_review.providers.bitbucket_server import (
+    BitbucketServerProvider,
+    bitbucket_server_persisted_dismissed_root_ids,
+)
 
 PROJECT_KEY_HELP = "Bitbucket project key, for example PRJ"
 REPO_SLUG_HELP = "Bitbucket repository slug"
@@ -74,15 +79,7 @@ def comment_is_outdated(comment: dict[str, Any]) -> bool:
 
 def comment_gate_status(comment: dict[str, Any]) -> tuple[bool, str]:
     """Return whether the comment counts for the quality gate and why."""
-    state = str(comment.get("state") or "").strip().upper()
-    body = str(comment.get("text") or comment.get("body") or "").strip()
-    if state == "RESOLVED":
-        return False, "resolved"
-    if comment_is_outdated(comment):
-        return False, "outdated_or_orphaned"
-    if not body:
-        return False, "empty_body"
-    return True, "open"
+    return _comment_gate_status_with_provider_context(comment)
 
 
 def task_gate_status(task: dict[str, Any]) -> tuple[bool, str]:
@@ -99,6 +96,109 @@ def task_gate_status(task: dict[str, Any]) -> tuple[bool, str]:
 def build_comment_report(comment: dict[str, Any]) -> dict[str, Any]:
     """Return a JSON-friendly quality-gate report for one PR comment."""
     counts, reason = comment_gate_status(comment)
+    anchor = comment.get("anchor") if isinstance(comment.get("anchor"), dict) else {}
+    body = str(comment.get("text") or comment.get("body") or "")
+    return {
+        "kind": "comment",
+        "comment_id": str(comment.get("id") or ""),
+        "parent_comment_id": _comment_parent_id(comment),
+        "state": str(comment.get("state") or ""),
+        "counts_for_quality_gate": counts,
+        "quality_gate_reason": reason,
+        "inferred_severity": infer_severity_from_comment_body(body),
+        "path": str(anchor.get("path") or ""),
+        "line": int(anchor.get("line") or 0),
+        "anchor_orphaned": comment_is_outdated(comment),
+        "anchor_state": str(anchor.get("state") or anchor.get("anchorState") or ""),
+        "body": body,
+    }
+
+
+def _provider_comment_gate_context(
+    comments: list[dict[str, Any]],
+    *,
+    bot_login: str,
+) -> tuple[dict[str, ReviewComment], frozenset[str]]:
+    review_comments = [
+        review_comment
+        for comment in comments
+        if (
+            review_comment := BitbucketServerProvider._bbs_review_comment_from_comment_dict(comment)
+        )
+        is not None
+    ]
+    by_id = {str(comment.id or "").strip(): comment for comment in review_comments if (comment.id or "").strip()}
+    bot = BotAttributionIdentity(login=bot_login, slug=bot_login)
+    dismissed_stable_ids = bitbucket_server_persisted_dismissed_root_ids(review_comments, bot)
+    return by_id, dismissed_stable_ids
+
+
+def _load_provider_comment_gate_context_for_pr(
+    project_key: str,
+    repo_slug: str,
+    pull_request_id: int,
+    *,
+    username: str,
+    password: str,
+) -> tuple[list[dict[str, Any]], dict[str, ReviewComment], frozenset[str]]:
+    comments = list_pull_request_comments(
+        project_key,
+        repo_slug,
+        pull_request_id,
+        username=username,
+        password=password,
+    )
+    review_comments_by_id, dismissed_stable_ids = _provider_comment_gate_context(
+        comments,
+        bot_login=username,
+    )
+    return comments, review_comments_by_id, dismissed_stable_ids
+
+
+def _comment_gate_status_with_provider_context(
+    comment: dict[str, Any],
+    *,
+    review_comments_by_id: dict[str, ReviewComment] | None = None,
+    dismissed_stable_ids: frozenset[str] | None = None,
+) -> tuple[bool, str]:
+    """Return the same open/closed decision used by the production provider when possible."""
+    review_comment = BitbucketServerProvider._bbs_review_comment_from_comment_dict(comment)
+    if review_comment is None:
+        state = str(comment.get("state") or "").strip().upper()
+        body = str(comment.get("text") or comment.get("body") or "").strip()
+        if state == "RESOLVED":
+            return False, "resolved"
+        if comment_is_outdated(comment):
+            return False, "outdated_or_orphaned"
+        if not body:
+            return False, "empty_body"
+        return True, "open"
+
+    comment_id = (review_comment.id or "").strip()
+    if comment_id and review_comments_by_id:
+        root_id = BitbucketServerProvider._bbs_thread_root_comment_id(review_comments_by_id, comment_id)
+        if f"comment:{root_id}" in (dismissed_stable_ids or frozenset()):
+            return False, "dismissed_thread"
+    if review_comment.resolved:
+        return False, "resolved"
+    if review_comment.outdated:
+        return False, "outdated_or_orphaned"
+    if not (review_comment.body or "").strip():
+        return False, "empty_body"
+    return True, "open"
+
+
+def _build_comment_report_with_provider_context(
+    comment: dict[str, Any],
+    *,
+    review_comments_by_id: dict[str, ReviewComment],
+    dismissed_stable_ids: frozenset[str],
+) -> dict[str, Any]:
+    counts, reason = _comment_gate_status_with_provider_context(
+        comment,
+        review_comments_by_id=review_comments_by_id,
+        dismissed_stable_ids=dismissed_stable_ids,
+    )
     anchor = comment.get("anchor") if isinstance(comment.get("anchor"), dict) else {}
     body = str(comment.get("text") or comment.get("body") or "")
     return {
@@ -141,15 +241,20 @@ def build_pr_gate_report(
     password: str,
 ) -> dict[str, Any]:
     """Return a PR-wide snapshot of comments/tasks that currently affect the gate."""
+    comments, review_comments_by_id, dismissed_stable_ids = _load_provider_comment_gate_context_for_pr(
+        project_key,
+        repo_slug,
+        pull_request_id,
+        username=username,
+        password=password,
+    )
     comment_reports = [
-        build_comment_report(comment)
-        for comment in list_pull_request_comments(
-            project_key,
-            repo_slug,
-            pull_request_id,
-            username=username,
-            password=password,
+        _build_comment_report_with_provider_context(
+            comment,
+            review_comments_by_id=review_comments_by_id,
+            dismissed_stable_ids=dismissed_stable_ids,
         )
+        for comment in comments
     ]
     task_reports = [
         build_task_report(task)
@@ -218,6 +323,13 @@ def build_comment_raw_report(
         username=username,
         password=password,
     )
+    _, review_comments_by_id, dismissed_stable_ids = _load_provider_comment_gate_context_for_pr(
+        project_key,
+        repo_slug,
+        pull_request_id,
+        username=username,
+        password=password,
+    )
     wanted = str(comment_id)
     matching_activities = [
         activity
@@ -241,7 +353,11 @@ def build_comment_raw_report(
         "pull_request_id": pull_request_id,
         "comment_id": wanted,
         "comment_endpoint": direct_comment,
-        "quality_gate_view": build_comment_report(direct_comment),
+        "quality_gate_view": _build_comment_report_with_provider_context(
+            direct_comment,
+            review_comments_by_id=review_comments_by_id,
+            dismissed_stable_ids=dismissed_stable_ids,
+        ),
         "matching_activities": matching_activities,
         "matching_activity_comments": matching_activity_comments,
     }
@@ -298,7 +414,23 @@ def main() -> None:
             username=username,
             password=password,
         )
-        print(json.dumps(build_comment_report(comment), indent=2))
+        _, review_comments_by_id, dismissed_stable_ids = _load_provider_comment_gate_context_for_pr(
+            args.project_key,
+            args.repo_slug,
+            args.pull_request_id,
+            username=username,
+            password=password,
+        )
+        print(
+            json.dumps(
+                _build_comment_report_with_provider_context(
+                    comment,
+                    review_comments_by_id=review_comments_by_id,
+                    dismissed_stable_ids=dismissed_stable_ids,
+                ),
+                indent=2,
+            )
+        )
         return
 
     if args.command == "raw":

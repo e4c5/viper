@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from code_review.reply_dismissal_state import REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "bitbucket_pull_request_quality_gate.py"
@@ -85,6 +87,50 @@ def test_build_pr_gate_report_counts_only_open_high_medium(
     assert [item["kind"] for item in report["counted_items"]] == ["comment", "task"]
 
 
+def test_build_pr_gate_report_excludes_dismissed_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_module()
+
+    monkeypatch.setattr(
+        module,
+        "list_pull_request_comments",
+        lambda *args, **kwargs: [
+            {
+                "id": 1,
+                "text": "[High] still blocking",
+                "state": "OPEN",
+                "author": {"name": "review-bot"},
+                "anchor": {"path": "src/Foo.java", "line": 5},
+            },
+            {
+                "id": 2,
+                "text": REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT,
+                "state": "OPEN",
+                "author": {"name": "review-bot"},
+                "parentComment": {"id": 1},
+                "anchor": {"path": "src/Foo.java", "line": 5},
+            },
+        ],
+    )
+    monkeypatch.setattr(module, "list_pull_request_tasks", lambda *args, **kwargs: [])
+
+    report = module.build_pr_gate_report(
+        "PRJ",
+        "demo-repo",
+        17,
+        **{"username": "review-bot", "pass" + "word": TEST_AUTH_TOKEN},
+    )
+
+    assert report["open_high_count"] == 0
+    assert report["open_medium_count"] == 0
+    assert report["counted_items"] == []
+    assert [item["quality_gate_reason"] for item in report["comments"]] == [
+        "dismissed_thread",
+        "dismissed_thread",
+    ]
+
+
 def test_main_comment_prints_json_report(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -101,6 +147,18 @@ def test_main_comment_prints_json_report(
             "state": "OPEN",
             "anchor": {"path": "src/Foo.java", "line": 5, "orphaned": True},
         },
+    )
+    monkeypatch.setattr(
+        module,
+        "list_pull_request_comments",
+        lambda *args, **kwargs: [
+            {
+                "id": 42,
+                "text": "[High] applied suggestion",
+                "state": "OPEN",
+                "anchor": {"path": "src/Foo.java", "line": 5, "orphaned": True},
+            }
+        ],
     )
     monkeypatch.setattr(
         sys,
@@ -122,6 +180,67 @@ def test_main_comment_prints_json_report(
     assert payload["comment_id"] == "42"
     assert payload["counts_for_quality_gate"] is False
     assert payload["quality_gate_reason"] == "outdated_or_orphaned"
+
+
+def test_main_comment_prints_json_report_for_dismissed_thread(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = load_module()
+
+    monkeypatch.setattr(module, "load_script_credentials", lambda: ("review-bot", TEST_AUTH_TOKEN))
+    monkeypatch.setattr(
+        module,
+        "get_pull_request_comment",
+        lambda *args, **kwargs: {
+            "id": 42,
+            "text": "[High] sanitize this",
+            "state": "OPEN",
+            "author": {"name": "review-bot"},
+            "anchor": {"path": "src/Foo.java", "line": 5},
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "list_pull_request_comments",
+        lambda *args, **kwargs: [
+            {
+                "id": 42,
+                "text": "[High] sanitize this",
+                "state": "OPEN",
+                "author": {"name": "review-bot"},
+                "anchor": {"path": "src/Foo.java", "line": 5},
+            },
+            {
+                "id": 43,
+                "text": REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT,
+                "state": "OPEN",
+                "author": {"name": "review-bot"},
+                "parentComment": {"id": 42},
+                "anchor": {"path": "src/Foo.java", "line": 5},
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "bitbucket_pull_request_quality_gate.py",
+            "comment",
+            "PRJ",
+            "demo-repo",
+            "17",
+            "42",
+        ],
+    )
+
+    assert module.main() is None
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["comment_id"] == "42"
+    assert payload["counts_for_quality_gate"] is False
+    assert payload["quality_gate_reason"] == "dismissed_thread"
 
 
 def test_build_comment_raw_report_collects_matching_activities(
@@ -152,6 +271,18 @@ def test_build_comment_raw_report_collects_matching_activities(
                     "comments": [{"id": 42, "text": "reply"}],
                 },
             },
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "list_pull_request_comments",
+        lambda *args, **kwargs: [
+            {
+                "id": 42,
+                "text": "[Medium] apply this",
+                "state": "OPEN",
+                "anchor": {"path": "src/Foo.java", "line": 7},
+            }
         ],
     )
 
