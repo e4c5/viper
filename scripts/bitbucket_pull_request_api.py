@@ -100,6 +100,15 @@ def pull_request_comments_url(
     return f"{comments_url}/{urllib.parse.quote(str(comment_id), safe='')}"
 
 
+def pull_request_tasks_url(
+    project_key: str,
+    repo_slug: str,
+    pull_request_id: int | str,
+) -> str:
+    """Return the REST URL for pull request tasks."""
+    return f"{pull_requests_url(project_key, repo_slug, pull_request_id)}/tasks"
+
+
 def bitbucket_request(
     method: str,
     url: str,
@@ -352,6 +361,49 @@ def delete_pull_request_comment(
         params={"version": version},
     )
     return comment
+
+
+def list_pull_request_tasks(
+    project_key: str,
+    repo_slug: str,
+    pull_request_id: int | str,
+    *,
+    username: str,
+    password: str,
+) -> list[dict[str, Any]]:
+    """List pull request tasks via the paginated tasks endpoint."""
+    tasks: list[dict[str, Any]] = []
+    start = 0
+    seen_starts: set[int] = set()
+    max_pages = 500
+    for _ in range(max_pages):
+        if start in seen_starts:
+            raise RuntimeError(
+                "Bitbucket task pagination cycle detected while listing pull request tasks: "
+                f"repeated start={start}."
+            )
+        seen_starts.add(start)
+        result = bitbucket_request(
+            "GET",
+            pull_request_tasks_url(project_key, repo_slug, pull_request_id),
+            username=username,
+            password=password,
+            params={"start": start, "limit": 100},
+        )
+        if not isinstance(result, dict):
+            raise RuntimeError("Bitbucket returned an unexpected response while listing pull request tasks.")
+        for task in result.get("values") or []:
+            if isinstance(task, dict):
+                tasks.append(task)
+        next_start = _next_page_start(result, start)
+        if next_start is None:
+            break
+        start = next_start
+    else:
+        raise RuntimeError(
+            f"Bitbucket task pagination exceeded max_pages={max_pages} while listing pull request tasks."
+        )
+    return tasks
 
 
 def extract_pull_request_url(pull_request: dict[str, Any]) -> str:
