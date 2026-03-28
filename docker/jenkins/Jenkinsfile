@@ -48,7 +48,7 @@ pipeline {
                     def isBitbucket = (scmProvider == 'bitbucket_server') || (prAction?.startsWith('pr:'))
                     if (isBitbucket && scmProvider != 'bitbucket_server') scmProvider = 'bitbucket_server'
                     def scmUrl = isBitbucket
-                        ? (env.SCM_URL ?: env.SCM_URL_BITBUCKET ?: '')
+                        ? (env.SCM_URL ?: '')
                         : (env.SCM_URL ?: 'http://gitea:3000')
                     // Bitbucket Data Center uses pr:* for all PR eventKeys; allow any pr:* when Bitbucket
                     def allowedActions = isBitbucket
@@ -67,7 +67,7 @@ pipeline {
                     }
 
                     if (isBitbucket && !scmUrl?.trim()) {
-                        error('Bitbucket job: set SCM_URL or SCM_URL_BITBUCKET to your Bitbucket API base (e.g. https://bitbucket.example.com/rest/api/1.0). See docs/BITBUCKET-DATACENTER.md.')
+                        error('Bitbucket job: set SCM_URL to your Bitbucket API base (e.g. https://bitbucket.example.com/rest/api/1.0). See docs/BITBUCKET-DATACENTER.md.')
                     }
 
                     if (!scmOwner || scmOwner.contains(unresolvedMarker)) {

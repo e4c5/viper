@@ -112,7 +112,10 @@ def test_default_comments_webhook_spec_includes_comment_context() -> None:
 def test_build_inline_pipeline_job_config_contains_parameters_and_trigger() -> None:
     module = load_module()
 
-    xml = module.build_inline_pipeline_job_config("pipeline { agent any }", module.default_comments_webhook_spec())
+    xml = module.build_inline_pipeline_job_config(
+        "pipeline { agent any }",
+        module.default_comments_webhook_spec(),
+    )
 
     assert "<flow-definition>" in xml
     assert "<name>SCM_OWNER</name>" in xml
