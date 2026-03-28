@@ -55,6 +55,7 @@ from code_review.providers.base import (
     UnresolvedReviewItem,
     unified_diff_for_path,
 )
+from code_review.reply_dismissal_state import REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT
 from code_review.schemas.findings import FindingV1
 from code_review.schemas.reply_dismissal import ReplyDismissalVerdictV1
 from code_review.schemas.review_decision_event import (
@@ -62,7 +63,6 @@ from code_review.schemas.review_decision_event import (
     event_allows_decision_only_skip_when_bot_not_blocking,
     review_decision_event_context_from_env,
 )
-from code_review.reply_dismissal_state import REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT
 from code_review.schemas.review_thread_dismissal import ReviewThreadDismissalContext
 from code_review.standards import detect_from_paths, get_review_standards
 
@@ -2911,7 +2911,10 @@ class ReviewOrchestrator:
             provider.post_review_thread_reply(
                 owner, repo, pr_number, comment_id, verdict.reply_text
             )
-            logger.info("Reply-dismissal disagreed: posted follow-up reply to comment_id=%s", comment_id)
+            logger.info(
+                "Reply-dismissal disagreed: posted follow-up reply to comment_id=%s",
+                comment_id,
+            )
         except Exception as e:
             logger.warning("post_review_thread_reply failed: %s", e)
 
@@ -3009,7 +3012,8 @@ class ReviewOrchestrator:
         if not app_cfg.reply_dismissal_enabled:
             if comment_id:
                 logger.info(
-                    "Reply-dismissal disabled: CODE_REVIEW_REPLY_DISMISSAL_ENABLED is explicitly false; "
+                    "Reply-dismissal disabled: "
+                    "CODE_REVIEW_REPLY_DISMISSAL_ENABLED is explicitly false; "
                     "skipping LLM for comment_id=%s",
                     comment_id,
                 )
@@ -3240,7 +3244,8 @@ class ReviewOrchestrator:
         )
         user_msg = _format_reply_dismissal_user_message(dctx, bot_id, comment_id, diff_context)
         logger.info(
-            "Reply-dismissal sending thread to LLM: comment_id=%s entries=%d stable_id=%s path=%s line=%s diff_context=%s",
+            "Reply-dismissal sending thread to LLM: comment_id=%s "
+            "entries=%d stable_id=%s path=%s line=%s diff_context=%s",
             comment_id,
             len(dctx.entries),
             dctx.gate_exclusion_stable_id,
@@ -3378,12 +3383,115 @@ class ReviewOrchestrator:
             to_post=[],
         )
 
-    def run(self) -> list[FindingV1]:
-        """
-        Execute the full review flow. Returns list of findings that were posted
-        (or would be posted if dry_run).
-        """
-        # Unpack to locals for use in helper calls below.
+    def _resolve_empty_scope_submission_head_sha(
+        self,
+        provider,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        head_sha: str,
+        pr_info_for_metadata: Any,
+    ) -> str:
+        """Resolve the best head SHA to use when only refreshing the review decision."""
+        if head_sha:
+            return head_sha
+        api_head_sha = (getattr(pr_info_for_metadata, "head_sha", None) or "").strip()
+        if api_head_sha:
+            return api_head_sha
+        return _resolve_head_sha_for_review_decision_submission(
+            provider,
+            owner,
+            repo,
+            pr_number,
+            "",
+        )
+
+    def _maybe_finish_empty_scope_review(
+        self,
+        provider,
+        cfg,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        head_sha: str,
+        dry_run: bool,
+        trace_id: str,
+        start_time: float,
+        run_handle,
+        paths: list[str],
+        pr_info_for_metadata: Any,
+    ) -> list[FindingV1] | None:
+        """Handle the empty-review-scope early return, including review-decision refresh."""
+        if paths:
+            return None
+        logger.info("No files to review")
+        if bool(getattr(cfg, "review_decision_enabled", False)):
+            logger.info(
+                "Recomputing PR review decision from unresolved SCM state "
+                "despite empty review scope"
+            )
+            gate_outcome = _compute_quality_gate_review_outcome(
+                provider,
+                owner,
+                repo,
+                pr_number,
+                [],
+                cfg,
+            )
+            _log_quality_gate_review_outcome("Empty-scope refresh", gate_outcome)
+            submission_head_sha = self._resolve_empty_scope_submission_head_sha(
+                provider,
+                owner,
+                repo,
+                pr_number,
+                head_sha,
+                pr_info_for_metadata,
+            )
+            _maybe_submit_review_decision(
+                provider,
+                owner,
+                repo,
+                pr_number,
+                submission_head_sha,
+                dry_run,
+                cfg,
+                gate_outcome=gate_outcome,
+            )
+        return self._record_observability_and_build_result(
+            trace_id,
+            owner,
+            repo,
+            pr_number,
+            start_time,
+            run_handle,
+            paths,
+            [],
+            0,
+            [],
+        )
+
+    def _log_context_aware_prompt_inputs(
+        self,
+        refs: list[Any],
+        context_brief: str,
+    ) -> None:
+        """Log context-aware prompt supplements only when present."""
+        if refs:
+            logger.info("context_aware: extracted %d reference(s) from PR text", len(refs))
+        if context_brief:
+            logger.info("context_aware: distilled context attached to review prompt")
+
+    def _run_standard_review(
+        self,
+        trace_id: str,
+        start_time: float,
+        run_handle,
+        cfg,
+        llm_cfg,
+        provider,
+        app_cfg,
+    ) -> list[FindingV1]:
+        """Execute the full non-decision-only review path."""
         owner = self.owner
         repo = self.repo
         pr_number = self.pr_number
@@ -3391,18 +3499,7 @@ class ReviewOrchestrator:
         dry_run = self.dry_run
         print_findings = self.print_findings
 
-        trace_id = str(uuid.uuid4())
-        start_time = time.perf_counter()
-        run_handle = observability.start_run(trace_id)
-
-        cfg, llm_cfg, provider = self._load_config_and_provider()
-        app_cfg = get_code_review_app_config()
-        decision_only = bool(self._review_decision_only) or bool(app_cfg.review_decision_only)
-        if decision_only:
-            return self._run_review_decision_only(trace_id, start_time, run_handle, cfg, provider)
-
         pr_url = self._build_pr_url(cfg, owner, repo, pr_number)
-
         logger.info(
             "Reviewing %s/%s PR %s (provider=%s) URL: %s",
             owner,
@@ -3423,7 +3520,7 @@ class ReviewOrchestrator:
             existing,
             existing_dicts,
             ignore_set,
-            resolved_comments,
+            _resolved_comments,
             resolved_body_set,
             resolved_fp_set,
         ) = self._load_existing_comments_and_markers(provider, owner, repo, pr_number)
@@ -3458,61 +3555,29 @@ class ReviewOrchestrator:
         )
 
         pr_info_for_metadata = provider.get_pr_info(owner, repo, pr_number)
-
         _, paths, full_diff, incremental_base_sha = self._fetch_review_files_and_diffs(
             provider, cfg, owner, repo, pr_number, head_sha
         )
         paths = self._build_ignore_set_and_filter_files(paths)
         self._log_review_scope_fetch(incremental_base_sha, head_sha, paths)
-        if not paths:
-            logger.info("No files to review")
-            if bool(getattr(cfg, "review_decision_enabled", False)):
-                logger.info(
-                    "Recomputing PR review decision from unresolved SCM state "
-                    "despite empty review scope"
-                )
-                gate_outcome = _compute_quality_gate_review_outcome(
-                    provider,
-                    owner,
-                    repo,
-                    pr_number,
-                    [],
-                    cfg,
-                )
-                _log_quality_gate_review_outcome("Empty-scope refresh", gate_outcome)
-                submission_head_sha = head_sha
-                if not submission_head_sha:
-                    submission_head_sha = (
-                        getattr(pr_info_for_metadata, "head_sha", None) or ""
-                    ).strip()
-                if not submission_head_sha:
-                    submission_head_sha = _resolve_head_sha_for_review_decision_submission(
-                        provider, owner, repo, pr_number, ""
-                    )
-                _maybe_submit_review_decision(
-                    provider,
-                    owner,
-                    repo,
-                    pr_number,
-                    submission_head_sha,
-                    dry_run,
-                    cfg,
-                    gate_outcome=gate_outcome,
-                )
-            return self._record_observability_and_build_result(
-                trace_id,
-                owner,
-                repo,
-                pr_number,
-                start_time,
-                run_handle,
-                paths,
-                [],
-                0,
-                [],
-            )
-        # Optionally post an initial "Viper has started a review" comment with an
-        # auto-generated description when the PR lacks a useful description.
+
+        empty_scope_result = self._maybe_finish_empty_scope_review(
+            provider,
+            cfg,
+            owner,
+            repo,
+            pr_number,
+            head_sha,
+            dry_run,
+            trace_id,
+            start_time,
+            run_handle,
+            paths,
+            pr_info_for_metadata,
+        )
+        if empty_scope_result is not None:
+            return empty_scope_result
+
         if not dry_run:
             _maybe_post_started_review_comment(
                 provider, owner, repo, pr_number, pr_info_for_metadata, paths
@@ -3521,7 +3586,6 @@ class ReviewOrchestrator:
 
         context_window = get_context_window()
         diff_budget = int(context_window * DIFF_TOKEN_BUDGET_RATIO)
-        # Reserve room for diff/tool output and keep supplement bounded for both modes.
         remaining_prompt_tokens = max(0, context_window - diff_budget)
 
         refs, context_brief, prompt_suffix = self._build_prompt_suffix(
@@ -3536,10 +3600,7 @@ class ReviewOrchestrator:
             full_diff,
             remaining_prompt_tokens,
         )
-        if refs:
-            logger.info("context_aware: extracted %d reference(s) from PR text", len(refs))
-        if context_brief:
-            logger.info("context_aware: distilled context attached to review prompt")
+        self._log_context_aware_prompt_inputs(refs, context_brief)
 
         (
             use_file_by_file,
@@ -3563,7 +3624,6 @@ class ReviewOrchestrator:
             disable_tools=True if use_embedded_file_diffs else None,
             context_brief_attached=bool(context_brief and "<context>" in prompt_suffix),
         )
-
         all_findings = self._run_agent_and_collect_findings(
             runner,
             session_service,
@@ -3578,7 +3638,6 @@ class ReviewOrchestrator:
             prompt_suffix=prompt_suffix,
             diff_by_path=diff_by_path,
         )
-
         all_findings = self._filter_findings_by_diff_scope(all_findings, paths, full_diff)
 
         to_post = self._attach_fingerprints_and_filter_findings(
@@ -3596,7 +3655,6 @@ class ReviewOrchestrator:
             len(all_findings),
             len(to_post),
         )
-
         self._print_findings_summary(print_findings, to_post)
 
         successful_post_count = self._post_findings_and_summary(
@@ -3627,6 +3685,30 @@ class ReviewOrchestrator:
             successful_post_count,
             to_post,
             context_brief_attached=bool(context_brief and "<context>" in prompt_suffix),
+        )
+
+    def run(self) -> list[FindingV1]:
+        """
+        Execute the full review flow. Returns list of findings that were posted
+        (or would be posted if dry_run).
+        """
+        trace_id = str(uuid.uuid4())
+        start_time = time.perf_counter()
+        run_handle = observability.start_run(trace_id)
+
+        cfg, llm_cfg, provider = self._load_config_and_provider()
+        app_cfg = get_code_review_app_config()
+        decision_only = bool(self._review_decision_only) or bool(app_cfg.review_decision_only)
+        if decision_only:
+            return self._run_review_decision_only(trace_id, start_time, run_handle, cfg, provider)
+        return self._run_standard_review(
+            trace_id,
+            start_time,
+            run_handle,
+            cfg,
+            llm_cfg,
+            provider,
+            app_cfg,
         )
 
 

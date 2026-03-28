@@ -54,49 +54,62 @@ def _http_error_response_text(exc: httpx.HTTPStatusError, limit: int = 2000) -> 
     return ""
 
 
-def bitbucket_server_persisted_dismissed_root_ids(
-    comments: list[ReviewComment],
+def _bbs_comment_is_bot_authored(
+    comment: ReviewComment,
     bot: BotAttributionIdentity,
-) -> frozenset[str]:
-    """Stable ids for threads whose latest reply is the durable accepted-thread marker."""
-    by_id = {str(c.id or "").strip(): c for c in comments if (c.id or "").strip()}
-    latest_by_root: dict[str, ReviewComment] = {}
+) -> bool:
+    author_login = (comment.author_login or "").strip().lower()
+    if not author_login:
+        return False
     bot_login = (bot.login or "").strip().lower()
+    if bot_login and author_login == bot_login:
+        return True
     bot_slug = (bot.slug or "").strip().lower()
+    return bool(bot_slug and author_login == bot_slug)
 
-    def _comment_is_bot_authored(comment: ReviewComment) -> bool:
-        author_login = (comment.author_login or "").strip().lower()
-        if not author_login:
-            return False
-        if bot_login and author_login == bot_login:
-            return True
-        return bool(bot_slug and author_login == bot_slug)
 
-    def _comment_order_key(comment: ReviewComment) -> tuple[int, int, str]:
-        raw_created_at = (comment.created_at or "").strip()
-        try:
-            timestamp = int(raw_created_at) if raw_created_at else 0
-        except ValueError:
-            timestamp = 0
+def _bbs_comment_order_key(comment: ReviewComment) -> tuple[int, int, str]:
+    raw_created_at = (comment.created_at or "").strip()
+    try:
+        timestamp = int(raw_created_at) if raw_created_at else 0
+    except ValueError:
+        timestamp = 0
 
-        cid = (comment.id or "").strip()
-        numeric_id = int(cid) if cid.isdigit() else -1
-        return (timestamp, numeric_id, cid.lower())
+    cid = (comment.id or "").strip()
+    numeric_id = int(cid) if cid.isdigit() else -1
+    return (timestamp, numeric_id, cid.lower())
 
+
+def _bbs_latest_comments_by_root(
+    comments: list[ReviewComment],
+    by_id: dict[str, ReviewComment],
+) -> dict[str, ReviewComment]:
+    latest_by_root: dict[str, ReviewComment] = {}
     for comment in comments:
         cid = (comment.id or "").strip()
         if not cid:
             continue
         root_id = BitbucketServerProvider._bbs_thread_root_comment_id(by_id, cid)
         current_latest = latest_by_root.get(root_id)
-        if current_latest is None or _comment_order_key(comment) >= _comment_order_key(
+        if current_latest is None or _bbs_comment_order_key(comment) >= _bbs_comment_order_key(
             current_latest
         ):
             latest_by_root[root_id] = comment
+    return latest_by_root
+
+
+def bitbucket_server_persisted_dismissed_root_ids(
+    comments: list[ReviewComment],
+    bot: BotAttributionIdentity,
+) -> frozenset[str]:
+    """Stable ids for threads whose latest reply is the durable accepted-thread marker."""
+    by_id = {str(c.id or "").strip(): c for c in comments if (c.id or "").strip()}
+    latest_by_root = _bbs_latest_comments_by_root(comments, by_id)
     dismissed_roots = {
         root_id
         for root_id, comment in latest_by_root.items()
-        if _comment_is_bot_authored(comment) and is_reply_dismissal_accepted_reply(comment.body)
+        if _bbs_comment_is_bot_authored(comment, bot)
+        and is_reply_dismissal_accepted_reply(comment.body)
     }
     return frozenset(f"comment:{root_id}" for root_id in dismissed_roots if root_id)
 
@@ -1023,36 +1036,14 @@ class BitbucketServerProvider(ProviderInterface):
         start = 0
         max_pages = 500
         for _ in range(max_pages):
-            try:
-                data = self._get(path, params={"start": start, "limit": 100})
-            except httpx.HTTPStatusError as e:
-                status = e.response.status_code if e.response is not None else 0
-                if status == 404:
-                    logger.debug(
-                        "Bitbucket Server comments endpoint unavailable owner=%s repo=%s pr=%s",
-                        owner,
-                        repo,
-                        pr_number,
-                    )
-                    return None
-                logger.warning(
-                    "Bitbucket Server comments fetch failed owner=%s repo=%s pr=%s: %s",
-                    owner,
-                    repo,
-                    pr_number,
-                    e,
-                )
-                return None
-            except Exception as e:
-                logger.warning(
-                    "Bitbucket Server comments fetch failed owner=%s repo=%s pr=%s: %s",
-                    owner,
-                    repo,
-                    pr_number,
-                    e,
-                )
-                return None
-            if not isinstance(data, dict):
+            data = self._bbs_get_comments_endpoint_page(
+                path,
+                owner,
+                repo,
+                pr_number,
+                start,
+            )
+            if data is None:
                 return None
             for raw_comment in data.get("values") or []:
                 self._bbs_merge_nested_comment_dicts_into(merged_by_id, raw_comment)
@@ -1060,13 +1051,7 @@ class BitbucketServerProvider(ProviderInterface):
             if next_start is None or next_start == start:
                 break
             start = next_start
-        comments = [
-            comment
-            for raw_comment in merged_by_id.values()
-            if (comment := self._bbs_review_comment_from_comment_dict(raw_comment)) is not None
-        ]
-        comments.sort(key=self._bbs_comment_order_key)
-        return comments
+        return self._bbs_review_comments_from_raw_comment_map(merged_by_id)
 
     @staticmethod
     def _bbs_merge_review_comment_lists(
@@ -1100,6 +1085,60 @@ class BitbucketServerProvider(ProviderInterface):
         merged.sort(key=BitbucketServerProvider._bbs_comment_order_key)
         return merged
 
+    def _bbs_get_comments_endpoint_page(
+        self,
+        path: str,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        start: int,
+    ) -> dict[str, Any] | None:
+        """Return one `/comments` page or `None` when the endpoint is unavailable."""
+        try:
+            data = self._get(path, params={"start": start, "limit": 100})
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code if e.response is not None else 0
+            if status == 404:
+                logger.debug(
+                    "Bitbucket Server comments endpoint unavailable owner=%s repo=%s pr=%s",
+                    owner,
+                    repo,
+                    pr_number,
+                )
+                return None
+            logger.warning(
+                "Bitbucket Server comments fetch failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
+        except Exception as e:
+            logger.warning(
+                "Bitbucket Server comments fetch failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
+        if not isinstance(data, dict):
+            return None
+        return data
+
+    def _bbs_review_comments_from_raw_comment_map(
+        self,
+        merged_by_id: dict[str, dict],
+    ) -> list[ReviewComment]:
+        comments = [
+            comment
+            for raw_comment in merged_by_id.values()
+            if (comment := self._bbs_review_comment_from_comment_dict(raw_comment)) is not None
+        ]
+        comments.sort(key=self._bbs_comment_order_key)
+        return comments
+
     @staticmethod
     def _bbs_append_open_task_for_quality_gate(t: Any, items: list[UnresolvedReviewItem]) -> None:
         if not isinstance(t, dict):
@@ -1128,14 +1167,7 @@ class BitbucketServerProvider(ProviderInterface):
         comment: ReviewComment,
         bot: BotAttributionIdentity,
     ) -> bool:
-        author_login = (comment.author_login or "").strip().lower()
-        if not author_login:
-            return False
-        bot_login = (bot.login or "").strip().lower()
-        if bot_login and author_login == bot_login:
-            return True
-        bot_slug = (bot.slug or "").strip().lower()
-        return bool(bot_slug and author_login == bot_slug)
+        return _bbs_comment_is_bot_authored(comment, bot)
 
     @staticmethod
     def _bbs_thread_root_comment_id(
@@ -1161,15 +1193,7 @@ class BitbucketServerProvider(ProviderInterface):
 
     @staticmethod
     def _bbs_comment_order_key(comment: ReviewComment) -> tuple[int, int, str]:
-        raw_created_at = (comment.created_at or "").strip()
-        try:
-            timestamp = int(raw_created_at) if raw_created_at else 0
-        except ValueError:
-            timestamp = 0
-
-        cid = (comment.id or "").strip()
-        numeric_id = int(cid) if cid.isdigit() else -1
-        return (timestamp, numeric_id, cid.lower())
+        return _bbs_comment_order_key(comment)
 
     def _bbs_paginate_open_pr_tasks(
         self,

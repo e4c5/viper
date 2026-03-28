@@ -156,6 +156,60 @@ def _load_provider_comment_gate_context_for_pr(
     return comments, review_comments_by_id, dismissed_stable_ids
 
 
+def _fallback_comment_gate_status(comment: dict[str, Any]) -> tuple[bool, str]:
+    """Return the non-provider-aware gate status for a raw Bitbucket comment payload."""
+    state = str(comment.get("state") or "").strip().upper()
+    body = str(comment.get("text") or comment.get("body") or "").strip()
+    if state == "RESOLVED":
+        return False, "resolved"
+    if comment_is_outdated(comment):
+        return False, "outdated_or_orphaned"
+    if not body:
+        return False, "empty_body"
+    return True, "open"
+
+
+def _comment_dismissal_reason(
+    review_comment: ReviewComment,
+    review_comments_by_id: dict[str, ReviewComment] | None,
+    dismissed_stable_ids: frozenset[str] | None,
+) -> str | None:
+    """Return the dismissal reason when provider context marks the thread as dismissed."""
+    comment_id = (review_comment.id or "").strip()
+    if not comment_id or not review_comments_by_id or not dismissed_stable_ids:
+        return None
+    root_id = BitbucketServerProvider._bbs_thread_root_comment_id(
+        review_comments_by_id,
+        comment_id,
+    )
+    if f"comment:{root_id}" in dismissed_stable_ids:
+        return "dismissed_thread"
+    return None
+
+
+def _review_comment_gate_status(
+    review_comment: ReviewComment,
+    *,
+    review_comments_by_id: dict[str, ReviewComment] | None,
+    dismissed_stable_ids: frozenset[str] | None,
+) -> tuple[bool, str]:
+    """Return the provider-aware gate status for a normalized review comment."""
+    dismissed_reason = _comment_dismissal_reason(
+        review_comment,
+        review_comments_by_id,
+        dismissed_stable_ids,
+    )
+    if dismissed_reason:
+        return False, dismissed_reason
+    if review_comment.resolved:
+        return False, "resolved"
+    if review_comment.outdated:
+        return False, "outdated_or_orphaned"
+    if not (review_comment.body or "").strip():
+        return False, "empty_body"
+    return True, "open"
+
+
 def _comment_gate_status_with_provider_context(
     comment: dict[str, Any],
     *,
@@ -165,28 +219,12 @@ def _comment_gate_status_with_provider_context(
     """Return the same open/closed decision used by the production provider when possible."""
     review_comment = BitbucketServerProvider._bbs_review_comment_from_comment_dict(comment)
     if review_comment is None:
-        state = str(comment.get("state") or "").strip().upper()
-        body = str(comment.get("text") or comment.get("body") or "").strip()
-        if state == "RESOLVED":
-            return False, "resolved"
-        if comment_is_outdated(comment):
-            return False, "outdated_or_orphaned"
-        if not body:
-            return False, "empty_body"
-        return True, "open"
-
-    comment_id = (review_comment.id or "").strip()
-    if comment_id and review_comments_by_id:
-        root_id = BitbucketServerProvider._bbs_thread_root_comment_id(review_comments_by_id, comment_id)
-        if f"comment:{root_id}" in (dismissed_stable_ids or frozenset()):
-            return False, "dismissed_thread"
-    if review_comment.resolved:
-        return False, "resolved"
-    if review_comment.outdated:
-        return False, "outdated_or_orphaned"
-    if not (review_comment.body or "").strip():
-        return False, "empty_body"
-    return True, "open"
+        return _fallback_comment_gate_status(comment)
+    return _review_comment_gate_status(
+        review_comment,
+        review_comments_by_id=review_comments_by_id,
+        dismissed_stable_ids=dismissed_stable_ids,
+    )
 
 
 def _build_comment_report_with_provider_context(
