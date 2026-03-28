@@ -108,3 +108,16 @@ def test_reply_dismissal_instruction_mentions_severity_guidance():
     assert "original automated review comment severity" in REPLY_DISMISSAL_INSTRUCTION
     assert "nit: be pragmatic and easy to satisfy" in REPLY_DISMISSAL_INSTRUCTION
     assert "high: require strong, specific evidence" in REPLY_DISMISSAL_INSTRUCTION
+
+
+def test_reply_dismissal_instruction_rejects_future_work_promises():
+    assert "Do not rely on promised future work." in REPLY_DISMISSAL_INSTRUCTION
+    assert '"I\'ll fix it"' in REPLY_DISMISSAL_INSTRUCTION
+    assert "do NOT resolve the concern" in REPLY_DISMISSAL_INSTRUCTION
+
+
+def test_reply_dismissal_instruction_guides_follow_up_reply_for_future_work():
+    assert 'When verdict is "disagreed" because the author only agreed to act later' in (
+        REPLY_DISMISSAL_INSTRUCTION
+    )
+    assert "Please push the code changes so I can" in REPLY_DISMISSAL_INSTRUCTION

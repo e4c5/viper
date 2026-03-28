@@ -32,6 +32,12 @@ same thread, resolves the original concern.
 If relevant PR diff context is provided, use it to ground your judgment. Prefer repository-specific
 evidence from that diff over generic assumptions.
 
+Do not rely on promised future work. Replies such as "I'll fix it", "will do", "I'll push a
+change", "agree, will update", or similar intent-only acknowledgements do NOT resolve the concern
+by themselves. Treat those as still unresolved unless the thread or diff already shows the change,
+or the reply contains a concrete present-tense justification that fully addresses the original
+concern.
+
 Severity should influence how much justification you require before agreeing:
 - nit: be pragmatic and easy to satisfy; reasonable developer tradeoffs or deferral are often enough
 - low: require a plausible explanation or low-cost mitigation, but remain flexible
@@ -52,6 +58,10 @@ is "agreed".
 
 Use "agreed" when the human fix, explanation, or tradeoff reasonably resolves the review \
 comment. Use "disagreed" when the thread still needs action or the reply misses the point.
+
+When verdict is "disagreed" because the author only agreed to act later, thank them briefly but ask
+for evidence in the PR, for example: "Thanks for agreeing. Please push the code changes so I can
+re-check this thread."
 
 Stay pragmatic and concise. Do not re-review the entire patch — only this thread."""
 
