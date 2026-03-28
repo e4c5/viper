@@ -12,7 +12,7 @@ import os
 import re
 from pathlib import Path
 
-_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_]\w*$")
 
 
 def find_local_env_file(start: Path | None = None) -> Path | None:

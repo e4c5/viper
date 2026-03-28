@@ -57,6 +57,8 @@ FOLDER_MODE = "com.cloudbees.hudson.plugins.folder.Folder"
 DEFAULT_BITBUCKET_SCM_PROVIDER = "bitbucket_server"
 DEFAULT_BITBUCKET_SCM_URL = "http://localhost:7990/rest/api/1.0"
 
+FORM_URLENCODED = "application/x-www-form-urlencoded"
+
 MODERN_OVERRIDE_PARAM_BLOCK = """        <hudson.model.StringParameterDefinition>
           <name>SCM_PROVIDER_OVERRIDE</name>
           <description>Optional: overrides env SCM_PROVIDER (set provider via folder/global env)</description>
@@ -570,8 +572,8 @@ def create_jenkins_session(base: str, user: str, password: str) -> JenkinsSessio
 
     root_req = urllib.request.Request(base)
     root_req.add_header("Authorization", auth)
-    with opener.open(root_req, timeout=30):
-        pass
+    with opener.open(root_req, timeout=30) as response:
+        response.read()
 
     crumb_headers: dict[str, str] = {}
     req = urllib.request.Request(f"{base}/crumbIssuer/api/json")
@@ -628,7 +630,7 @@ def http_post_form(
         session,
         url,
         urllib.parse.urlencode(data).encode(),
-        content_type="application/x-www-form-urlencoded",
+        content_type=FORM_URLENCODED,
         timeout=timeout,
     )
 
@@ -661,7 +663,7 @@ def create_folder(session: JenkinsSession, folder_name: str, parent_path: str | 
         session,
         f"{parent_url}/createItem",
         payload,
-        content_type="application/x-www-form-urlencoded",
+        content_type=FORM_URLENCODED,
     )
 
 
@@ -680,7 +682,7 @@ def create_workflow_job(session: JenkinsSession, parent_path: str, job_name: str
         session,
         f"{parent_url}/createItem",
         payload,
-        content_type="application/x-www-form-urlencoded",
+        content_type=FORM_URLENCODED,
     )
 
 
@@ -840,15 +842,14 @@ def ensure_secret_text_credentials(
     )
 
 
-def approve_matching_script(session: JenkinsSession, script_body: str) -> bool:
+def approve_matching_script(session: JenkinsSession, script_body: str) -> None:
     """Approve the exact inline Jenkinsfile, using pending-list lookup or Groovy fallback."""
     normalized_target = script_body.replace("\r\n", "\n").strip()
     for pending in get_pending_script_approvals(session):
         if pending.script.replace("\r\n", "\n").strip() == normalized_target:
             approve_script_hash(session, pending.hash)
-            return True
+            return
     preapprove_script_via_console(session, script_body)
-    return True
 
 
 def ensure_default_bitbucket_setup(
@@ -954,8 +955,8 @@ def sync_jobs(
         changed_any = True
 
     if changed_any:
-        if approve_matching_script(session, script_body):
-            print("Approved inline Jenkinsfile in Script Security.")
+        approve_matching_script(session, script_body)
+        print("Approved inline Jenkinsfile in Script Security.")
 
 
 def build_parser() -> argparse.ArgumentParser:

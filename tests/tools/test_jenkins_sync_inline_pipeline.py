@@ -327,9 +327,8 @@ def test_approve_matching_script_uses_normalized_script_text(monkeypatch) -> Non
         lambda _session, script: console_calls.append(script),
     )
 
-    approved = module.approve_matching_script(session, "line1\nline2\n")
+    module.approve_matching_script(session, "line1\nline2\n")
 
-    assert approved is True
     assert approved_hashes == ["abc123"]
     assert console_calls == []
 
@@ -346,7 +345,6 @@ def test_approve_matching_script_falls_back_to_console_when_not_pending(monkeypa
         lambda _session, script: console_calls.append(script),
     )
 
-    approved = module.approve_matching_script(object(), "pipeline { agent any }")
+    module.approve_matching_script(object(), "pipeline { agent any }")
 
-    assert approved is True
     assert console_calls == ["pipeline { agent any }"]
