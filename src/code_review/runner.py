@@ -44,7 +44,7 @@ from code_review.diff.parser import (
     parse_unified_diff,
 )
 from code_review.diff.position import get_diff_hunk_for_line
-from code_review.formatters.comment import finding_to_comment_body
+from code_review.formatters.comment import finding_to_comment_body, infer_severity_from_comment_body
 from code_review.models import get_context_window
 from code_review.providers import get_provider
 from code_review.providers.base import (
@@ -1638,6 +1638,20 @@ def _reply_dismissal_original_comment_id(
     return ""
 
 
+def _reply_dismissal_original_comment_severity(
+    ctx: ReviewThreadDismissalContext,
+    bot: BotAttributionIdentity,
+) -> str:
+    """Infer severity from the original automated review comment body when possible."""
+    original_comment_id = _reply_dismissal_original_comment_id(ctx, bot)
+    for ent in ctx.entries:
+        if (ent.comment_id or "").strip() == original_comment_id:
+            return infer_severity_from_comment_body(ent.body or "")
+    if ctx.entries:
+        return infer_severity_from_comment_body(ctx.entries[0].body or "")
+    return "unknown"
+
+
 def _reply_dismissal_existing_bot_reply_after_trigger(
     ctx: ReviewThreadDismissalContext,
     bot: BotAttributionIdentity,
@@ -1703,11 +1717,13 @@ def _format_reply_dismissal_user_message(
     """Build the user message for the reply-dismissal agent."""
     who = (bot.login or bot.slug or bot.id_str or bot.uuid or "").strip() or "(unknown)"
     original_comment_id = _reply_dismissal_original_comment_id(ctx, bot)
+    original_comment_severity = _reply_dismissal_original_comment_severity(ctx, bot)
     triggered_comment_id = (triggering_comment_id or "").strip()
     lines = [
         "Classify this single pull-request review thread.",
         f"Automated reviewer identity hint (token user): {who}",
         f"Original automated review comment id: {original_comment_id or '(unknown)'}",
+        f"Original automated review comment severity: {original_comment_severity}",
         f"Triggering human reply comment id: {triggered_comment_id or '(unknown)'}",
         "",
         "Thread comments in chronological order:",

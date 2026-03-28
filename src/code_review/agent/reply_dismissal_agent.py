@@ -23,6 +23,7 @@ original automated review comment.
 
 The thread may contain more than two comments. The user message will identify:
 - the original automated review comment
+- the original automated review comment severity
 - the triggering human reply
 
 Base your verdict on whether the triggering reply, together with any later clarifications in the
@@ -30,6 +31,16 @@ same thread, resolves the original concern.
 
 If relevant PR diff context is provided, use it to ground your judgment. Prefer repository-specific
 evidence from that diff over generic assumptions.
+
+Severity should influence how much justification you require before agreeing:
+- nit: be pragmatic and easy to satisfy; reasonable developer tradeoffs or deferral are often enough
+- low: require a plausible explanation or low-cost mitigation, but remain flexible
+- medium: be hesitant to agree unless the reply provides a concrete, credible justification or fix
+- high: require strong, specific evidence that the concern is invalid, mitigated, or already fixed
+
+Severity is guidance, not an automatic verdict. If the thread or diff clearly resolves the concern,
+you may still agree even for medium/high findings. If the reply is weak or dismissive, you should be
+especially reluctant to agree for medium/high findings.
 
 Output rules (critical):
 - Respond with a single JSON object only. Do not include markdown fences.

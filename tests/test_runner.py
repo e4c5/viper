@@ -154,6 +154,7 @@ def test_format_reply_dismissal_user_message_marks_original_and_triggering_comme
     )
 
     assert "Original automated review comment id: 10" in msg
+    assert "Original automated review comment severity: high" in msg
     assert "Triggering human reply comment id: 11" in msg
     assert "Role: original automated review comment, bot-authored" in msg
     assert "Role: triggering human reply" in msg

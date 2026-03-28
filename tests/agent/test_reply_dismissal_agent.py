@@ -102,3 +102,9 @@ def test_reply_dismissal_verdict_skips_unrelated_leading_json_object():
 def test_reply_dismissal_verdict_invalid_returns_none():
     assert reply_dismissal_verdict_from_llm_text("not json") is None
     assert reply_dismissal_verdict_from_llm_text('{"verdict": "disagreed"}') is None
+
+
+def test_reply_dismissal_instruction_mentions_severity_guidance():
+    assert "original automated review comment severity" in REPLY_DISMISSAL_INSTRUCTION
+    assert "nit: be pragmatic and easy to satisfy" in REPLY_DISMISSAL_INSTRUCTION
+    assert "high: require strong, specific evidence" in REPLY_DISMISSAL_INSTRUCTION
