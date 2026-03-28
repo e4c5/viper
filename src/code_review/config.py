@@ -283,7 +283,7 @@ class CodeReviewAppConfig(BaseSettings):
         ),
     )
     reply_dismissal_enabled: bool = Field(
-        default=False,
+        default=True,
         validation_alias="CODE_REVIEW_REPLY_DISMISSAL_ENABLED",
         description=(
             "Review-decision-only: when event_kind is reply_added and CODE_REVIEW_EVENT_COMMENT_ID "

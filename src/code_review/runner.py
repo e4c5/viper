@@ -2729,7 +2729,7 @@ class ReviewOrchestrator:
         if not app_cfg.reply_dismissal_enabled:
             if comment_id:
                 logger.info(
-                    "Reply-dismissal disabled: CODE_REVIEW_REPLY_DISMISSAL_ENABLED is false; "
+                    "Reply-dismissal disabled: CODE_REVIEW_REPLY_DISMISSAL_ENABLED is explicitly false; "
                     "skipping LLM for comment_id=%s",
                     comment_id,
                 )

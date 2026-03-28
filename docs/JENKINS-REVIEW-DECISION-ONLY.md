@@ -44,7 +44,7 @@ On the copied job, set:
 
 Optional:
 
-- `CODE_REVIEW_REPLY_DISMISSAL_ENABLED=true` if you want reply-dismissal on `reply_added`
+- `CODE_REVIEW_REPLY_DISMISSAL_ENABLED=false` if you want to disable reply-dismissal on `reply_added`
 - `CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING=true` to skip reply-driven runs when the bot is not currently blocking
 - `SCM_REVIEW_DECISION_HIGH_THRESHOLD` and `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD` as needed
 - `SCM_BITBUCKET_SERVER_USER_SLUG` for Bitbucket Server / DC
@@ -131,7 +131,7 @@ If you do not want a second job, the existing Jenkins job can handle both full r
 1. Keep the current Jenkinsfile: `docker/jenkins/Jenkinsfile`.
 2. Set `SCM_REVIEW_DECISION_ENABLED=true`.
 3. Add the optional `CODE_REVIEW_EVENT_*` webhook mappings if you want structured logs or reply-dismissal.
-4. Optionally enable `CODE_REVIEW_REPLY_DISMISSAL_ENABLED=true`.
+4. Optionally set `CODE_REVIEW_REPLY_DISMISSAL_ENABLED=false` if you want to disable reply-dismissal.
 
 No additional routing configuration is needed. The Jenkinsfile automatically routes comment/thread events (detected from `PR_ACTION`) to `--review-decision-only` and PR lifecycle events to a full review.
 

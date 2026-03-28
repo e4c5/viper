@@ -74,7 +74,7 @@ Create a second workflow or pipeline job for **discussion-only** events such as 
 
 For Jenkins, prefer putting the full-review job and the comment-events job in the same folder. That keeps the two pipelines easy to track while still sharing the folder-level configuration.
 
-The comment-events job should run **review-decision-only** mode, pass webhook context through **`CODE_REVIEW_EVENT_*`**, and enable **`SCM_REVIEW_DECISION_ENABLED`** so the quality gate can be recomputed without running the full review agent. If reply-dismissal is required for human replies, also enable **`CODE_REVIEW_REPLY_DISMISSAL_ENABLED`** on this job.
+The comment-events job should run **review-decision-only** mode, pass webhook context through **`CODE_REVIEW_EVENT_*`**, and enable **`SCM_REVIEW_DECISION_ENABLED`** so the quality gate can be recomputed without running the full review agent. Reply-dismissal for human replies is enabled by default; set **`CODE_REVIEW_REPLY_DISMISSAL_ENABLED=false`** on this job if you want to turn it off.
 
 This approach keeps full reviews and comment-only recalculation in separate Jenkins jobs, which makes it easier to track volume and behavior for each path independently.
 

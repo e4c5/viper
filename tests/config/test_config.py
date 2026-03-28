@@ -202,3 +202,9 @@ def test_code_review_app_reply_dismissal_enabled_from_env():
     with patch.dict(os.environ, {"CODE_REVIEW_REPLY_DISMISSAL_ENABLED": "true"}, clear=True):
         cfg = CodeReviewAppConfig()
         assert cfg.reply_dismissal_enabled is True
+
+
+def test_code_review_app_reply_dismissal_enabled_by_default():
+    with patch.dict(os.environ, {}, clear=True):
+        cfg = CodeReviewAppConfig()
+        assert cfg.reply_dismissal_enabled is True

@@ -157,6 +157,18 @@ pipeline {
                                 if [ "${REVIEW_DECISION_ONLY:-false}" = "true" ]; then
                                     review_args="$review_args --review-decision-only"
                                 fi
+                                reply_dismissal_state="${CODE_REVIEW_REPLY_DISMISSAL_ENABLED:-true}"
+                                review_event_source="${CODE_REVIEW_EVENT_SOURCE:-full_review}"
+                                echo "Preflight: review_decision_only=${REVIEW_DECISION_ONLY:-false} reply_dismissal_enabled=${reply_dismissal_state} comment_id=${CODE_REVIEW_EVENT_COMMENT_ID:-} actor_login=${CODE_REVIEW_EVENT_ACTOR_LOGIN:-} source=${review_event_source}"
+                                if [ "${REVIEW_DECISION_ONLY:-false}" = "true" ]; then
+                                    if [ -z "${CODE_REVIEW_EVENT_COMMENT_ID:-}" ]; then
+                                        echo "Preflight: reply-dismissal cannot run because CODE_REVIEW_EVENT_COMMENT_ID is empty."
+                                    elif [ "${reply_dismissal_state}" != "true" ] && [ "${reply_dismissal_state}" != "1" ]; then
+                                        echo "Preflight: reply-dismissal is disabled because CODE_REVIEW_REPLY_DISMISSAL_ENABLED is explicitly false."
+                                    else
+                                        echo "Preflight: reply-dismissal is enabled and eligible to evaluate comment_id=${CODE_REVIEW_EVENT_COMMENT_ID:-}."
+                                    fi
+                                fi
                                 if [ "$USE_INLINE_AGENT" = "true" ] || [ "$USE_INLINE_AGENT" = "1" ]; then
                                     export SCM_PROVIDER="$REVIEW_SCM_PROVIDER" SCM_URL="$REVIEW_SCM_URL" SCM_TOKEN="$SCM_TOKEN"
                                     export SCM_BASE_SHA="${REVIEW_SCM_BASE_SHA:-}"
