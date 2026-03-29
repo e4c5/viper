@@ -219,7 +219,7 @@ def test_e2e_docker_gitea_full_review(e2e_stack):
     mock_provider.get_pr_diff.return_value = "diff"
     mock_provider.get_file_content.return_value = "content"
 
-    findings_json = "[]"
+    findings_json = '{"findings":[]}'
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
     mock_event.content = MagicMock()

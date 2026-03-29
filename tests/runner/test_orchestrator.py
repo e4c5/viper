@@ -40,7 +40,7 @@ def test_review_orchestrator_imports_without_circular_dependency():
 
 @contextmanager
 def _orchestrator_run_env(
-    findings_json: str = '[{"path":"foo.py","line":1,"severity":"low","code":"c","message":"m"}]',
+    findings_json: str = '{"findings":[{"path":"foo.py","line":1,"severity":"low","code":"c","message":"m"}]}',
 ):
     """Context manager: patch config/provider and ADK Runner; yield (provider, mock_runner)."""
     from code_review.providers.base import FileInfo
@@ -616,7 +616,7 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
         event = MagicMock()
         event.is_final_response.return_value = True
         event.content = MagicMock()
-        event.content.parts = [MagicMock(text="[]")]
+        event.content.parts = [MagicMock(text='{"findings":[]}')]
         yield event
 
     from code_review.providers.base import FileInfo
@@ -721,7 +721,7 @@ def test_single_shot_mode_prompt_contains_annotated_diff():
         event = MagicMock()
         event.is_final_response.return_value = True
         event.content = MagicMock()
-        event.content.parts = [MagicMock(text="[]")]
+        event.content.parts = [MagicMock(text='{"findings":[]}')]
         yield event
 
     from code_review.providers.base import FileInfo

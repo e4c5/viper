@@ -1426,11 +1426,7 @@ def _fingerprint_for_finding(
 
 
 def _parse_findings_json(text: str) -> object:
-    """Parse findings JSON from a raw body or a fenced JSON block.
-
-    Preferred shape is a top-level object like ``{"findings": [...]}``.
-    For backward compatibility, a bare JSON array of findings is also accepted.
-    """
+    """Parse a structured findings object from raw text or a fenced JSON block."""
     text = text.strip()
     candidates = []
     fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
@@ -1446,67 +1442,25 @@ def _parse_findings_json(text: str) -> object:
             return json.loads(raw)
         except json.JSONDecodeError:
             continue
-    return []
-
-
-def _normalize_finding_item(item: dict) -> dict:
-    """Normalize compatible finding payload fields before model validation."""
-    if "anchor" in item and "fingerprint_hint" not in item:
-        item = {**item, "fingerprint_hint": item.get("anchor")}
-    return item
+    return {}
 
 
 def _findings_from_response(response_text: str) -> list[FindingV1]:
-    """Parse response text into validated findings.
-
-    Preferred format is ``{"findings": [...]}``. A bare array is still accepted
-    as a backward-compatibility path while tests and prompts migrate.
-    """
+    """Parse response text into validated findings."""
     raw = _parse_findings_json(response_text)
-
-    if isinstance(raw, dict) and isinstance(raw.get("findings"), list):
-        try:
-            normalized = {
-                **raw,
-                "findings": [
-                    _normalize_finding_item(item)
-                    for item in raw["findings"]
-                    if isinstance(item, dict)
-                ],
-            }
-            return FindingsBatchV1.model_validate(normalized).findings
-        except Exception as e:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "Failed to parse structured findings response: %r (error: %s)",
-                    raw,
-                    e,
-                    exc_info=True,
-                )
-            return []
-
-    # Backward compatibility for the pre-output_schema contract.
-    if isinstance(raw, dict):
-        raw = [raw]
-
-    findings: list[FindingV1] = []
-    for item in raw if isinstance(raw, list) else []:
-        if not isinstance(item, dict):
-            continue
-        try:
-            findings.append(FindingV1.model_validate(_normalize_finding_item(item)))
-        except Exception as e:
-            # Be tolerant of partial/malformed items, but surface details at DEBUG level
-            # so it's clear we're skipping something the model tried to return.
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "Skipping invalid finding item from LLM response: %r (error: %s)",
-                    item,
-                    e,
-                    exc_info=True,
-                )
-            continue
-    return findings
+    if not isinstance(raw, dict):
+        return []
+    try:
+        return FindingsBatchV1.model_validate(raw).findings
+    except Exception as e:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Failed to parse structured findings response: %r (error: %s)",
+                raw,
+                e,
+                exc_info=True,
+            )
+        return []
 
 
 def _log_run_complete(

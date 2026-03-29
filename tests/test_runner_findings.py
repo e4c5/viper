@@ -16,18 +16,10 @@ def test_build_ignore_set_from_dicts():
     assert ("a.py", "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824") in s
 
 
-def test_parse_findings_json_raw_array():
-    text = '[{"path":"x","line":1,"severity":"low","code":"c","message":"m"}]'
-    out = _parse_findings_json(text)
-    assert len(out) == 1
-    assert out[0]["path"] == "x" and out[0]["line"] == 1
-
-
 def test_parse_findings_json_markdown_wrapped():
-    text = '```json\n[{"path":"y","line":2,"severity":"medium","code":"s","message":"msg"}]\n```'
+    text = '```json\n{"findings":[{"path":"y","line":2,"severity":"medium","code":"s","message":"msg"}]}\n```'
     out = _parse_findings_json(text)
-    assert len(out) == 1
-    assert out[0]["path"] == "y"
+    assert out["findings"][0]["path"] == "y"
 
 
 def test_parse_findings_json_structured_object():
@@ -47,9 +39,9 @@ def test_findings_from_response_valid():
 
 
 def test_findings_from_response_invalid_skipped():
-    text = '[{"path":"p","line":1},{"not":"valid"}]'
+    text = '{"findings":[{"path":"p","line":1},{"not":"valid"}]}'
     findings = _findings_from_response(text)
-    # First item missing required fields, second not a valid finding
+    # Invalid structured batches fail closed.
     assert len(findings) == 0
 
 

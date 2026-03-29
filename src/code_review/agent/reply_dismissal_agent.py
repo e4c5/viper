@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from code_review.config import get_llm_config
@@ -88,92 +88,33 @@ def create_reply_dismissal_agent() -> Agent:
 
 def reply_dismissal_verdict_from_llm_text(text: str) -> ReplyDismissalVerdictV1 | None:
     """Parse final LLM text into a validated verdict, or None if parsing/validation fails."""
-    for raw in _iter_reply_dismissal_json_candidates(text):
+    for raw in _reply_dismissal_json_candidates(text):
         try:
-            return ReplyDismissalVerdictV1.model_validate(
-                _normalize_reply_dismissal_payload(raw)
-            )
+            verdict = ReplyDismissalVerdictV1.model_validate_json(raw)
+            if "\\'" in verdict.reply_text:
+                verdict = verdict.model_copy(
+                    update={"reply_text": verdict.reply_text.replace("\\'", "'")}
+                )
+            return verdict
         except Exception as e:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Invalid reply-dismissal payload: %r (%s)", raw, e, exc_info=True)
     return None
 
 
-def _first_markdown_fence_body(s: str) -> str | None:
-    """Return inner text of the first fenced code block (linear scan; avoids ReDoS from regex)."""
-    fence = "```"
-    start_fence = s.find(fence)
-    if start_fence == -1:
-        return None
-    i = start_fence + len(fence)
-    n = len(s)
-    while i < n and s[i].isspace():
-        i += 1
-    if i + 4 <= n and s[i : i + 4].lower() == "json":
-        j = i + 4
-        if j == n or s[j].isspace() or s[j] == "{":
-            i = j
-            while i < n and s[i].isspace():
-                i += 1
-    end_fence = s.find(fence, i)
-    if end_fence == -1:
-        return None
-    return s[i:end_fence]
-
-
-def _iter_reply_dismissal_json_candidates(text: str):
-    """Yield dict candidates from the raw body or the first fenced JSON block."""
+def _reply_dismissal_json_candidates(text: str):
+    """Yield raw JSON candidates from the body or a fenced JSON block."""
     s = text.strip()
     chunks: list[str] = []
-    fenced = _first_markdown_fence_body(s)
-    if fenced is not None:
-        chunks.append(fenced.strip())
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", s)
+    if fenced:
+        chunks.append(fenced.group(1).strip())
     chunks.append(s)
     seen: set[str] = set()
     for chunk in chunks:
         if not chunk or chunk in seen:
             continue
         seen.add(chunk)
-        yield from _iter_reply_dismissal_chunk_candidates(chunk)
-
-
-def _iter_reply_dismissal_chunk_candidates(chunk: str):
-    """Yield parsed objects from one chunk, including minimal repair for common LLM escapes."""
-    for candidate in (chunk, _repair_common_llm_json_escapes(chunk)):
-        if candidate is None:
-            continue
-        try:
-            val = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(val, dict):
-            yield val
-            return
-
-
-def _repair_common_llm_json_escapes(text: str) -> str | None:
-    """Repair common quasi-JSON escape mistakes without changing valid JSON first-pass behavior."""
-    if "\\'" not in text:
-        return None
-    # In JSON double-quoted strings, apostrophes do not need escaping. Some LLMs still emit
-    # Python-style ``\'`` sequences, which are invalid JSON and would otherwise fail closed.
-    return _strip_python_style_apostrophe_escapes(text)
-
-
-def _normalize_reply_dismissal_payload(raw: dict) -> dict:
-    """Normalize known LLM escape artifacts inside parsed payload strings."""
-    reply_text = raw.get("reply_text")
-    if not isinstance(reply_text, str) or "\\'" not in reply_text:
-        return raw
-    return {
-        **raw,
-        "reply_text": _strip_python_style_apostrophe_escapes(reply_text),
-    }
-
-
-def _strip_python_style_apostrophe_escapes(text: str) -> str:
-    """Collapse repeated ``\\'`` escape layers down to a plain apostrophe."""
-    repaired = text
-    while "\\'" in repaired:
-        repaired = repaired.replace("\\'", "'")
-    return repaired
+        yield chunk
+        if "\\'" in chunk:
+            yield chunk.replace("\\'", "'")

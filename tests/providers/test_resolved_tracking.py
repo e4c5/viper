@@ -118,7 +118,7 @@ def _run_with_single_stale_comment(
         patch("code_review.orchestration_deps.get_provider", return_value=provider),
         patch("google.adk.runners.Runner") as mock_runner_cls,
     ):
-        findings_json = "[]"
+        findings_json = '{"findings":[]}'
         mock_event = MagicMock()
         mock_event.is_final_response.return_value = True
         mock_event.content = MagicMock()

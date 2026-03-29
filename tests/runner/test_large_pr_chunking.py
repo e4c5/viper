@@ -64,7 +64,7 @@ def _make_provider(
     return provider
 
 
-def _make_final_event(text="[]"):
+def _make_final_event(text='{"findings":[]}'):
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
     mock_event.content = MagicMock()
@@ -155,12 +155,12 @@ def test_large_pr_file_by_file_no_duplicate_posts(
         text = new_message.parts[0].text if new_message.parts else ""
         if '"a.py"' in text:
             findings = (
-                '[{"path":"a.py","line":1,"severity":"medium","code":"x","message":"Fix a."}]'
+                '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x","message":"Fix a."}]}'
             )
         elif '"b.py"' in text:
-            findings = '[{"path":"b.py","line":2,"severity":"low","code":"y","message":"Fix b."}]'
+            findings = '{"findings":[{"path":"b.py","line":2,"severity":"low","code":"y","message":"Fix b."}]}'
         else:
-            findings = "[]"
+            findings = '{"findings":[]}'
         return runner_run_async_returning([_make_final_event(findings)])()
 
     _invoke_run_review(

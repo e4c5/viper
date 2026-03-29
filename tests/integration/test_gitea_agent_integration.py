@@ -105,15 +105,17 @@ def test_agent_vs_gitea_posts_findings_to_mocked_api(
     mock_llm.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
     mock_get_provider.return_value = GiteaProvider(base_url=BASE, token="test-token")
 
-    findings_json = """[
-        {
-            "path": "foo.py",
-            "line": 2,
-            "severity": "medium",
-            "code": "unused-import",
-            "message": "Remove unused import os."
-        }
-    ]"""
+    findings_json = """{
+        "findings": [
+            {
+                "path": "foo.py",
+                "line": 2,
+                "severity": "medium",
+                "code": "unused-import",
+                "message": "Remove unused import os."
+            }
+        ]
+    }"""
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
     mock_event.content = MagicMock()
