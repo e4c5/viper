@@ -235,7 +235,7 @@ def test_determine_skip_reason_returns_none_when_no_skip_config():
     cfg = MagicMock(skip_label="", skip_title_pattern="")
     provider = MagicMock()
     o = ReviewOrchestrator("o", "r", 1)
-    result = o._determine_skip_reason(provider, cfg, "o", "r", 1, "trace-1", 0.0, MagicMock())
+    result = o._determine_skip_reason(provider, cfg, "trace-1", 0.0, MagicMock())
     assert result is None
     provider.get_pr_info.assert_not_called()
 
@@ -252,7 +252,7 @@ def test_determine_skip_reason_returns_empty_list_when_pr_has_skip_label():
         patch("code_review.orchestration_deps._log_run_complete"),
         patch("code_review.orchestration_deps.observability") as mock_obs,
     ):
-        result = o._determine_skip_reason(provider, cfg, "o", "r", 1, "trace-1", 0.0, MagicMock())
+        result = o._determine_skip_reason(provider, cfg, "trace-1", 0.0, MagicMock())
     assert result == []
     mock_obs.finish_run.assert_called_once()
 
@@ -263,7 +263,7 @@ def test_determine_skip_reason_returns_none_when_pr_info_is_none():
     provider = MagicMock()
     provider.get_pr_info.return_value = None
     o = ReviewOrchestrator("o", "r", 1)
-    result = o._determine_skip_reason(provider, cfg, "o", "r", 1, "trace-1", 0.0, MagicMock())
+    result = o._determine_skip_reason(provider, cfg, "trace-1", 0.0, MagicMock())
     assert result is None
 
 
@@ -279,7 +279,7 @@ def test_load_existing_comments_and_markers_returns_ignore_and_resolved_sets():
 
     o = ReviewOrchestrator("o", "r", 1)
     existing, existing_dicts, ignore_set, resolved_comments, resolved_body_set, resolved_fp_set = (
-        o._load_existing_comments_and_markers(provider, "o", "r", 1)
+        o._load_existing_comments_and_markers(provider)
     )
 
     assert len(existing) == 1
@@ -295,7 +295,7 @@ def test_compute_idempotency_and_maybe_short_circuit_returns_none_when_no_head_s
     """When head_sha is empty, _compute_idempotency_and_maybe_short_circuit returns None."""
     o = ReviewOrchestrator("o", "r", 1, head_sha="")
     result = o._compute_idempotency_and_maybe_short_circuit(
-        MagicMock(), MagicMock(), "o", "r", 1, "", [], "trace", 0.0, MagicMock()
+        MagicMock(), MagicMock(), [], "trace", 0.0, MagicMock()
     )
     assert result is None
 
@@ -306,10 +306,6 @@ def test_compute_idempotency_and_maybe_short_circuit_returns_none_when_key_not_s
     result = o._compute_idempotency_and_maybe_short_circuit(
         MagicMock(),
         MagicMock(),
-        "o",
-        "r",
-        1,
-        "abc",
         [{"path": "x", "body": "no marker"}],
         "trace",
         0.0,
@@ -332,7 +328,7 @@ def test_compute_idempotency_and_maybe_short_circuit_returns_empty_list_when_key
         patch("code_review.orchestration_deps.observability") as mock_obs,
     ):
         result = o._compute_idempotency_and_maybe_short_circuit(
-            cfg, llm_cfg, "o", "r", 1, "abc", existing_dicts, "trace", 0.0, MagicMock()
+            cfg, llm_cfg, existing_dicts, "trace", 0.0, MagicMock()
         )
     assert result == []
     mock_obs.finish_run.assert_called_once()
@@ -349,7 +345,7 @@ def test_compute_idempotency_and_maybe_short_circuit_uses_incremental_base_in_ke
     o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
 
     result = o._compute_idempotency_and_maybe_short_circuit(
-        cfg, llm_cfg, "o", "r", 1, "abc", existing_dicts, "trace", 0.0, MagicMock()
+        cfg, llm_cfg, existing_dicts, "trace", 0.0, MagicMock()
     )
 
     assert result is None
@@ -379,7 +375,7 @@ def test_fetch_pr_files_and_diffs_returns_files_paths_and_full_diff():
     provider.get_pr_diff.return_value = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py"
 
     o = ReviewOrchestrator("o", "r", 1)
-    files, paths, full_diff = o._fetch_pr_files_and_diffs(provider, "o", "r", 1)
+    files, paths, full_diff = o._fetch_pr_files_and_diffs(provider)
 
     assert len(files) == 2
     assert paths == ["foo.py", "bar.go"]
@@ -434,9 +430,7 @@ def test_create_agent_and_runner_returns_session_id_service_runner(mock_create_a
         mock_runner = MagicMock()
         MockRunner.return_value = mock_runner
 
-        session_id, session_service, runner = o._create_agent_and_runner(
-            provider, review_standards, "o", "r", 42
-        )
+        session_id, session_service, runner = o._create_agent_and_runner(provider, review_standards)
 
         mock_create_agent.assert_called_once_with(
             provider,
@@ -479,9 +473,6 @@ def test_attach_fingerprints_and_filter_findings_returns_to_post():
     to_post = o._attach_fingerprints_and_filter_findings(
         all_findings,
         provider,
-        "o",
-        "r",
-        "abc",
         ignore_set,
         resolved_body_set,
         resolved_fp_set,
@@ -499,7 +490,7 @@ def test_post_findings_and_summary_returns_zero_when_dry_run():
     provider = MagicMock()
     to_post = []
     count = o._post_findings_and_summary(
-        provider, "o", "r", 1, "abc", "", True, to_post, MagicMock(), MagicMock(), []
+        provider, "", to_post, MagicMock(), MagicMock(), []
     )
     assert count == 0
     provider.post_review_comments.assert_not_called()
@@ -523,7 +514,7 @@ def test_record_observability_and_build_result_returns_findings_and_emits_log():
         patch("code_review.orchestration_deps.observability") as mock_obs,
     ):
         result = o._record_observability_and_build_result(
-            "trace-1", "o", "r", 1, 0.0, MagicMock(), ["a.py"], [finding], 1, to_post
+            "trace-1", 0.0, MagicMock(), ["a.py"], [finding], 1, to_post
         )
     assert result == [finding]
     mock_log.assert_called_once()
