@@ -7,6 +7,7 @@ from code_review.agent import (
     SINGLE_SHOT_INSTRUCTION,
     create_review_agent,
 )
+from code_review.schemas.findings import FindingsBatchV1
 
 
 @patch("google.adk.agents.Agent")
@@ -33,6 +34,7 @@ def test_create_review_agent_tools_enabled_by_default(
     assert mock_agent_cls.call_count == 1
     _, kwargs = mock_agent_cls.call_args
     assert kwargs["tools"] == tools
+    assert kwargs["output_schema"] is FindingsBatchV1
     # File-by-file mode: must use FINDINGS_ONLY_INSTRUCTION (has tool references)
     assert kwargs["instruction"] == FINDINGS_ONLY_INSTRUCTION
 
@@ -60,6 +62,7 @@ def test_create_review_agent_disable_tool_calls_uses_no_tools(
     assert mock_agent_cls.call_count == 1
     _, kwargs = mock_agent_cls.call_args
     assert kwargs["tools"] == []
+    assert kwargs["output_schema"] is FindingsBatchV1
 
 
 @patch("google.adk.agents.Agent")
@@ -95,6 +98,7 @@ def test_create_review_agent_disable_tools_param_overrides_factory(
         "single-shot mode must create the agent with no tools to prevent triangular "
         "token accumulation"
     )
+    assert kwargs["output_schema"] is FindingsBatchV1
     # Tools factory must NOT be called when tools are disabled.
     mock_create_tools.assert_not_called()
 
@@ -130,6 +134,7 @@ def test_single_shot_uses_single_shot_instruction(
         "single-shot mode must use SINGLE_SHOT_INSTRUCTION (no tool references) "
         "to avoid Gemini returning [] when referenced tools are absent"
     )
+    assert kwargs["output_schema"] is FindingsBatchV1
     assert "get_file_content" not in kwargs["instruction"], (
         "SINGLE_SHOT_INSTRUCTION must not reference tools that are not available"
     )
@@ -160,6 +165,7 @@ def test_file_by_file_uses_findings_only_instruction(
 
     _, kwargs = mock_agent_cls.call_args
     assert kwargs["instruction"] == FINDINGS_ONLY_INSTRUCTION
+    assert kwargs["output_schema"] is FindingsBatchV1
     assert "get_pr_diff_for_file" in kwargs["instruction"]
 
 

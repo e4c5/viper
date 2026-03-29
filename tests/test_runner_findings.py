@@ -30,8 +30,16 @@ def test_parse_findings_json_markdown_wrapped():
     assert out[0]["path"] == "y"
 
 
+def test_parse_findings_json_structured_object():
+    text = (
+        '{"findings":[{"path":"z","line":4,"severity":"low","code":"c","message":"m"}]}'
+    )
+    out = _parse_findings_json(text)
+    assert out["findings"][0]["path"] == "z"
+
+
 def test_findings_from_response_valid():
-    text = '[{"path":"p","line":3,"severity":"high","code":"x","message":"fix it"}]'
+    text = '{"findings":[{"path":"p","line":3,"severity":"high","code":"x","message":"fix it"}]}'
     findings = _findings_from_response(text)
     assert len(findings) == 1
     assert isinstance(findings[0], FindingV1)

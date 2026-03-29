@@ -57,6 +57,7 @@ from code_review.providers.base import (
 )
 from code_review.reply_dismissal_state import REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT
 from code_review.schemas.findings import FindingV1
+from code_review.schemas.findings import FindingsBatchV1
 from code_review.schemas.reply_dismissal import ReplyDismissalVerdictV1
 from code_review.schemas.review_decision_event import (
     ReviewDecisionEventContext,
@@ -1424,39 +1425,76 @@ def _fingerprint_for_finding(
     return build_fingerprint(f.path, content_hash_val, f.code, anchor or None)
 
 
-def _parse_findings_json(text: str) -> list[dict]:
-    """Extract JSON array from agent response; may be wrapped in markdown code block."""
+def _parse_findings_json(text: str) -> object:
+    """Parse findings JSON from a raw body or a fenced JSON block.
+
+    Preferred shape is a top-level object like ``{"findings": [...]}``.
+    For backward compatibility, a bare JSON array of findings is also accepted.
+    """
     text = text.strip()
-    # Strip ```json ... ``` or ``` ... ```
-    for pattern in (r"```(?:json)?\s*([\s\S]*?)\s*```", r"\[[\s\S]*\]"):
-        m = re.search(pattern, text)
-        if m:
-            raw = m.group(1).strip() if "```" in pattern else m.group(0)
-            try:
-                return json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return []
+    candidates = []
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+    if fenced:
+        candidates.append(fenced.group(1).strip())
+    candidates.append(text)
+    seen: set[str] = set()
+    for raw in candidates:
+        if not raw or raw in seen:
+            continue
+        seen.add(raw)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+    return []
+
+
+def _normalize_finding_item(item: dict) -> dict:
+    """Normalize compatible finding payload fields before model validation."""
+    if "anchor" in item and "fingerprint_hint" not in item:
+        item = {**item, "fingerprint_hint": item.get("anchor")}
+    return item
 
 
 def _findings_from_response(response_text: str) -> list[FindingV1]:
-    """Parse response text into validated FindingV1 list. Invalid items skipped."""
+    """Parse response text into validated findings.
+
+    Preferred format is ``{"findings": [...]}``. A bare array is still accepted
+    as a backward-compatibility path while tests and prompts migrate.
+    """
     raw = _parse_findings_json(response_text)
-    # Accept single finding as object: model may return {} instead of [{}]
+
+    if isinstance(raw, dict) and isinstance(raw.get("findings"), list):
+        try:
+            normalized = {
+                **raw,
+                "findings": [
+                    _normalize_finding_item(item)
+                    for item in raw["findings"]
+                    if isinstance(item, dict)
+                ],
+            }
+            return FindingsBatchV1.model_validate(normalized).findings
+        except Exception as e:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Failed to parse structured findings response: %r (error: %s)",
+                    raw,
+                    e,
+                    exc_info=True,
+                )
+            return []
+
+    # Backward compatibility for the pre-output_schema contract.
     if isinstance(raw, dict):
         raw = [raw]
+
     findings: list[FindingV1] = []
     for item in raw if isinstance(raw, list) else []:
         if not isinstance(item, dict):
             continue
         try:
-            # Normalize keys: anchor -> fingerprint_hint if needed
-            if "anchor" in item and "fingerprint_hint" not in item:
-                item = {**item, "fingerprint_hint": item.get("anchor")}
-            findings.append(FindingV1.model_validate(item))
+            findings.append(FindingV1.model_validate(_normalize_finding_item(item)))
         except Exception as e:
             # Be tolerant of partial/malformed items, but surface details at DEBUG level
             # so it's clear we're skipping something the model tried to return.

@@ -384,8 +384,8 @@ class ReviewOrchestrator:
                 + head_sha_clause
                 + f' Use path "{file_path}" in every finding.'
                 + " The diff below is already scoped to the current review range for this file."
-                + " Output a JSON array of findings for this file only."
-                + " If there are no issues in this file, output exactly []."
+                + ' Output a JSON object of the form {"findings": [...]} for this file only.'
+                + ' If there are no issues in this file, output exactly {"findings": []}.'
             )
             annotated = runner_mod.annotate_diff_with_line_numbers(file_diff)
             return msg + f"\n\nHere is the unified diff for this file:\n```diff\n{annotated}\n```"
@@ -429,9 +429,9 @@ class ReviewOrchestrator:
                 + f'"{file_path}") to get the diff for this file.'
                 + annotation_guidance
                 + ref_guidance
-                + " Then output a JSON array of findings for this file only. "
+                + ' Then output a JSON object of the form {"findings": [...]} for this file only. '
                 + f'Use path "{file_path}" in every finding. '
-                + "If there are no issues in this file, output exactly []."
+                + 'If there are no issues in this file, output exactly {"findings": []}.'
             )
             return msg
 

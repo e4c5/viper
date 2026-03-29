@@ -7,6 +7,7 @@ from code_review.agent.reply_dismissal_agent import (
     create_reply_dismissal_agent,
     reply_dismissal_verdict_from_llm_text,
 )
+from code_review.schemas.reply_dismissal import ReplyDismissalVerdictV1
 
 
 @patch("code_review.agent.reply_dismissal_agent.get_configured_model")
@@ -30,6 +31,7 @@ def test_create_reply_dismissal_agent_is_tool_free(
     assert kwargs["tools"] == []
     assert kwargs["name"] == "reply_dismissal_agent"
     assert kwargs["instruction"] == REPLY_DISMISSAL_INSTRUCTION
+    assert kwargs["output_schema"] is ReplyDismissalVerdictV1
     mock_get_model.assert_called_once()
 
 
@@ -61,20 +63,6 @@ def test_reply_dismissal_verdict_from_llm_fenced_no_language_tag():
     assert v.verdict == "agreed"
 
 
-def test_reply_dismissal_verdict_from_llm_brace_substring():
-    text = 'Prefix {"verdict": "agreed", "reply_text": ""} suffix'
-    v = reply_dismissal_verdict_from_llm_text(text)
-    assert v is not None
-    assert v.verdict == "agreed"
-
-
-def test_reply_dismissal_verdict_with_extra_braces_before_object():
-    text = 'Note {not json} then {"verdict": "agreed", "reply_text": ""}'
-    v = reply_dismissal_verdict_from_llm_text(text)
-    assert v is not None
-    assert v.verdict == "agreed"
-
-
 def test_reply_dismissal_verdict_repairs_python_style_apostrophe_escape():
     text = (
         "```json\n"
@@ -90,20 +78,12 @@ def test_reply_dismissal_verdict_repairs_python_style_apostrophe_escape():
     assert v.verdict == "disagreed"
     assert "XML-safe escaping" in v.reply_text
     assert "\\'" not in v.reply_text
-
-
-def test_reply_dismissal_verdict_skips_unrelated_leading_json_object():
-    text = (
-        'Context {"trace_id": "x", "n": 1} then '
-        '{"verdict": "agreed", "reply_text": ""}'
-    )
-    v = reply_dismissal_verdict_from_llm_text(text)
-    assert v is not None
-    assert v.verdict == "agreed"
-
-
 def test_reply_dismissal_verdict_invalid_returns_none():
     assert reply_dismissal_verdict_from_llm_text("not json") is None
+    assert (
+        reply_dismissal_verdict_from_llm_text('Prefix {"verdict": "agreed", "reply_text": ""} suffix')
+        is None
+    )
     assert reply_dismissal_verdict_from_llm_text('{"verdict": "disagreed"}') is None
 
 

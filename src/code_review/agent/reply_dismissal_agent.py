@@ -49,7 +49,7 @@ you may still agree even for medium/high findings. If the reply is weak or dismi
 especially reluctant to agree for medium/high findings.
 
 Output rules (critical):
-- Respond with a single JSON object only. Do not include markdown fences.
+- Respond with a single JSON object matching the required schema. Do not include prose before or after it.
 - Schema:
   - "verdict": "agreed" OR "disagreed"
   - "reply_text": string — required when verdict is "disagreed": a short, professional reply \
@@ -81,6 +81,7 @@ def create_reply_dismissal_agent() -> Agent:
         name="reply_dismissal_agent",
         instruction=REPLY_DISMISSAL_INSTRUCTION,
         tools=[],
+        output_schema=ReplyDismissalVerdictV1,
         generate_content_config=generate_content_config,
     )
 
@@ -121,16 +122,19 @@ def _first_markdown_fence_body(s: str) -> str | None:
 
 
 def _iter_reply_dismissal_json_candidates(text: str):
-    """Yield dict candidates: whole-chunk parses first, then every ``{...}`` via raw_decode."""
+    """Yield dict candidates from the raw body or the first fenced JSON block."""
     s = text.strip()
     chunks: list[str] = []
     fenced = _first_markdown_fence_body(s)
     if fenced is not None:
         chunks.append(fenced.strip())
     chunks.append(s)
+    seen: set[str] = set()
     for chunk in chunks:
+        if not chunk or chunk in seen:
+            continue
+        seen.add(chunk)
         yield from _iter_reply_dismissal_chunk_candidates(chunk)
-    yield from _iter_json_objects_via_raw_decode(s)
 
 
 def _iter_reply_dismissal_chunk_candidates(chunk: str):
@@ -173,17 +177,3 @@ def _strip_python_style_apostrophe_escapes(text: str) -> str:
     while "\\'" in repaired:
         repaired = repaired.replace("\\'", "'")
     return repaired
-
-
-def _iter_json_objects_via_raw_decode(s: str):
-    """Every complete JSON object starting at any ``{`` (avoids first/last-brace slice errors)."""
-    dec = json.JSONDecoder()
-    for i, c in enumerate(s):
-        if c != "{":
-            continue
-        try:
-            val, _ = dec.raw_decode(s, i)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(val, dict):
-            yield val

@@ -11,6 +11,7 @@ from code_review.agent.tools.gitea_tools import create_findings_only_tools
 from code_review.config import get_llm_config
 from code_review.models import get_configured_model
 from code_review.providers.base import ProviderInterface
+from code_review.schemas.findings import FindingsBatchV1
 
 if TYPE_CHECKING:
     from google.adk.agents import Agent
@@ -37,11 +38,11 @@ _SHARED_LINE_NUMBER_RULES = """\
 
 # Output format + finding schema + anchor + placement rules.
 _SHARED_FORMAT_AND_PLACEMENT = """\
-CRITICAL — Output format: Your final response must be a valid JSON array that can be parsed by code.
-- If you find one or more issues: output a JSON array of finding objects.
-- If you find zero issues: output exactly [] (an empty JSON array).
-- You may output the array as raw JSON or inside a markdown code block (```json ... ```); both are accepted.
-- Do not respond with only prose (e.g. "I found no issues"); always include the JSON array so it can be parsed.
+CRITICAL — Output format: Your final response must be a valid JSON object matching this schema:
+- Top-level object: {"findings": [ ... ]}
+- If you find one or more issues: put finding objects inside the `findings` array.
+- If you find zero issues: output exactly {"findings": []}.
+- Do not respond with only prose (e.g. "I found no issues"); always return the JSON object so it can be parsed.
 
 Each finding must have: path (str), line (int), severity ("high"|"medium"|"low"|"nit"),
 code (str, e.g. unused-var), and message (str).
@@ -54,8 +55,8 @@ IMPORTANT — Finding messages (decisive, no self-retraction):
 - Each `message` must state one clear, actionable problem and (when helpful) the fix. Keep it short.
 - Do not stream internal reasoning: no "wait / however / actually" chains, no arguing both sides,
   and no concluding that the code is fine after raising a concern in the same finding.
-- If you decide there is no real issue after reasoning, omit that finding entirely from the JSON
-  array. Do not emit a finding whose message retracts itself, says "false positive", or takes
+- If you decide there is no real issue after reasoning, omit that finding entirely from the
+  `findings` array. Do not emit a finding whose message retracts itself, says "false positive", or takes
   back the issue.
 
 IMPORTANT — Evidence and confidence:
@@ -100,22 +101,24 @@ agent_fix_prompt that:
 - Describes the problem and the desired fix
 - Includes any relevant project-specific constraints or context
 
-Example (one finding): [
-  {
-    "path": "src/foo.py",
-    "line": 42,
-    "severity": "medium",
-    "code": "rename-variable",
-    "category": "Maintainability",
-    "confidence": "high",
-    "message": "Rename variable foo to user_id for clarity.",
-    "evidence": "The assignment uses the generic name foo even though request.user_id is the value.",
-    "anchor": "foo = request.user_id",
-    "suggested_patch": "user_id = request.user_id"
-  }
-]
+Example (one finding): {
+  "findings": [
+    {
+      "path": "src/foo.py",
+      "line": 42,
+      "severity": "medium",
+      "code": "rename-variable",
+      "category": "Maintainability",
+      "confidence": "high",
+      "message": "Rename variable foo to user_id for clarity.",
+      "evidence": "The assignment uses the generic name foo even though request.user_id is the value.",
+      "anchor": "foo = request.user_id",
+      "suggested_patch": "user_id = request.user_id"
+    }
+  ]
+}
 Example (multiline suggested_patch): "suggested_patch": "if x:\\n    return None"
-Example (no issues): []"""
+Example (no issues): {"findings": []}"""
 
 # When the runner attaches distilled issue/ticket context, extend both modes with this.
 _CONTEXT_FROM_LINKED_SOURCES = """
@@ -273,5 +276,6 @@ def create_review_agent(
         name="code_review_agent",
         instruction=instruction,
         tools=tools,
+        output_schema=FindingsBatchV1,
         generate_content_config=generate_content_config,
     )
