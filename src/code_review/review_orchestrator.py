@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from code_review.batching import ReviewBatch, build_review_batch_budget, build_review_batches
 from code_review import orchestration_deps as runner_mod
 
 
@@ -270,74 +271,32 @@ class ReviewOrchestrator:
         self,
         provider,
         review_standards: str,
-        paths: list[str] | None = None,
+        batches: list[ReviewBatch],
         *,
-        use_file_by_file: bool = False,
-        disable_tools: bool | None = None,
         context_brief_attached: bool = False,
     ):
         """
-        Build the findings-only agent, session service, and ADK Runner.
+        Build the batch-review SequentialAgent, session service, and ADK Runner.
         Returns (session_id, session_service, runner).
-
-        IMPORTANT: this method must be called AFTER determining the execution mode,
-        because the mode directly controls tool and instruction configuration:
-
-        - Single-shot mode (use_file_by_file=False): tools are disabled and the
-          SINGLE_SHOT_INSTRUCTION is used.  The full diff is already embedded in
-          the user message — no tools are needed.  Enabling tools here causes the
-          LLM to make per-file tool calls; each call appends to the ADK session
-          history, and every subsequent LLM turn re-bills all prior context
-          (triangular token growth → millions of billed tokens on large PRs).
-          Additionally, FINDINGS_ONLY_INSTRUCTION references tool names that are
-          absent in this mode; Gemini infers it cannot complete the workflow and
-          returns [] (no findings).
-
-        - File-by-file mode (use_file_by_file=True): tools are enabled and
-          FINDINGS_ONLY_INSTRUCTION is used.  The agent calls get_pr_diff_for_file
-          per file, which is the expected workflow.
-
-        - Incremental large-diff mode may still set ``use_file_by_file=True`` but
-          also force ``disable_tools=True`` so each per-file prompt embeds the
-          already-scoped diff slice rather than fetching the file's full PR diff.
         """
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
 
-        disable_tools_effective = (
-            disable_tools if disable_tools is not None else not use_file_by_file
-        )
-        use_sequential_workflow = (
-            bool(paths)
-            and use_file_by_file
-            and not disable_tools_effective
-            and runner_mod.os.getenv("CODE_REVIEW_ENABLE_SEQUENTIAL_AGENT_PROTOTYPE", "").strip()
-            in ("1", "true", "TRUE")
-        )
-        if use_sequential_workflow:
-            from code_review.agent.workflows import create_sequential_file_review_agent
+        from code_review.agent.workflows import create_sequential_batch_review_agent
 
-            agent = create_sequential_file_review_agent(
-                provider,
-                review_standards,
-                paths or [],
-                head_sha=self.head_sha,
-                context_brief_attached=context_brief_attached,
-            )
-        else:
-            agent = runner_mod.create_review_agent(
-                provider,
-                review_standards,
-                findings_only=True,
-                disable_tools=disable_tools_effective,
-                context_brief_attached=context_brief_attached,
-            )
+        agent = create_sequential_batch_review_agent(
+            provider,
+            review_standards,
+            batches,
+            head_sha=self.head_sha,
+            context_brief_attached=context_brief_attached,
+        )
         session_id = (
             f"{self.owner}/{self.repo}/pr-{self.pr_number}/{runner_mod.uuid.uuid4().hex[:12]}"
         )
         session_service = InMemorySessionService()
         runner = Runner(agent=agent, app_name=runner_mod.APP_NAME, session_service=session_service)
-        setattr(runner, "_uses_sequential_file_review_prototype", use_sequential_workflow)
+        setattr(runner, "_uses_sequential_batch_review", True)
         return (session_id, session_service, runner)
 
     def _run_agent_and_collect_findings(
@@ -345,239 +304,44 @@ class ReviewOrchestrator:
         runner,
         session_service,
         session_id: str,
-        paths: list[str],
-        use_file_by_file: bool,
-        full_diff: str = "",
+        batches: list[ReviewBatch],
         prompt_suffix: str = "",
-        diff_by_path: dict[str, str] | None = None,
     ) -> list[runner_mod.FindingV1]:
         """
-        Run the agent (file-by-file or single shot), parse response into FindingV1 list.
+        Run the batch-review agent and parse responses into FindingV1 list.
         Returns all_findings (unfiltered).
-
-        When CODE_REVIEW_LOG_LEVEL=DEBUG, log exactly what we send to the LLM
-        (the user message text) and the raw text we receive back, before any
-        JSON parsing or filtering.
         """
-        if use_file_by_file and paths:
-            if getattr(runner, "_uses_sequential_file_review_prototype", False):
-                return self._run_sequential_file_review_mode(
-                    runner,
-                    session_service,
-                    session_id,
-                    prompt_suffix=prompt_suffix,
-                )
-            if diff_by_path is not None:
-                return self._run_embedded_file_by_file_mode(
-                    runner,
-                    session_service,
-                    paths,
-                    diff_by_path=diff_by_path,
-                    prompt_suffix=prompt_suffix,
-                )
-            return self._run_file_by_file_mode(
-                runner,
-                session_service,
-                paths,
-                prompt_suffix=prompt_suffix,
-            )
-        return self._run_single_shot_mode(
+        if not batches:
+            return []
+        return self._run_sequential_batch_review_mode(
             runner,
             session_service,
             session_id,
-            full_diff,
+            batch_count=len(batches),
             prompt_suffix=prompt_suffix,
         )
 
-    def _run_embedded_file_by_file_mode(
-        self,
-        runner,
-        session_service,
-        paths: list[str],
-        *,
-        diff_by_path: dict[str, str],
-        prompt_suffix: str = "",
-    ) -> list[runner_mod.FindingV1]:
-        """Review one file at a time using already-scoped embedded diffs (tools disabled)."""
-
-        def _build_embedded_message(file_path: str) -> str | None:
-            file_diff = diff_by_path.get(file_path, "")
-            if not file_diff:
-                return None
-            head_sha_clause = f" head_sha={self.head_sha}." if self.head_sha else ""
-            msg = (
-                "Review exactly one file from this PR. "
-                f"owner={self.owner}, repo={self.repo}, pr_number={self.pr_number}."
-                + head_sha_clause
-                + f' Use path "{file_path}" in every finding.'
-                + " The diff below is already scoped to the current review range for this file."
-                + ' Output a JSON object of the form {"findings": [...]} for this file only.'
-                + ' If there are no issues in this file, output exactly {"findings": []}.'
-            )
-            annotated = runner_mod.annotate_diff_with_line_numbers(file_diff)
-            return msg + f"\n\nHere is the unified diff for this file:\n```diff\n{annotated}\n```"
-
-        return self._run_per_file_review_loop(
-            runner,
-            session_service,
-            paths,
-            build_message=_build_embedded_message,
-            prompt_suffix=prompt_suffix,
-            debug_mode_label="embedded file-by-file",
-        )
-
-    def _run_file_by_file_mode(
-        self,
-        runner,
-        session_service,
-        paths: list[str],
-        *,
-        prompt_suffix: str = "",
-    ) -> list[runner_mod.FindingV1]:
-        def _build_file_by_file_message(file_path: str) -> str:
-            head_sha_clause = f" head_sha={self.head_sha}." if self.head_sha else ""
-            ref_guidance = (
-                " When calling get_file_lines for surrounding context, "
-                + f'use ref="{self.head_sha}" as the ref parameter.'
-                if self.head_sha
-                else ""
-            )
-            annotation_guidance = (
-                " The diff returned by get_pr_diff_for_file has <L{n}> line-number "
-                "annotations on every visible line (added '+' and context ' '). "
-                "Use the <L{n}> value as the 'line' field in each finding. "
-                "Do NOT compute line numbers from hunk headers."
-            )
-            msg = (
-                "Review exactly one file from this PR. "
-                f"owner={self.owner}, repo={self.repo}, pr_number={self.pr_number}."
-                + head_sha_clause
-                + " Call get_pr_diff_for_file(owner, repo, pr_number, "
-                + f'"{file_path}") to get the diff for this file.'
-                + annotation_guidance
-                + ref_guidance
-                + ' Then output a JSON object of the form {"findings": [...]} for this file only. '
-                + f'Use path "{file_path}" in every finding. '
-                + 'If there are no issues in this file, output exactly {"findings": []}.'
-            )
-            return msg
-
-        return self._run_per_file_review_loop(
-            runner,
-            session_service,
-            paths,
-            build_message=_build_file_by_file_message,
-            prompt_suffix=prompt_suffix,
-            debug_mode_label="file-by-file",
-        )
-
-    def _run_per_file_review_loop(
-        self,
-        runner,
-        session_service,
-        paths: list[str],
-        *,
-        build_message: runner_mod.Callable[[str], str | None],
-        prompt_suffix: str,
-        debug_mode_label: str,
-    ) -> list[runner_mod.FindingV1]:
-        """Run isolated per-file review sessions with shared logging and error handling."""
-        all_findings: list[runner_mod.FindingV1] = []
-        for file_path in paths:
-            file_session_id = (
-                f"{self.owner}/{self.repo}/pr-{self.pr_number}/file/{runner_mod.uuid.uuid4().hex[:12]}"
-            )
-            msg = build_message(file_path)
-            if not msg:
-                continue
-            if prompt_suffix:
-                msg = msg + "\n\n" + prompt_suffix
-            if runner_mod.logger.isEnabledFor(runner_mod.logging.DEBUG):
-                runner_mod.logger.debug(
-                    "LLM request (%s) session=%s file=%s prompt=%s",
-                    debug_mode_label,
-                    file_session_id,
-                    file_path,
-                    msg,
-                )
-            content = runner_mod.types.Content(role="user", parts=[runner_mod.types.Part(text=msg)])
-            try:
-                response_text = runner_mod._run_agent_and_collect_response(
-                    runner, session_service, file_session_id, content
-                )
-            except runner_mod.AuthenticationError as e:
-                runner_mod.logger.error(
-                    "LLM authentication failed while reviewing file=%s; aborting run: %s",
-                    file_path,
-                    e,
-                )
-                raise
-            except runner_mod.RateLimitError as e:
-                runner_mod.logger.warning(
-                    "Rate limit hit while reviewing file=%s (skipping): %s",
-                    file_path,
-                    e,
-                )
-                continue
-            except Exception as e:
-                runner_mod.logger.warning(
-                    "Error reviewing file=%s (skipping): %s",
-                    file_path,
-                    e,
-                    exc_info=runner_mod.logger.isEnabledFor(runner_mod.logging.DEBUG),
-                )
-                continue
-            all_findings.extend(runner_mod._findings_from_response(response_text))
-        return all_findings
-
-    def _run_single_shot_mode(
-        self,
-        runner,
-        session_service,
-        session_id: str,
-        full_diff: str,
-        *,
-        prompt_suffix: str = "",
-    ) -> list[runner_mod.FindingV1]:
-        msg = (
-            "Review this PR: "
-            f"owner={self.owner}, repo={self.repo}, pr_number={self.pr_number}."
-            + (f" head_sha={self.head_sha}." if self.head_sha else "")
-        )
-        if full_diff:
-            annotated = runner_mod.annotate_diff_with_line_numbers(full_diff)
-            msg += f"\n\nHere is the unified diff for this PR:\n```diff\n{annotated}\n```"
-        if prompt_suffix:
-            msg += "\n\n" + prompt_suffix
-        if runner_mod.logger.isEnabledFor(runner_mod.logging.DEBUG):
-            runner_mod.logger.debug(
-                "LLM request (single-shot) session=%s prompt=%s", session_id, msg
-            )
-        content = runner_mod.types.Content(role="user", parts=[runner_mod.types.Part(text=msg)])
-        response_text = runner_mod._run_agent_and_collect_response(
-            runner, session_service, session_id, content
-        )
-        return runner_mod._findings_from_response(response_text)
-
-    def _run_sequential_file_review_mode(
+    def _run_sequential_batch_review_mode(
         self,
         runner,
         session_service,
         session_id: str,
         *,
+        batch_count: int,
         prompt_suffix: str = "",
     ) -> list[runner_mod.FindingV1]:
-        """Run the SequentialAgent prototype and parse one structured response per sub-agent."""
+        """Run the SequentialAgent batch workflow and parse one structured response per sub-agent."""
         msg = (
-            "Review the prepared PR files sequentially. "
+            "Review the prepared PR batches sequentially. "
             f"owner={self.owner}, repo={self.repo}, pr_number={self.pr_number}."
             + (f" head_sha={self.head_sha}." if self.head_sha else "")
+            + f" Prepared batch count: {batch_count}."
         )
         if prompt_suffix:
             msg += "\n\n" + prompt_suffix
         if runner_mod.logger.isEnabledFor(runner_mod.logging.DEBUG):
             runner_mod.logger.debug(
-                "LLM request (SequentialAgent prototype) session=%s prompt=%s",
+                "LLM request (batch SequentialAgent) session=%s prompt=%s",
                 session_id,
                 msg,
             )
@@ -589,6 +353,35 @@ class ReviewOrchestrator:
         for _author, response_text in responses:
             all_findings.extend(runner_mod._findings_from_response(response_text))
         return all_findings
+
+    @staticmethod
+    def _build_review_batches(
+        files: list[object], paths: list[str], full_diff: str, diff_budget: int
+    ) -> list[ReviewBatch]:
+        """Slice the scoped diff by file and pack the resulting segments into ordered batches."""
+        scoped_diff_by_path = {
+            path: runner_mod.unified_diff_for_path(full_diff, path) for path in paths
+        }
+        return build_review_batches(
+            files,
+            scoped_diff_by_path,
+            diff_budget_tokens=max(1, diff_budget),
+        )
+
+    @staticmethod
+    def _log_review_batch_plan(
+        batches: list[ReviewBatch], paths: list[str], incremental_base_sha: str
+    ) -> None:
+        """Emit a concise log line describing the prepared review batches."""
+        segment_count = sum(len(batch.segments) for batch in batches)
+        mode_label = "incremental batch mode" if incremental_base_sha else "batch mode"
+        runner_mod.logger.info(
+            "Running agent on %d file(s) across %d batch(es) and %d segment(s) (%s)",
+            len(paths),
+            len(batches),
+            segment_count,
+            mode_label,
+        )
 
     def _attach_fingerprints_and_filter_findings(
         self,
@@ -1016,36 +809,6 @@ class ReviewOrchestrator:
             )
             return
         runner_mod.logger.info("Fetched diff, %d file(s) to review", len(paths))
-
-    @staticmethod
-    def _build_review_execution_mode(
-        full_diff: str, diff_budget: int, incremental_base_sha: str, paths: list[str]
-    ) -> tuple[bool, bool, dict[str, str] | None]:
-        """Return execution mode flags plus an optional embedded per-file diff map."""
-        use_file_by_file = runner_mod._estimate_tokens(full_diff) > diff_budget
-        use_embedded_file_diffs = bool(incremental_base_sha and use_file_by_file)
-        diff_by_path = (
-            {path: runner_mod.unified_diff_for_path(full_diff, path) for path in paths}
-            if use_embedded_file_diffs
-            else None
-        )
-        return (use_file_by_file, use_embedded_file_diffs, diff_by_path)
-
-    @staticmethod
-    def _log_review_execution_mode(
-        use_file_by_file: bool, use_embedded_file_diffs: bool, paths: list[str]
-    ) -> None:
-        """Log whether this run is single-shot, tool-based, or embedded file-by-file."""
-        if not use_file_by_file:
-            runner_mod.logger.info("Running agent (single shot)")
-            return
-        if use_embedded_file_diffs:
-            runner_mod.logger.info(
-                "Running agent on %d file(s) (embedded file-by-file, incremental scope)",
-                len(paths),
-            )
-            return
-        runner_mod.logger.info("Running agent on %d file(s) (file-by-file)", len(paths))
 
     def _decision_only_maybe_post_disagreed_thread_reply(
         self,
@@ -1564,7 +1327,7 @@ class ReviewOrchestrator:
         ctx_cfg = runner_mod.get_context_aware_config()
         self._validate_context_sources_or_raise(ctx_cfg, cfg, run_handle, start_time)
         pr_info_for_metadata = provider.get_pr_info(self.owner, self.repo, self.pr_number)
-        _, paths, full_diff, incremental_base_sha = self._fetch_review_files_and_diffs(
+        files, paths, full_diff, incremental_base_sha = self._fetch_review_files_and_diffs(
             provider, cfg
         )
         paths = self._build_ignore_set_and_filter_files(paths)
@@ -1587,8 +1350,13 @@ class ReviewOrchestrator:
             )
         _, review_standards = self._detect_languages_for_files(paths)
         context_window = runner_mod.get_context_window()
-        diff_budget = int(context_window * runner_mod.DIFF_TOKEN_BUDGET_RATIO)
-        remaining_prompt_tokens = max(0, context_window - diff_budget)
+        batch_budget = build_review_batch_budget(
+            context_window_tokens=context_window,
+            max_output_tokens=runner_mod.get_max_output_tokens(),
+            diff_budget_ratio=runner_mod.DIFF_TOKEN_BUDGET_RATIO,
+        )
+        diff_budget = batch_budget.effective_diff_budget_tokens
+        remaining_prompt_tokens = batch_budget.prompt_budget_tokens
         refs, context_brief, prompt_suffix = self._build_prompt_suffix(
             provider,
             cfg,
@@ -1599,27 +1367,37 @@ class ReviewOrchestrator:
             remaining_prompt_tokens,
         )
         self._log_context_aware_prompt_inputs(refs, context_brief)
-        use_file_by_file, use_embedded_file_diffs, diff_by_path = self._build_review_execution_mode(
-            full_diff, diff_budget, incremental_base_sha, paths
+        batches = self._build_review_batches(
+            files,
+            paths,
+            full_diff,
+            diff_budget,
         )
-        self._log_review_execution_mode(use_file_by_file, use_embedded_file_diffs, paths)
+        self._log_review_batch_plan(batches, paths, incremental_base_sha)
+        if not batches:
+            runner_mod.logger.info("Prepared zero review batches from the scoped diff; skipping LLM run")
+            return self._record_observability_and_build_result(
+                trace_id,
+                start_time,
+                run_handle,
+                paths,
+                [],
+                0,
+                [],
+                context_brief_attached=bool(context_brief and "<context>" in prompt_suffix),
+            )
         session_id, session_service, runner = self._create_agent_and_runner(
             provider,
             review_standards,
-            paths,
-            use_file_by_file=use_file_by_file,
-            disable_tools=True if use_embedded_file_diffs else None,
+            batches,
             context_brief_attached=bool(context_brief and "<context>" in prompt_suffix),
         )
         all_findings = self._run_agent_and_collect_findings(
             runner,
             session_service,
             session_id,
-            paths,
-            use_file_by_file,
-            full_diff=full_diff,
+            batches,
             prompt_suffix=prompt_suffix,
-            diff_by_path=diff_by_path,
         )
         all_findings = self._filter_findings_by_diff_scope(all_findings, paths, full_diff)
         to_post = self._attach_fingerprints_and_filter_findings(

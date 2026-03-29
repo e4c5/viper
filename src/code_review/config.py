@@ -111,7 +111,7 @@ class LLMConfig(BaseSettings):
             "(single key; provider chosen via LLM_PROVIDER)."
         ),
     )
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3.1"
     context_window: int = Field(
         default=128_000,
         description="Context window in tokens (explicit, avoid model-name guessing)",

@@ -1,0 +1,222 @@
+[
+  {
+    "provider": "gemini",
+    "model": "gemini-3.1",
+    "context_window_tokens": 1000000,
+    "max_output_tokens_default": 64000,
+    "input_cost_per_million_tokens": 0.5,
+    "output_cost_per_million_tokens": 3.0,
+    "source": "Local alias for Gemini 3 default, resolved at runtime to gemini-3-flash-preview",
+    "source_url": "https://ai.google.dev/gemini-api/docs/gemini-3",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "gemini",
+    "model": "gemini-3-flash-preview",
+    "context_window_tokens": 1000000,
+    "max_output_tokens_default": 64000,
+    "input_cost_per_million_tokens": 0.5,
+    "output_cost_per_million_tokens": 3.0,
+    "source": "Google AI for Developers Gemini 3 guide/pricing",
+    "source_url": "https://ai.google.dev/gemini-api/docs/gemini-3",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "gemini",
+    "model": "gemini-2.5-flash",
+    "context_window_tokens": 1048576,
+    "max_output_tokens_default": 65536,
+    "input_cost_per_million_tokens": 0.3,
+    "output_cost_per_million_tokens": 2.5,
+    "source": "Google AI for Developers Gemini models/pricing",
+    "source_url": "https://ai.google.dev/gemini-api/docs/models/gemini-v2",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "vertex",
+    "model": "gemini-2.5-flash",
+    "context_window_tokens": 1048576,
+    "max_output_tokens_default": 65535,
+    "input_cost_per_million_tokens": null,
+    "output_cost_per_million_tokens": null,
+    "source": "Google Cloud Vertex AI Gemini 2.5 Flash model reference",
+    "source_url": "https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-flash",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "openai",
+    "model": "gpt-5.4",
+    "context_window_tokens": 1000000,
+    "max_output_tokens_default": 128000,
+    "input_cost_per_million_tokens": 2.5,
+    "output_cost_per_million_tokens": 15.0,
+    "source": "OpenAI API model docs/pricing",
+    "source_url": "https://developers.openai.com/api/docs/models/gpt-5.4",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "openai",
+    "model": "gpt-5-mini",
+    "context_window_tokens": 400000,
+    "max_output_tokens_default": 128000,
+    "input_cost_per_million_tokens": 0.25,
+    "output_cost_per_million_tokens": 2.0,
+    "source": "OpenAI API model docs/pricing",
+    "source_url": "https://developers.openai.com/api/docs/models/gpt-5-mini",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "openai",
+    "model": "gpt-4o",
+    "context_window_tokens": 128000,
+    "max_output_tokens_default": 16384,
+    "input_cost_per_million_tokens": 2.5,
+    "output_cost_per_million_tokens": 10.0,
+    "source": "OpenAI API model docs/pricing",
+    "source_url": "https://developers.openai.com/api/docs/models/gpt-4o",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "openai",
+    "model": "gpt-4.1",
+    "context_window_tokens": 1047576,
+    "max_output_tokens_default": 32768,
+    "input_cost_per_million_tokens": 2.0,
+    "output_cost_per_million_tokens": 8.0,
+    "source": "OpenAI API model docs/pricing",
+    "source_url": "https://developers.openai.com/api/docs/models/gpt-4.1",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "context_window_tokens": 1047576,
+    "max_output_tokens_default": 32768,
+    "input_cost_per_million_tokens": 0.4,
+    "output_cost_per_million_tokens": 1.6,
+    "source": "OpenAI API model docs/pricing",
+    "source_url": "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-20250514",
+    "context_window_tokens": 200000,
+    "max_output_tokens_default": 64000,
+    "input_cost_per_million_tokens": 3.0,
+    "output_cost_per_million_tokens": 15.0,
+    "source": "Anthropic models overview/pricing",
+    "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "anthropic",
+    "model": "claude-3-7-sonnet-20250219",
+    "context_window_tokens": 200000,
+    "max_output_tokens_default": 64000,
+    "input_cost_per_million_tokens": 3.0,
+    "output_cost_per_million_tokens": 15.0,
+    "source": "Anthropic models overview/pricing",
+    "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "anthropic",
+    "model": "claude-3-5-sonnet-20241022",
+    "context_window_tokens": 200000,
+    "max_output_tokens_default": 8192,
+    "input_cost_per_million_tokens": 3.0,
+    "output_cost_per_million_tokens": 15.0,
+    "source": "Anthropic models overview/pricing (legacy entry retained for configured aliases)",
+    "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "anthropic",
+    "model": "claude-3-5-sonnet-latest",
+    "context_window_tokens": 200000,
+    "max_output_tokens_default": 8192,
+    "input_cost_per_million_tokens": 3.0,
+    "output_cost_per_million_tokens": 15.0,
+    "source": "Anthropic models overview/pricing (legacy alias retained for configured aliases)",
+    "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "anthropic",
+    "model": "claude-3-5-haiku-20241022",
+    "context_window_tokens": 200000,
+    "max_output_tokens_default": 8192,
+    "input_cost_per_million_tokens": 0.8,
+    "output_cost_per_million_tokens": 4.0,
+    "source": "Anthropic models overview/pricing (legacy entry retained for configured aliases)",
+    "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "anthropic",
+    "model": "claude-3-5-haiku-latest",
+    "context_window_tokens": 200000,
+    "max_output_tokens_default": 8192,
+    "input_cost_per_million_tokens": 0.8,
+    "output_cost_per_million_tokens": 4.0,
+    "source": "Anthropic models overview/pricing (legacy alias retained for configured aliases)",
+    "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "openrouter",
+    "model": "gpt-4.1-mini",
+    "context_window_tokens": 1047576,
+    "max_output_tokens_default": 32768,
+    "input_cost_per_million_tokens": null,
+    "output_cost_per_million_tokens": null,
+    "source": "Underlying OpenAI model limits; OpenRouter pricing intentionally left unset",
+    "source_url": "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "openrouter",
+    "model": "openai/gpt-5-mini",
+    "context_window_tokens": 400000,
+    "max_output_tokens_default": 128000,
+    "input_cost_per_million_tokens": null,
+    "output_cost_per_million_tokens": null,
+    "source": "Underlying OpenAI model limits; OpenRouter pricing intentionally left unset",
+    "source_url": "https://developers.openai.com/api/docs/models/gpt-5-mini",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "openrouter",
+    "model": "anthropic/claude-sonnet-4",
+    "context_window_tokens": 200000,
+    "max_output_tokens_default": 64000,
+    "input_cost_per_million_tokens": null,
+    "output_cost_per_million_tokens": null,
+    "source": "Underlying Anthropic model limits; OpenRouter pricing intentionally left unset",
+    "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "openrouter",
+    "model": "anthropic/claude-3.5-sonnet",
+    "context_window_tokens": 200000,
+    "max_output_tokens_default": 8192,
+    "input_cost_per_million_tokens": null,
+    "output_cost_per_million_tokens": null,
+    "source": "Underlying Anthropic legacy model limits; OpenRouter pricing intentionally left unset",
+    "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+    "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "ollama",
+    "model": "llama3.2",
+    "context_window_tokens": null,
+    "max_output_tokens_default": null,
+    "input_cost_per_million_tokens": null,
+    "output_cost_per_million_tokens": null,
+    "source": "Self-hosted model: token pricing and effective context depend on local runtime configuration",
+    "source_url": "https://ollama.com/library/llama3.2",
+    "verified_on": "2026-03-29"
+  }
+]

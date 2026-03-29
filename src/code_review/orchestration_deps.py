@@ -45,7 +45,7 @@ from code_review.diff.parser import (
 )
 from code_review.diff.position import get_diff_hunk_for_line
 from code_review.formatters.comment import finding_to_comment_body, infer_severity_from_comment_body
-from code_review.models import get_context_window
+from code_review.models import get_context_window, get_max_output_tokens
 from code_review.providers import get_provider
 from code_review.providers.base import (
     BotAttributionIdentity,
@@ -955,7 +955,7 @@ def _post_comments_one_by_one(
 ) -> int:
     """Post each comment individually; skip (warn) on failure. Returns successful count.
 
-    No fallback to PR summary comments: mirrors the tool-based (file-by-file) behaviour
+    No fallback to PR summary comments: mirrors the current inline-posting behaviour
     where a failed inline comment is simply skipped and the next one is attempted.
     """
     count = 0

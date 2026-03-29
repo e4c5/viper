@@ -26,6 +26,26 @@ def runner_run_async_returning(events):
     return _wrapper
 
 
+def sample_unified_diff(
+    path: str = "foo.py",
+    *,
+    before: str = "old\n",
+    after: str = "new\n",
+) -> str:
+    """Return a minimal parseable unified diff for one modified file."""
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    hunk_lines = [*(f"-{line}" for line in before_lines), *(f"+{line}" for line in after_lines)]
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        f"--- a/{path}\n"
+        f"+++ b/{path}\n"
+        f"@@ -1,{len(before_lines)} +1,{len(after_lines)} @@\n"
+        + "\n".join(hunk_lines)
+        + "\n"
+    )
+
+
 E2E_COMPOSE_FILE = "tests/e2e/docker-compose.e2e.yml"
 E2E_PROJECT_NAME = "code-review-e2e"
 

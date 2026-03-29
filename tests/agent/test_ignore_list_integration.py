@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from code_review.diff.fingerprint import format_comment_body_with_marker
 from code_review.providers.base import FileInfo, ProviderCapabilities, ReviewComment
-from tests.conftest import runner_run_async_returning
+from tests.conftest import runner_run_async_returning, sample_unified_diff
 
 
 @patch("code_review.orchestration_deps.get_context_window")
@@ -33,7 +33,7 @@ def test_manually_resolved_comment_does_not_block_changed_code(
         resolvable_comments=False, supports_suggestions=False
     )
     provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    provider.get_pr_diff.return_value = "diff"
+    provider.get_pr_diff.return_value = sample_unified_diff("foo.py")
     provider.get_file_content.return_value = "content"
 
     # Existing comment is manually resolved, with fingerprint "old-fp" and body text

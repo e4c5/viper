@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from code_review.providers.base import FileInfo
-from tests.conftest import runner_run_async_returning
+from tests.conftest import runner_run_async_returning, sample_unified_diff
 
 
 @patch("code_review.orchestration_deps.get_context_window")
@@ -26,7 +26,7 @@ def test_run_review_emits_trace_id_and_run_complete(
     mock_llm.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
     provider = MagicMock()
     provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    provider.get_pr_diff.return_value = "diff"
+    provider.get_pr_diff.return_value = sample_unified_diff("foo.py")
     provider.get_file_content.return_value = "content"
     provider.get_existing_review_comments.return_value = []
     provider.post_review_comments = MagicMock()

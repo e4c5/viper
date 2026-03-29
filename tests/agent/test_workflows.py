@@ -2,12 +2,13 @@
 
 from unittest.mock import MagicMock, patch
 
-from code_review.agent.workflows import create_sequential_file_review_agent
+from code_review.agent.workflows import create_sequential_batch_review_agent
+from code_review.batching import ReviewBatch, ReviewSegment
 
 
 @patch("google.adk.agents.SequentialAgent")
 @patch("code_review.agent.workflows.create_review_agent")
-def test_create_sequential_file_review_agent_builds_one_sub_agent_per_path(
+def test_create_sequential_batch_review_agent_builds_one_sub_agent_per_batch(
     mock_create_review_agent, mock_sequential_agent_cls
 ) -> None:
     provider = MagicMock()
@@ -19,10 +20,43 @@ def test_create_sequential_file_review_agent_builds_one_sub_agent_per_path(
     sequential_instance = MagicMock()
     mock_sequential_agent_cls.return_value = sequential_instance
 
-    result = create_sequential_file_review_agent(
+    batches = [
+        ReviewBatch(
+            batch_index=0,
+            estimated_tokens=10,
+            paths=("a.py", "b.py"),
+            segments=(
+                ReviewSegment(
+                    path="a.py",
+                    diff_text="diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,1 +1,2 @@\n old\n+new\n",
+                    estimated_tokens=5,
+                    segment_index=0,
+                    total_segments=1,
+                    split_strategy="whole_file",
+                ),
+            ),
+        ),
+        ReviewBatch(
+            batch_index=1,
+            estimated_tokens=8,
+            paths=("c.py",),
+            segments=(
+                ReviewSegment(
+                    path="c.py",
+                    diff_text="diff --git a/c.py b/c.py\n--- a/c.py\n+++ b/c.py\n@@ -10,1 +10,2 @@\n old\n+newer\n",
+                    estimated_tokens=8,
+                    segment_index=0,
+                    total_segments=1,
+                    split_strategy="whole_file",
+                ),
+            ),
+        ),
+    ]
+
+    result = create_sequential_batch_review_agent(
         provider,
         "review standards",
-        ["a.py", "b.py"],
+        batches,
         head_sha="sha1",
         context_brief_attached=True,
     )
@@ -33,14 +67,15 @@ def test_create_sequential_file_review_agent_builds_one_sub_agent_per_path(
         provider,
         "review standards",
         findings_only=True,
-        disable_tools=False,
+        disable_tools=True,
         context_brief_attached=True,
     )
     _, kwargs = mock_sequential_agent_cls.call_args
-    assert kwargs["name"] == "sequential_file_review_agent"
+    assert kwargs["name"] == "sequential_batch_review_agent"
     assert len(kwargs["sub_agents"]) == 2
-    assert kwargs["sub_agents"][0].name == "file_review_0"
-    assert kwargs["sub_agents"][1].name == "file_review_1"
-    assert 'Use path "a.py" in every finding.' in kwargs["sub_agents"][0].instruction
-    assert 'Use path "b.py" in every finding.' in kwargs["sub_agents"][1].instruction
-    assert 'use ref="sha1" exactly' in kwargs["sub_agents"][0].instruction
+    assert kwargs["sub_agents"][0].name == "batch_review_0"
+    assert kwargs["sub_agents"][1].name == "batch_review_1"
+    assert "Review exactly one prepared batch" in kwargs["sub_agents"][0].instruction
+    assert "a.py, b.py" in kwargs["sub_agents"][0].instruction
+    assert "Segment: full-file segment for a.py" in kwargs["sub_agents"][0].instruction
+    assert "<L2>+new" in kwargs["sub_agents"][0].instruction

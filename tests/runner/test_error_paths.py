@@ -40,7 +40,15 @@ def _exercise_error_path(
         resolvable_comments=False, supports_suggestions=False
     )
     provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    provider.get_pr_diff.return_value = "diff"
+    provider.get_pr_diff.return_value = (
+        "diff --git a/foo.py b/foo.py\n"
+        "--- a/foo.py\n"
+        "+++ b/foo.py\n"
+        "@@ -1,1 +1,3 @@\n"
+        " line1\n"
+        "+line2\n"
+        " line3\n"
+    )
     provider.get_file_content.return_value = "content"
     provider.get_existing_review_comments.return_value = []
 
@@ -60,19 +68,14 @@ def _exercise_error_path(
     return to_post, provider
 
 
-def _exercise_file_by_file_skip(
+def _exercise_batch_mode_failure(
     mock_get_scm_config,
     mock_get_provider,
     mock_get_llm_config,
     mock_get_context_window,
     run_async_side_effect,
 ):
-    """Helper: run file-by-file mode (small context window) with a custom run_async side effect.
-
-    Returns (results, call_count_list) where call_count_list[0] is the number of
-    agent calls made.  The provider is pre-configured with two files (a.py, b.py)
-    and a diff large enough to trigger file-by-file mode.
-    """
+    """Helper: run batch mode with a custom run_async side effect."""
     from code_review.runner import run_review
 
     mock_get_scm_config.return_value = MagicMock(
@@ -82,9 +85,8 @@ def _exercise_file_by_file_skip(
         skip_label="",
         skip_title_pattern="",
     )
-    mock_get_llm_config.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
-    # Small context window so diff exceeds budget → file-by-file mode
-    mock_get_context_window.return_value = 100
+    mock_get_llm_config.return_value = MagicMock(provider="gemini", model="gemini-3.1")
+    mock_get_context_window.return_value = 1_000_000
 
     provider = MagicMock()
     provider.capabilities.return_value = ProviderCapabilities(
@@ -94,7 +96,20 @@ def _exercise_file_by_file_skip(
         FileInfo(path="a.py", status="modified"),
         FileInfo(path="b.py", status="modified"),
     ]
-    provider.get_pr_diff.return_value = "x" * 200  # exceeds budget
+    provider.get_pr_diff.return_value = (
+        "diff --git a/a.py b/a.py\n"
+        "--- a/a.py\n"
+        "+++ b/a.py\n"
+        "@@ -1,1 +1,2 @@\n"
+        "-old_a\n"
+        "+new_a\n"
+        "diff --git a/b.py b/b.py\n"
+        "--- a/b.py\n"
+        "+++ b/b.py\n"
+        "@@ -1,1 +1,2 @@\n"
+        "-old_b\n"
+        "+new_b\n"
+    )
     provider.get_file_content.return_value = ""
     provider.get_existing_review_comments.return_value = []
     provider.post_review_comments = MagicMock()
@@ -108,23 +123,6 @@ def _exercise_file_by_file_skip(
         results = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
 
     return results
-
-
-def _build_file_by_file_run_async_side_effect(call_count, error_factory, findings: str):
-    """Factory for run_async side effects used in file-by-file skip tests."""
-
-    def run_async_side_effect(*, new_message, **kwargs):
-        call_count[0] += 1
-        text = new_message.parts[0].text if new_message.parts else ""
-        if '"a.py"' in text:
-            raise error_factory()
-        mock_event = MagicMock()
-        mock_event.is_final_response.return_value = True
-        mock_event.content = MagicMock()
-        mock_event.content.parts = [MagicMock(text=findings)]
-        return runner_run_async_returning([mock_event])()
-
-    return run_async_side_effect
 
 
 @patch("code_review.orchestration_deps.get_context_window")
@@ -224,93 +222,134 @@ def test_post_review_comment_skipped_not_fallback_to_pr_summary(
 @patch("code_review.orchestration_deps.get_llm_config")
 @patch("code_review.orchestration_deps.get_provider")
 @patch("code_review.orchestration_deps.get_scm_config")
-def test_file_by_file_skips_file_on_rate_limit_error(
+def test_batch_mode_rate_limit_error_is_fatal(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
-    """File-by-file mode skips a file and continues when a RateLimitError is raised."""
-    call_count = [0]
-    findings = '{"findings":[{"path":"b.py","line":1,"severity":"low","code":"ok","message":"Fine."}]}'
+    """Batch mode currently treats a top-level RateLimitError as fatal for the whole run."""
 
-    run_async_side_effect = _build_file_by_file_run_async_side_effect(
-        call_count, lambda: RateLimitError("HTTP 429 Too Many Requests"), findings
-    )
+    def run_async_side_effect(*, new_message, **kwargs):
+        del new_message, kwargs
+        raise RateLimitError("HTTP 429 Too Many Requests")
 
-    results = _exercise_file_by_file_skip(
-        mock_get_scm_config,
-        mock_get_provider,
-        mock_get_llm_config,
-        mock_get_context_window,
-        run_async_side_effect,
-    )
-
-    # a.py was skipped (rate limit), b.py was processed
-    assert call_count[0] == 2
-    assert len(results) == 1
-    assert results[0].path == "b.py"
-
-
-@patch("code_review.orchestration_deps.get_context_window")
-@patch("code_review.orchestration_deps.get_llm_config")
-@patch("code_review.orchestration_deps.get_provider")
-@patch("code_review.orchestration_deps.get_scm_config")
-def test_file_by_file_skips_file_on_generic_error(
-    mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
-):
-    """File-by-file mode skips a file and continues when an unexpected error is raised."""
-    call_count = [0]
-    findings = '{"findings":[{"path":"b.py","line":2,"severity":"medium","code":"s","message":"Improve."}]}'
-
-    run_async_side_effect = _build_file_by_file_run_async_side_effect(
-        call_count, lambda: RuntimeError("unexpected LLM error"), findings
-    )
-
-    results = _exercise_file_by_file_skip(
-        mock_get_scm_config,
-        mock_get_provider,
-        mock_get_llm_config,
-        mock_get_context_window,
-        run_async_side_effect,
-    )
-
-    # a.py was skipped (error), b.py was processed
-    assert call_count[0] == 2
-    assert len(results) == 1
-    assert results[0].path == "b.py"
-
-
-@patch("code_review.orchestration_deps.get_context_window")
-@patch("code_review.orchestration_deps.get_llm_config")
-@patch("code_review.orchestration_deps.get_provider")
-@patch("code_review.orchestration_deps.get_scm_config")
-def test_file_by_file_authentication_error_is_fatal(
-    mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
-):
-    """
-    File-by-file mode must treat litellm.AuthenticationError (HTTP 401) as fatal,
-    so CI fails fast instead of silently skipping all files.
-    """
-    call_count = [0]
-    findings = '{"findings":[{"path":"b.py","line":3,"severity":"low","code":"ok","message":"Still fine."}]}'
-
-    def make_auth_error():
-        # AuthenticationError(message, llm_provider, model, response=None)
-        return AuthenticationError(
-            "HTTP 401 Unauthorized", llm_provider="openrouter", model="openrouter/gpt-4o"
-        )
-
-    run_async_side_effect = _build_file_by_file_run_async_side_effect(
-        call_count, make_auth_error, findings
-    )
-
-    with pytest.raises(AuthenticationError):
-        _exercise_file_by_file_skip(
+    with pytest.raises(RateLimitError, match="HTTP 429 Too Many Requests"):
+        _exercise_batch_mode_failure(
             mock_get_scm_config,
             mock_get_provider,
             mock_get_llm_config,
             mock_get_context_window,
             run_async_side_effect,
         )
-    assert call_count[0] == 1
+
+
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
+def test_batch_mode_propagates_rate_limit_error_for_whole_run(
+    mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
+):
+    """Batch mode surfaces a top-level RateLimitError for the whole run."""
+    from code_review.runner import run_review
+
+    mock_get_scm_config.return_value = MagicMock(
+        provider="gitea",
+        url="https://x.com",
+        token="x",
+        skip_label="",
+        skip_title_pattern="",
+    )
+    mock_get_llm_config.return_value = MagicMock(provider="gemini", model="gemini-3.1")
+    mock_get_context_window.return_value = 1_000_000
+
+    provider = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        resolvable_comments=False, supports_suggestions=False
+    )
+    provider.get_pr_files.return_value = [
+        FileInfo(path="a.py", status="modified"),
+        FileInfo(path="b.py", status="modified"),
+    ]
+    provider.get_pr_diff.return_value = (
+        "diff --git a/a.py b/a.py\n"
+        "--- a/a.py\n"
+        "+++ b/a.py\n"
+        "@@ -1,1 +1,2 @@\n"
+        "-old_a\n"
+        "+new_a\n"
+        "diff --git a/b.py b/b.py\n"
+        "--- a/b.py\n"
+        "+++ b/b.py\n"
+        "@@ -1,1 +1,2 @@\n"
+        "-old_b\n"
+        "+new_b\n"
+    )
+    provider.get_file_content.return_value = ""
+    provider.get_existing_review_comments.return_value = []
+    mock_get_provider.return_value = provider
+
+    mock_runner_instance = MagicMock()
+
+    def run_async_side_effect(*, new_message, **kwargs):
+        raise RateLimitError("HTTP 429 Too Many Requests")
+
+    mock_runner_instance.run_async = run_async_side_effect
+
+    with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
+        with pytest.raises(RateLimitError, match="HTTP 429 Too Many Requests"):
+            run_review("o", "r", 1, head_sha="abc123", dry_run=True)
+
+
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
+def test_batch_mode_generic_error_is_fatal(
+    mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
+):
+    """Batch mode currently treats unexpected runner errors as fatal."""
+
+    def run_async_side_effect(*, new_message, **kwargs):
+        del new_message, kwargs
+        raise RuntimeError("unexpected LLM error")
+
+    with pytest.raises(RuntimeError, match="unexpected LLM error"):
+        _exercise_batch_mode_failure(
+            mock_get_scm_config,
+            mock_get_provider,
+            mock_get_llm_config,
+            mock_get_context_window,
+            run_async_side_effect,
+        )
+
+
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
+def test_batch_mode_authentication_error_is_fatal(
+    mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
+):
+    """
+    Batch mode must treat litellm.AuthenticationError (HTTP 401) as fatal.
+    """
+    def make_auth_error():
+        # AuthenticationError(message, llm_provider, model, response=None)
+        return AuthenticationError(
+            "HTTP 401 Unauthorized", llm_provider="openrouter", model="openrouter/gpt-4o"
+        )
+
+    def run_async_side_effect(*, new_message, **kwargs):
+        del new_message, kwargs
+        raise make_auth_error()
+
+    with pytest.raises(AuthenticationError):
+        _exercise_batch_mode_failure(
+            mock_get_scm_config,
+            mock_get_provider,
+            mock_get_llm_config,
+            mock_get_context_window,
+            run_async_side_effect,
+        )
 
 
 @patch("code_review.orchestration_deps.get_context_window")

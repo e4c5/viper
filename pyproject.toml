@@ -56,7 +56,7 @@ code-review = "code_review.__main__:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-code_review = ["standards/prompts/*.md"]
+code_review = ["standards/prompts/*.md", "model_metadata.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

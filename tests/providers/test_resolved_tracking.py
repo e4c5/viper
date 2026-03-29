@@ -9,7 +9,7 @@ from code_review.providers.base import (
     ProviderInterface,
     ReviewComment,
 )
-from tests.conftest import runner_run_async_returning
+from tests.conftest import runner_run_async_returning, sample_unified_diff
 
 
 def test_review_comment_has_resolved():
@@ -46,10 +46,10 @@ class _ProviderWithCapabilities(ProviderInterface):
         repo: str,
         pr_number: int,
     ) -> str:
-        return "diff"
+        return sample_unified_diff("foo.py")
 
     def get_pr_diff_for_file(self, owner: str, repo: str, pr_number: int, path: str) -> str:
-        return "diff"
+        return sample_unified_diff(path or "foo.py")
 
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
         return "content"

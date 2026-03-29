@@ -27,10 +27,11 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Shared instruction fragments
-# Both FINDINGS_ONLY_INSTRUCTION (file-by-file mode, tools enabled) and
-# SINGLE_SHOT_INSTRUCTION (tools disabled, full diff embedded in message)
-# share the same output-format contract, finding schema, anchor/placement
-# rules, and examples.  Edit these fragments to update both modes at once.
+# Both FINDINGS_ONLY_INSTRUCTION (tool-enabled review) and
+# SINGLE_SHOT_INSTRUCTION (tool-free embedded-diff review, now used by prepared
+# batch sub-agents) share the same output-format contract, finding schema,
+# anchor/placement rules, and examples. Edit these fragments to update both
+# instruction styles at once.
 # ---------------------------------------------------------------------------
 
 # The three bullet-point rules shared by both instructions in the
@@ -229,7 +230,7 @@ async def _after_tool_callback(
 # ---------------------------------------------------------------------------
 
 # Instruction when agent returns findings only; runner filters and posts.
-# Used in file-by-file mode where tools ARE available.
+# Used when tools are available and the agent may fetch file-scoped diff/context.
 FINDINGS_ONLY_INSTRUCTION = (
     "\n"
     "You are a code review agent. You will receive PR details\n"
@@ -275,9 +276,8 @@ FINDINGS_ONLY_INSTRUCTION = (
     "\n" + _SHARED_AGENT_FIX_AND_EXAMPLES + "\n"
 )
 
-# Instruction for single-shot mode: the full diff is embedded in the user message.
-# This instruction is intentionally tool-free — referencing unavailable tools causes
-# Gemini to return [] (it infers it cannot complete the workflow).
+# Instruction for tool-free embedded-diff review: the prepared diff payload is already
+# embedded in the user message, so the agent should not expect tools.
 SINGLE_SHOT_INSTRUCTION = (
     "\n"
     "You are a code review agent. You will receive the complete unified diff of a pull\n"
@@ -323,11 +323,11 @@ def create_review_agent(
 
     The findings_only parameter is retained for backwards compatibility but has no effect.
 
-    Pass disable_tools=True for single-shot mode: the full diff is already embedded in
-    the user message so the agent needs no tools.  Without this, the agent may call
-    get_pr_diff_for_file / get_file_content for every file, which causes triangular token
-    accumulation (each LLM turn re-bills all prior context) and leads to multi-million
-    token usage on large PRs.
+    Pass disable_tools=True for prepared batch review: the relevant diff payload is already
+    embedded in the user message so the agent needs no tools. Without this, the agent may call
+    get_pr_diff_for_file / get_file_content repeatedly, which causes triangular token
+    accumulation (each LLM turn re-bills all prior context) and leads to runaway token usage on
+    large PRs.
     """
     from google.adk.agents import Agent
     from google.genai import types
@@ -340,14 +340,15 @@ def create_review_agent(
 
     instruction = FINDINGS_ONLY_INSTRUCTION
     # Disable tools when:
-    # 1. Explicitly requested via disable_tools=True (single-shot mode: diff is in the message)
+    # 1. Explicitly requested via disable_tools=True (prepared diff is already in the message)
     # 2. LLM_DISABLE_TOOL_CALLS env var is set (debug/test override)
     if disable_tools or getattr(llm_cfg, "disable_tool_calls", False):
         tools = []
-        # Use the tool-free instruction in single-shot mode.  FINDINGS_ONLY_INSTRUCTION
+        # Use the tool-free instruction when review batches already embed the relevant diff.
+        # FINDINGS_ONLY_INSTRUCTION
         # references get_file_content, get_file_lines, detect_language_context etc.;
         # when those tools are absent, Gemini infers it cannot complete the workflow
-        # and returns [] (no findings).  SINGLE_SHOT_INSTRUCTION is clean and only
+        # and returns [] (no findings). SINGLE_SHOT_INSTRUCTION is clean and only
         # describes the embedded-diff workflow.
         instruction = SINGLE_SHOT_INSTRUCTION
     else:

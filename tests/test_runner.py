@@ -15,7 +15,7 @@ from code_review.providers.base import (
 )
 from code_review.providers.bitbucket_server import BitbucketServerProvider
 from code_review.reply_dismissal_state import REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT
-from tests.conftest import runner_run_async_returning
+from tests.conftest import runner_run_async_returning, sample_unified_diff
 
 
 class MockProvider:
@@ -23,7 +23,7 @@ class MockProvider:
         return [FileInfo(path="foo.py", status="modified")]
 
     def get_pr_diff(self, owner, repo, pr_number):
-        return "diff --git a/foo.py b/foo.py"
+        return sample_unified_diff("foo.py")
 
     def get_file_content(self, owner, repo, ref, path):
         return "content"
@@ -81,7 +81,7 @@ def _base_review_provider(
     """Provider mock for tests that run the agent against a single modified file."""
     p = MagicMock()
     p.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    p.get_pr_diff.return_value = "diff"
+    p.get_pr_diff.return_value = sample_unified_diff("foo.py")
     p.get_file_content.return_value = "content"
     p.get_existing_review_comments.return_value = []
     p.post_review_comments = MagicMock()
@@ -104,15 +104,7 @@ def _final_adk_event(findings_json: str) -> MagicMock:
 def _adk_runner_single_event(findings_json: str) -> MagicMock:
     mock_event = _final_adk_event(findings_json)
     inst = MagicMock()
-    inst.run_async = runner_run_async_returning([mock_event])
-    return inst
-
-
-def _adk_runner_n_per_file_calls(findings_json: str, n: int) -> MagicMock:
-    mock_event = _final_adk_event(findings_json)
-    inst = MagicMock()
-    wrapper = runner_run_async_returning([mock_event])
-    inst.run_async.side_effect = [wrapper() for _ in range(n)]
+    inst.run_async = MagicMock(side_effect=runner_run_async_returning([mock_event]))
     return inst
 
 
@@ -531,7 +523,7 @@ def test_run_review_ignore_list_and_posts_net_new(
     findings_json = """{
         "findings": [
             {"path":"foo.py","line":1,"severity":"high","code":"x","message":"Duplicate finding."},
-            {"path":"foo.py","line":2,"severity":"medium","code":"y","message":"Net new finding."}
+            {"path":"foo.py","line":1,"severity":"medium","code":"y","message":"Net new finding."}
         ]
     }"""
 
@@ -652,13 +644,13 @@ def test_run_review_skips_when_idempotency_marker_present(
 @patch("code_review.orchestration_deps.get_llm_config")
 @patch("code_review.orchestration_deps.get_provider")
 @patch("code_review.orchestration_deps.get_scm_config")
-def test_run_review_uses_file_by_file_mode_when_diff_exceeds_budget(
+def test_run_review_builds_multiple_batches_when_diff_exceeds_single_batch_budget(
     mock_get_scm_config,
     mock_get_provider,
     mock_get_llm_config,
     mock_get_context_window,
 ):
-    """When diff size exceeds budget, runner reviews files one-by-one with separate sessions."""
+    """Large diffs should be packed into multiple prepared batches for one workflow run."""
     from code_review.runner import run_review
 
     scm_cfg = _scm_config()
@@ -675,18 +667,33 @@ def test_run_review_uses_file_by_file_mode_when_diff_exceeds_budget(
         FileInfo(path="foo.py", status="modified"),
         FileInfo(path="bar.py", status="modified"),
     ]
-    provider.get_pr_diff.return_value = "x" * 10_000
+    provider.get_pr_diff.return_value = sample_unified_diff(
+        "foo.py",
+        before="\n".join(f"old_{i}" for i in range(80)) + "\n",
+        after="\n".join(f"new_{i}" for i in range(80)) + "\n",
+    ) + sample_unified_diff(
+        "bar.py",
+        before="\n".join(f"old_bar_{i}" for i in range(80)) + "\n",
+        after="\n".join(f"new_bar_{i}" for i in range(80)) + "\n",
+    )
     mock_get_provider.return_value = provider
     mock_get_context_window.return_value = 16
 
     findings_json = '{"findings":[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]}'
-    mock_runner = _adk_runner_n_per_file_calls(findings_json, 2)
+    mock_runner = _adk_runner_single_event(findings_json)
 
-    with _patch_adk_runner(mock_runner):
+    with (
+        patch("code_review.agent.workflows.create_sequential_batch_review_agent") as mock_workflow,
+        _patch_adk_runner(mock_runner),
+    ):
+        mock_workflow.return_value = MagicMock(name="batch_workflow_agent")
         result = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
 
     assert len(result) == 1
-    assert mock_runner.run_async.call_count == 2
+    assert mock_runner.run_async.call_count == 1
+    batches = mock_workflow.call_args.args[2]
+    assert len(batches) > 1
+    assert tuple(batches[0].paths) == ("foo.py",)
 
 
 def _review_decision_scm_config(**extra):

@@ -10,6 +10,7 @@ from code_review.runner import (
     _idempotency_key_seen_in_comments,
     run_review,
 )
+from tests.conftest import sample_unified_diff
 
 
 @patch("code_review.orchestration_deps.get_llm_config")
@@ -65,7 +66,7 @@ def test_run_review_skips_when_idempotency_key_seen(
     mock_get_llm_config.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
     provider = MagicMock()
     provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    provider.get_pr_diff.return_value = "diff"
+    provider.get_pr_diff.return_value = sample_unified_diff("foo.py")
     provider.get_file_content.return_value = "x"
     run_id = _build_idempotency_key(
         mock_get_scm_config.return_value,
@@ -110,7 +111,7 @@ def test_run_review_skips_when_omit_marker_pr_summary_contains_run_id(
         embed_agent_marker_as_commonmark_linkref=True,
     )
     provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    provider.get_pr_diff.return_value = "diff"
+    provider.get_pr_diff.return_value = sample_unified_diff("foo.py")
     provider.get_file_content.return_value = "x"
     run_id = _build_idempotency_key(
         mock_get_scm_config.return_value,

@@ -70,7 +70,14 @@ def _orchestrator_run_env(
         mock_llm.return_value = MagicMock()
         provider = MagicMock()
         provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-        provider.get_pr_diff.return_value = "diff"
+        provider.get_pr_diff.return_value = (
+            "diff --git a/foo.py b/foo.py\n"
+            "--- a/foo.py\n"
+            "+++ b/foo.py\n"
+            "@@ -1,1 +1,2 @@\n"
+            "-old\n"
+            "+new\n"
+        )
         provider.get_existing_review_comments.return_value = []
         provider.get_file_content.return_value = "line1\n"
         provider.capabilities.return_value = MagicMock(
@@ -229,8 +236,8 @@ def test_review_orchestrator_run_returns_list_of_findings():
 
 @patch("google.adk.sessions.InMemorySessionService")
 @patch("google.adk.runners.Runner")
-@patch("code_review.agent.workflows.create_sequential_file_review_agent")
-def test_create_agent_and_runner_uses_sequential_workflow_prototype_when_enabled(
+@patch("code_review.agent.workflows.create_sequential_batch_review_agent")
+def test_create_agent_and_runner_uses_sequential_batch_workflow(
     mock_create_sequential, mock_runner_cls, mock_session_service_cls
 ):
     provider = MagicMock()
@@ -240,26 +247,23 @@ def test_create_agent_and_runner_uses_sequential_workflow_prototype_when_enabled
     mock_runner_cls.return_value = runner_instance
     mock_session_service_cls.return_value = MagicMock()
     orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="sha1")
+    batches = [MagicMock()]
 
-    with patch.dict(
-        "os.environ", {"CODE_REVIEW_ENABLE_SEQUENTIAL_AGENT_PROTOTYPE": "1"}, clear=False
-    ):
-        _, _, runner = orchestrator._create_agent_and_runner(
-            provider,
-            "review standards",
-            ["a.py", "b.py"],
-            use_file_by_file=True,
-        )
+    _, _, runner = orchestrator._create_agent_and_runner(
+        provider,
+        "review standards",
+        batches,
+    )
 
     assert runner is runner_instance
     mock_create_sequential.assert_called_once_with(
         provider,
         "review standards",
-        ["a.py", "b.py"],
+        batches,
         head_sha="sha1",
         context_brief_attached=False,
     )
-    assert getattr(runner, "_uses_sequential_file_review_prototype") is True
+    assert getattr(runner, "_uses_sequential_batch_review") is True
 
 
 @patch("code_review.orchestration_deps._run_agent_and_collect_responses")
@@ -268,23 +272,22 @@ def test_run_agent_and_collect_findings_parses_sequential_workflow_responses(
 ):
     mock_collect_responses.return_value = [
         (
-            "file_review_0",
+            "batch_review_0",
             '{"findings":[{"path":"a.py","line":1,"severity":"low","code":"c1","message":"m1"}]}',
         ),
         (
-            "file_review_1",
+            "batch_review_1",
             '{"findings":[{"path":"b.py","line":2,"severity":"medium","code":"c2","message":"m2"}]}',
         ),
     ]
     orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="sha1")
-    runner = SimpleNamespace(_uses_sequential_file_review_prototype=True)
+    runner = SimpleNamespace(_uses_sequential_batch_review=True)
 
     findings = orchestrator._run_agent_and_collect_findings(
         runner,
         MagicMock(),
         "session-1",
-        ["a.py", "b.py"],
-        True,
+        [MagicMock(), MagicMock()],
     )
 
     assert [(f.path, f.line, f.message) for f in findings] == [
@@ -479,31 +482,35 @@ def test_detect_languages_for_files_returns_detected_and_review_standards():
 def test_create_agent_and_runner_returns_session_id_service_runner(mock_create_agent):
     """_create_agent_and_runner returns (session_id, session_service, runner).
 
-    Called with findings_only=True.  The default (use_file_by_file=False) means
-    single-shot mode so disable_tools=True is passed to create_review_agent.
+    Batch mode always constructs a SequentialAgent workflow over prepared batches.
     """
-    mock_agent = MagicMock()
-    mock_create_agent.return_value = mock_agent
+    del mock_create_agent
     provider = MagicMock()
     review_standards = "### Python"
+    batch_agent = MagicMock()
+    batches = [MagicMock()]
 
     o = ReviewOrchestrator("o", "r", 42)
     with (
         patch("google.adk.runners.Runner") as MockRunner,
         patch("google.adk.sessions.InMemorySessionService") as MockSessionService,
+        patch("code_review.agent.workflows.create_sequential_batch_review_agent") as mock_create_batch,
     ):
         mock_svc = MagicMock()
         MockSessionService.return_value = mock_svc
         mock_runner = MagicMock()
         MockRunner.return_value = mock_runner
+        mock_create_batch.return_value = batch_agent
 
-        session_id, session_service, runner = o._create_agent_and_runner(provider, review_standards)
+        session_id, session_service, runner = o._create_agent_and_runner(
+            provider, review_standards, batches
+        )
 
-        mock_create_agent.assert_called_once_with(
+        mock_create_batch.assert_called_once_with(
             provider,
             review_standards,
-            findings_only=True,
-            disable_tools=True,
+            batches,
+            head_sha="",
             context_brief_attached=False,
         )
     assert session_id.startswith("o/r/pr-42/")
@@ -513,7 +520,7 @@ def test_create_agent_and_runner_returns_session_id_service_runner(mock_create_a
     # Session is created in _collect_response_async via create_session (async), not here
     mock_svc.create_session_sync.assert_not_called()
     MockRunner.assert_called_once_with(
-        agent=mock_agent, app_name="code_review", session_service=mock_svc
+        agent=batch_agent, app_name="code_review", session_service=mock_svc
     )
 
 
@@ -658,16 +665,11 @@ def test_run_does_not_post_started_review_comment_in_dry_run():
     provider.post_pr_summary_comment.assert_not_called()
 
 
-# --- Per-file user message content ---
+# --- Batch-mode prompt content ---
 
 
-def test_run_file_by_file_message_includes_head_sha_ref_guidance():
-    """Per-file user message must tell the agent to use head_sha as ref for get_file_lines.
-
-    When the agent calls get_file_lines for surrounding context it needs to know
-    which ref (revision) to use.  Without this guidance it may omit the ref or
-    use 'main', resulting in context from a different revision than the PR head.
-    """
+def test_run_batch_mode_message_includes_head_sha_and_batch_count():
+    """Batch-mode user message should describe the sequential batch review run."""
     from unittest.mock import AsyncMock
 
     captured_messages: list[str] = []
@@ -678,8 +680,6 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
             for part in new_msg.parts:
                 if hasattr(part, "text") and part.text:
                     captured_messages.append(part.text)
-        # Yield a final response with an empty findings array so the runner
-        # doesn't try to post anything.
         event = MagicMock()
         event.is_final_response.return_value = True
         event.content = MagicMock()
@@ -689,7 +689,7 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
     from code_review.providers.base import FileInfo
 
     with (
-        patch("code_review.orchestration_deps.get_context_window", return_value=10),  # force file-by-file
+        patch("code_review.orchestration_deps.get_context_window", return_value=10),
         patch("code_review.orchestration_deps.get_provider") as mock_get_provider,
         patch("code_review.orchestration_deps.get_scm_config") as mock_scm,
         patch("code_review.orchestration_deps.get_llm_config") as mock_llm,
@@ -706,7 +706,15 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
         mock_llm.return_value = MagicMock(disable_tool_calls=False)
         provider = MagicMock()
         provider.get_pr_files.return_value = [FileInfo(path="src/foo.py", status="modified")]
-        provider.get_pr_diff.return_value = "@@ -1,2 +1,3 @@\n line1\n+line2\n line3\n"
+        provider.get_pr_diff.return_value = (
+            "diff --git a/src/foo.py b/src/foo.py\n"
+            "--- a/src/foo.py\n"
+            "+++ b/src/foo.py\n"
+            "@@ -1,2 +1,3 @@\n"
+            " line1\n"
+            "+line2\n"
+            " line3\n"
+        )
         provider.get_existing_review_comments.return_value = []
         provider.get_file_content.return_value = "line1\nline2\n"
         provider.get_pr_info.return_value = None
@@ -719,7 +727,6 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
         )
         mock_get_provider.return_value = provider
 
-        # create_session is awaited in _collect_response_async; must be an AsyncMock.
         mock_session_svc = MagicMock()
         mock_session_svc.create_session = AsyncMock()
         mock_session_svc_cls.return_value = mock_session_svc
@@ -733,117 +740,44 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
         )
         orchestrator.run()
 
-    # At least one message should have been sent to the LLM
-    assert captured_messages, "No messages were sent to the LLM"
+    assert captured_messages
     combined = " ".join(captured_messages)
-    # The per-file message must include the head_sha
-    assert "abc123def" in combined, "per-file message must include head_sha"
-    # The per-file message must explicitly guide the agent to use head_sha as the ref
-    # parameter for get_file_lines — both the guidance text and the sha value should appear.
-    assert "ref=" in combined and "abc123def" in combined, (
-        "per-file message must contain 'ref=<head_sha>' guidance so the agent reads "
-        "file lines at the correct PR-head revision"
-    )
-    # The per-file message must mention <L{n}> annotations so the LLM is reminded
-    # to use them as line numbers in every per-file session, not just in the
-    # system instruction that may be "forgotten" across many files.
-    assert "<L{n}>" in combined or "<L" in combined, (
-        "per-file message must mention <L{n}> annotations so the LLM uses them as "
-        "line numbers rather than computing from hunk headers"
-    )
+    assert "Review the prepared PR batches sequentially." in combined
+    assert "abc123def" in combined
+    assert "Prepared batch count:" in combined
 
 
-# --- Single-shot diff annotation ---
+def test_build_review_batches_preserves_annotations_for_segment_diffs():
+    """Prepared batches must preserve explicit <L{n}> annotations in embedded diff segments."""
+    from code_review.providers.base import FileInfo
 
-
-def test_single_shot_mode_prompt_contains_annotated_diff():
-    """In single-shot mode the diff embedded in the LLM prompt must carry <L{n}> annotations.
-
-    Without annotations the LLM has to derive absolute new-file line numbers by
-    counting +/- lines relative to hunk headers — a calculation it frequently gets
-    wrong when deletions precede the target line.  Annotations make the line number
-    explicit so the LLM can copy it directly into the ``line`` field of a finding.
-    """
-    from unittest.mock import AsyncMock
-
-    # A diff with a deletion that would cause off-by-one errors without annotations.
-    # The added line (+added_line) is at new-file line 11, NOT line 12.
     diff_with_deletion = (
         "diff --git a/foo.py b/foo.py\n"
-        "--- a/foo.py\n+++ b/foo.py\n"
+        "--- a/foo.py\n"
+        "+++ b/foo.py\n"
         "@@ -10,3 +10,3 @@\n"
         " ctx_10\n"
         "-old_11\n"
         "+added_line\n"
         " ctx_12\n"
     )
-    captured_messages: list[str] = []
 
-    async def _capture_run_async(*args, **kwargs):
-        new_msg = kwargs.get("new_message")
-        if new_msg and hasattr(new_msg, "parts"):
-            for part in new_msg.parts:
-                if hasattr(part, "text") and part.text:
-                    captured_messages.append(part.text)
-        event = MagicMock()
-        event.is_final_response.return_value = True
-        event.content = MagicMock()
-        event.content.parts = [MagicMock(text='{"findings":[]}')]
-        yield event
-
-    from code_review.providers.base import FileInfo
-
-    with (
-        patch("code_review.orchestration_deps.get_context_window", return_value=1_000_000),  # force single-shot
-        patch("code_review.orchestration_deps.get_provider") as mock_get_provider,
-        patch("code_review.orchestration_deps.get_scm_config") as mock_scm,
-        patch("code_review.orchestration_deps.get_llm_config") as mock_llm,
-        patch("google.adk.runners.Runner") as mock_runner_cls,
-        patch("google.adk.sessions.InMemorySessionService") as mock_session_svc_cls,
-    ):
-        mock_scm.return_value = MagicMock(
-            provider="gitea",
-            url="https://x.com",
-            token="x",
-            skip_label="",
-            skip_title_pattern="",
-        )
-        mock_llm.return_value = MagicMock(disable_tool_calls=False)
-        provider = MagicMock()
-        provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-        provider.get_pr_diff.return_value = diff_with_deletion
-        provider.get_existing_review_comments.return_value = []
-        provider.get_file_content.return_value = "line1\n"
-        provider.get_pr_info.return_value = None
-        provider.capabilities.return_value = MagicMock(
-            resolvable_comments=False,
-            supports_suggestions=False,
-            omit_fingerprint_marker_in_body=False,
-            markup_supports_collapsible=False,
-            markup_hides_html_comment=False,
-        )
-        mock_get_provider.return_value = provider
-
-        mock_session_svc = MagicMock()
-        mock_session_svc.create_session = AsyncMock()
-        mock_session_svc_cls.return_value = mock_session_svc
-
-        mock_runner_instance = MagicMock()
-        mock_runner_instance.run_async = _capture_run_async
-        mock_runner_cls.return_value = mock_runner_instance
-
-        orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="sha1", dry_run=True)
-        orchestrator.run()
-
-    combined = " ".join(captured_messages)
-
-    # Annotations must be present for visible lines
-    assert "<L10>" in combined, "context line 10 must be annotated as <L10>"
-    assert "<L11>" in combined, "added line must be annotated as <L11> (not <L12>)"
-    assert "<L12>" in combined, "context line 12 must be annotated as <L12>"
-
-    # Removed line must NOT be annotated — split prompt into lines and check directly
-    removed_lines = [ln for ln in combined.splitlines() if "-old_11" in ln]
-    assert all(not ln.strip().startswith("<L") for ln in removed_lines), (
-        "removed line -old_11 must not carry a <L{n}> annotation"
+    batches = ReviewOrchestrator._build_review_batches(
+        [FileInfo(path="foo.py", status="modified")],
+        ["foo.py"],
+        diff_with_deletion,
+        diff_budget=10_000,
     )
+
+    assert len(batches) == 1
+    segment_text = batches[0].segments[0].diff_text
+    assert "@@ -10,3 +10,3 @@" in segment_text
+
+    from code_review.diff.parser import annotate_diff_with_line_numbers
+
+    annotated = annotate_diff_with_line_numbers(segment_text)
+    assert "<L10>" in annotated
+    assert "<L11>" in annotated
+    assert "<L12>" in annotated
+    removed_lines = [ln for ln in annotated.splitlines() if "-old_11" in ln]
+    assert all(not ln.strip().startswith("<L") for ln in removed_lines)
