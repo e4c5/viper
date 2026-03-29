@@ -92,6 +92,7 @@ def test_build_pr_gate_report_excludes_dismissed_threads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = load_module()
+    monkeypatch.delenv("SCM_BITBUCKET_SERVER_USER_SLUG", raising=False)
 
     monkeypatch.setattr(
         module,
@@ -232,6 +233,7 @@ def test_main_comment_prints_json_report_for_dismissed_thread(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     module = load_module()
+    monkeypatch.delenv("SCM_BITBUCKET_SERVER_USER_SLUG", raising=False)
 
     monkeypatch.setattr(module, "load_script_credentials", lambda: ("review-bot", TEST_AUTH_TOKEN))
     monkeypatch.setattr(

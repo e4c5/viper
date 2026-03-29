@@ -43,7 +43,7 @@ You need:
 - an SCM token with permission to read the PR and write PR comments
 - an LLM provider and API credential
 
-For most repositories:
+For most same-repository pull requests:
 
 - use GitHub's built-in `GITHUB_TOKEN` for `SCM_TOKEN`
 - use a repository secret such as `LLM_API_KEY` for the model provider
@@ -87,6 +87,8 @@ permissions:
   pull-requests: write
 ```
 
+If you pull from a private registry such as GHCR, add the registry-specific permissions and login step shown later in this guide.
+
 ### 4.2 LLM configuration
 
 The agent needs:
@@ -124,6 +126,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
   pull-requests: write
 
 jobs:
@@ -187,9 +190,16 @@ Notes:
 For production use, prefer:
 
 - a pinned image tag
+- same-repo pull requests only for the initial rollout
+- skipping draft pull requests
 - explicit branch filters
 - concurrency cancellation
+- a job timeout
 - stable logging defaults
+
+This example is a good starting point for a live repository when you want the agent to post comments on trusted, same-repo pull requests without taking on fork-PR risk yet.
+
+It assumes you are using the public Docker Hub image published by [`publish-agent-image.yml`](../.github/workflows/publish-agent-image.yml). That workflow pushes to the repository named by `DOCKERHUB_REPO`, or falls back to `${DOCKERHUB_USERNAME}/code-review-agent`.
 
 Example:
 
@@ -213,10 +223,15 @@ concurrency:
 
 jobs:
   code-review:
+    name: Review pull request
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: >
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
 
     env:
-      IMAGE: your-org/code-review-agent:v1.2.3
+      IMAGE: your-dockerhub-user/code-review-agent:v1.2.3
 
       SCM_PROVIDER: github
       SCM_URL: https://api.github.com
@@ -226,8 +241,8 @@ jobs:
       SCM_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      LLM_PROVIDER: gemini
-      LLM_MODEL: gemini-2.5-flash
+      LLM_PROVIDER: openai
+      LLM_MODEL: gpt-5-mini
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
 
       SCM_SKIP_LABEL: skip-ai-review
@@ -235,6 +250,10 @@ jobs:
       CODE_REVIEW_LOG_LEVEL: INFO
 
     steps:
+      - name: Validate required configuration
+        run: |
+          test -n "$LLM_API_KEY" || { echo "LLM_API_KEY is not set"; exit 1; }
+
       - name: Pull agent image
         run: docker pull "$IMAGE"
 
@@ -261,6 +280,15 @@ jobs:
             --pr "$SCM_PR_NUM" \
             --head-sha "$SCM_HEAD_SHA"
 ```
+
+Notes:
+
+- this intentionally skips fork-originated pull requests
+- this intentionally skips draft pull requests until they are marked ready for review
+- no `actions/checkout` step is required because the agent reads PR data from the GitHub API
+- set `IMAGE` to the exact Docker Hub repository and tag your publish workflow produced
+- `GITHUB_TOKEN` is the simplest starting token for same-repo PRs; switch to a PAT or GitHub App token only if your org policy requires it
+- keep `SCM_REVIEW_DECISION_ENABLED` off at first unless you are ready to automate `APPROVE` / `REQUEST_CHANGES`
 
 ---
 
@@ -291,8 +319,7 @@ Use this first if you want to validate configuration without posting comments:
       --repo "$SCM_REPO" \
       --pr "$SCM_PR_NUM" \
       --head-sha "$SCM_HEAD_SHA" \
-      --dry-run \
-      --print-findings
+      --dry-run
 ```
 
 ### 7.2 Fail the job on critical findings
@@ -323,7 +350,7 @@ Use this only if you want the review to become merge-blocking:
       --fail-on-critical
 ```
 
-The CLI exits with status `2` if any finding has severity `critical`.
+The CLI exits with status `2` if any finding has severity `high`.
 
 ### 7.3 Use a PAT instead of `GITHUB_TOKEN`
 
@@ -347,7 +374,28 @@ This is useful if:
 
 ### 7.4 Pull from a private registry
 
-If your image is not public, log in before `docker pull`:
+If your image is not public, log in before `docker pull`.
+
+Private GHCR example:
+
+```yaml
+permissions:
+  contents: read
+  packages: read
+  pull-requests: write
+
+steps:
+  - name: Log in to GHCR
+    uses: docker/login-action@v3
+    with:
+      registry: ghcr.io
+      username: ${{ github.actor }}
+      password: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Use this when you mirror the agent image to a private GHCR package instead of pulling the public Docker Hub image.
+
+Private Docker Hub example:
 
 ```yaml
 - name: Log in to Docker Hub
@@ -356,8 +404,6 @@ If your image is not public, log in before `docker pull`:
     username: ${{ secrets.DOCKERHUB_USERNAME }}
     password: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
-
-Then pull your private image tag as usual.
 
 ### 7.5 Comment-triggered review decision refresh
 
@@ -429,6 +475,8 @@ If fork PR support matters, use a different design with care, such as:
 - manual approval or maintainer-gated execution
 
 Do not switch to `pull_request_target` casually. It has a different security model and must not execute untrusted PR code.
+
+The production example above avoids this by explicitly running only for same-repo pull requests.
 
 ### 9.3 Intentionally skipped PRs
 
@@ -530,6 +578,7 @@ For most teams:
 - use `GITHUB_TOKEN` first
 - use a pinned container tag
 - set `CODE_REVIEW_LOG_LEVEL=INFO`
+- skip fork PRs in the first live rollout
 - start with advisory comments only
 - add `--fail-on-critical` only after the signal quality is proven
 
@@ -544,4 +593,5 @@ Before rolling this out broadly, verify:
 - `permissions.pull-requests` is set to `write`
 - `SCM_HEAD_SHA` comes from `${{ github.event.pull_request.head.sha }}`
 - the workflow is tested on a same-repo PR first
+- the initial live workflow skips fork PRs unless you have a hardened design for them
 - your team has an explicit policy for fork PR behavior
