@@ -18,18 +18,18 @@ Current scope:
 - local checked-in corpus
 - typed loader/validator in `code_review.evals.corpus`
 - minimal local harness in `code_review.evals.local_runner`
-- CLI entrypoint via `code-review eval`
+- CLI entrypoint via `code-review-eval`
 - no CI integration yet
 - no agent/model-backed scoring harness yet
 
 Run locally:
 
 ```bash
-code-review eval
-code-review eval --execution parser
-code-review eval --execution adk
-code-review eval --suite golden_pr_review
-code-review eval --suite reply_dismissal
+code-review-eval
+code-review-eval --execution parser
+code-review-eval --execution adk
+code-review-eval --suite golden_pr_review
+code-review-eval --suite reply_dismissal
 ```
 
 Execution modes:
@@ -39,4 +39,4 @@ Execution modes:
   path and scores the parsed outputs against the expected corpus
 
 The next Phase 4 step is to improve scoring beyond exact-match checks and decide whether to wire
-`code-review eval --execution adk` into CI or a scheduled quality gate.
+`code-review-eval --execution adk` into CI or a scheduled quality gate.

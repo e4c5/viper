@@ -51,6 +51,7 @@ e2e-ui = [
 
 [project.scripts]
 code-review = "code_review.__main__:app"
+code-review-eval = "code_review.evals.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
