@@ -47,14 +47,16 @@ jobs:
       CODE_REVIEW_LOG_LEVEL: INFO
 
     steps:
-      - name: Validate required configuration
-        run: |
-          test -n "$LLM_API_KEY" || { echo "LLM_API_KEY is not set"; exit 1; }
+      - name: Skip when LLM secret is not configured
+        if: ${{ env.LLM_API_KEY == '' }}
+        run: echo "LLM_API_KEY is not configured; skipping AI review."
 
       - name: Pull agent image
+        if: ${{ env.LLM_API_KEY != '' }}
         run: docker pull "$IMAGE"
 
       - name: Run AI code review
+        if: ${{ env.LLM_API_KEY != '' }}
         run: |
           docker run --rm \
             -e SCM_PROVIDER \
