@@ -4,6 +4,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from code_review.agent import (
     FINDINGS_ONLY_INSTRUCTION,
     SINGLE_SHOT_INSTRUCTION,
@@ -324,90 +326,81 @@ class _FakeLlmRequest:
         self.added_instructions.append(instructions)
 
 
-def test_before_model_callback_adds_tool_specific_guardrails() -> None:
-    llm_request = _FakeLlmRequest(
-        {
-            "get_pr_diff_for_file": object(),
-            "get_file_content": object(),
-            "get_file_lines": object(),
-        }
-    )
-    callback_context = SimpleNamespace(agent_name="code_review_agent")
-
-    asyncio.run(_before_model_callback(callback_context, llm_request))
-
-    assert len(llm_request.added_instructions) == 1
-    rendered = "\n".join(llm_request.added_instructions[0])
-    assert "Only call registered tools" in rendered
-    assert "get_pr_diff_for_file" in rendered
-    assert "get_file_content" in rendered
-    assert "get_file_lines" in rendered
-    assert "required structured schema" in rendered
+def _run(coro):
+    return asyncio.run(coro)
 
 
-def test_before_model_callback_adds_no_tools_guardrail() -> None:
-    llm_request = _FakeLlmRequest({})
-    callback_context = SimpleNamespace(agent_name="code_review_agent")
-
-    asyncio.run(_before_model_callback(callback_context, llm_request))
-
-    assert len(llm_request.added_instructions) == 1
-    rendered = "\n".join(llm_request.added_instructions[0])
-    assert "No tools are available for this run." in rendered
-    assert "Use only the diff and context already present in the prompt." in rendered
-
-
-def test_before_tool_callback_rejects_blank_path() -> None:
-    tool = SimpleNamespace(name="get_pr_diff_for_file")
-
-    result = asyncio.run(
-        _before_tool_callback(tool, {"path": "   "}, tool_context=SimpleNamespace())
-    )
-
-    assert result == {"error": "get_pr_diff_for_file: path must be a non-empty string."}
-
-
-def test_before_tool_callback_rejects_blank_ref() -> None:
-    tool = SimpleNamespace(name="get_file_content")
-
-    result = asyncio.run(
-        _before_tool_callback(
-            tool,
-            {"path": "README.md", "ref": ""},
-            tool_context=SimpleNamespace(),
-        )
-    )
-
-    assert result == {"error": "get_file_content: ref must be a non-empty string."}
-
-
-def test_before_tool_callback_rejects_invalid_line_range() -> None:
-    tool = SimpleNamespace(name="get_file_lines")
-
-    result = asyncio.run(
-        _before_tool_callback(
-            tool,
+@pytest.mark.parametrize(
+    ("tools_dict", "expected_fragments"),
+    [
+        (
             {
-                "path": "src/app.py",
-                "ref": "abc123",
-                "start_line": 20,
-                "end_line": 10,
+                "get_pr_diff_for_file": object(),
+                "get_file_content": object(),
+                "get_file_lines": object(),
             },
-            tool_context=SimpleNamespace(),
-        )
-    )
+            [
+                "Only call registered tools",
+                "get_pr_diff_for_file",
+                "get_file_content",
+                "get_file_lines",
+                "required structured schema",
+            ],
+        ),
+        (
+            {},
+            [
+                "No tools are available for this run",
+                "use only the prompt context",
+                "required structured schema",
+            ],
+        ),
+    ],
+)
+def test_before_model_callback_adds_runtime_guardrails(
+    tools_dict: dict[str, object], expected_fragments: list[str]
+) -> None:
+    llm_request = _FakeLlmRequest(tools_dict)
 
-    assert result == {
-        "error": "get_file_lines: end_line must be greater than or equal to start_line."
-    }
+    _run(_before_model_callback(SimpleNamespace(agent_name="code_review_agent"), llm_request))
+
+    assert len(llm_request.added_instructions) == 1
+    rendered = "\n".join(llm_request.added_instructions[0])
+    for fragment in expected_fragments:
+        assert fragment in rendered
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "args", "expected"),
+    [
+        (
+            "get_pr_diff_for_file",
+            {"path": "   "},
+            {"error": "get_pr_diff_for_file: path must be a non-empty string."},
+        ),
+        (
+            "get_file_content",
+            {"path": "README.md", "ref": ""},
+            {"error": "get_file_content: ref must be a non-empty string."},
+        ),
+        (
+            "get_file_lines",
+            {"path": "src/app.py", "ref": "abc123", "start_line": 20, "end_line": 10},
+            {"error": "get_file_lines: end_line must be greater than or equal to start_line."},
+        ),
+    ],
+)
+def test_before_tool_callback_rejects_invalid_calls(
+    tool_name: str, args: dict[str, object], expected: dict[str, str]
+) -> None:
+    result = _run(_before_tool_callback(SimpleNamespace(name=tool_name), args, SimpleNamespace()))
+    assert result == expected
 
 
 def test_after_tool_callback_normalizes_crlf() -> None:
-    tool = SimpleNamespace(name="get_file_content")
-
-    result = asyncio.run(
+    result = _run(
         _after_tool_callback(
-            tool,
+            SimpleNamespace(name="get_file_content"),
             {"path": "README.md", "ref": "abc123"},
             tool_context=SimpleNamespace(),
             tool_response="line1\r\nline2\r\n",
@@ -418,12 +411,11 @@ def test_after_tool_callback_normalizes_crlf() -> None:
 
 
 def test_after_tool_callback_truncates_oversized_string_results() -> None:
-    tool = SimpleNamespace(name="get_file_content")
     oversized = "x" * (_TOOL_RESULT_CHAR_LIMIT + 50)
 
-    result = asyncio.run(
+    result = _run(
         _after_tool_callback(
-            tool,
+            SimpleNamespace(name="get_file_content"),
             {"path": "README.md", "ref": "abc123"},
             tool_context=SimpleNamespace(),
             tool_response=oversized,

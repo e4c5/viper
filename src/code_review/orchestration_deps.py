@@ -1539,9 +1539,6 @@ async def _collect_response_async(
                 if getattr(part, "text", None):
                     parts.append(part.text)
     text = "\n".join(parts)
-    if logger.isEnabledFor(logging.DEBUG):
-        # Log raw agent output for debugging schema/JSON issues.
-        logger.debug("LLM final response for session %s:\n%s", session_id, text)
     # Optional: also echo raw response to stdout when explicitly requested.
     # This is controlled by CODE_REVIEW_PRINT_RAW_RESPONSE=1 for ad-hoc debugging.
     if os.getenv("CODE_REVIEW_PRINT_RAW_RESPONSE", "").strip() in ("1", "true", "TRUE"):
