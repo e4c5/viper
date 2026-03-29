@@ -1,0 +1,47 @@
+{
+  "recorded_at": "2026-03-29",
+  "execution": "parser",
+  "command": "python -m code_review.evals.cli --execution parser",
+  "notes": [
+    "This baseline records the deterministic parser-backed eval corpus scores.",
+    "ADK-backed evals remain available locally via the same CLI, but are not required in normal CI because they depend on external model/runtime configuration."
+  ],
+  "suites": [
+    {
+      "suite_name": "golden_pr_review[parser]",
+      "total": 2,
+      "passed": 2,
+      "failed": 0,
+      "results": [
+        {
+          "case_id": "python_missing_none_guard",
+          "passed": true,
+          "detail": "exact parser round-trip match"
+        },
+        {
+          "case_id": "java_sql_concatenation",
+          "passed": true,
+          "detail": "exact parser round-trip match"
+        }
+      ]
+    },
+    {
+      "suite_name": "reply_dismissal[parser]",
+      "total": 2,
+      "passed": 2,
+      "failed": 0,
+      "results": [
+        {
+          "case_id": "agreed_when_thread_is_clearly_addressed",
+          "passed": true,
+          "detail": "exact parser round-trip match"
+        },
+        {
+          "case_id": "disagreed_when_reply_only_promises_future_work",
+          "passed": true,
+          "detail": "exact parser round-trip match"
+        }
+      ]
+    }
+  ]
+}
