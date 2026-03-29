@@ -2,6 +2,8 @@
 
 This directory holds the checked-in evaluation corpus for Phase 4 of the ADK adoption plan.
 
+For the full developer workflow, see `docs/VALUATION-HARNESS.md`.
+
 Files:
 
 - `golden_pr_review_cases.json`: golden PR review scenarios with expected `FindingsBatchV1` output
