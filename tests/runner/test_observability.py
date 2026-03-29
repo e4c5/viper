@@ -6,10 +6,10 @@ from code_review.providers.base import FileInfo
 from tests.conftest import runner_run_async_returning
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_emits_trace_id_and_run_complete(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
 ):
@@ -60,7 +60,7 @@ def test_run_review_emits_trace_id_and_run_complete(
             )
         )
 
-    with patch("code_review.runner._log_run_complete", side_effect=capture_run_complete):
+    with patch("code_review.orchestration_deps._log_run_complete", side_effect=capture_run_complete):
         with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
             run_review("o", "r", 1, head_sha="abc123", dry_run=False)
 
@@ -86,10 +86,10 @@ def test_run_review_emits_trace_id_and_run_complete(
     assert duration_ms is not None
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_emits_run_complete_on_early_exit(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
 ):
@@ -128,7 +128,7 @@ def test_run_review_emits_run_complete_on_early_exit(
             )
         )
 
-    with patch("code_review.runner._log_run_complete", side_effect=capture_run_complete):
+    with patch("code_review.orchestration_deps._log_run_complete", side_effect=capture_run_complete):
         result = run_review("o", "r", 1, head_sha="abc", dry_run=False)
 
     assert result == []

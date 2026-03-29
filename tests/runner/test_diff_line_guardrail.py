@@ -141,10 +141,10 @@ def _run_review_with_mocked_bitbucket_runner(
         return run_review("owner", "repo", 1, head_sha=head_sha, dry_run=True)
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_runner_drops_findings_for_lines_outside_diff(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
 ) -> None:
@@ -174,10 +174,10 @@ def test_runner_drops_findings_for_lines_outside_diff(
     assert findings[0].line == 10
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_runner_keeps_context_line_findings(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
 ) -> None:

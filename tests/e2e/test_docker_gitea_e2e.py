@@ -228,7 +228,7 @@ def test_e2e_docker_gitea_full_review(e2e_stack):
     mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
     with (
-        patch("code_review.runner.get_provider", return_value=mock_provider),
+        patch("code_review.orchestration_deps.get_provider", return_value=mock_provider),
         patch("google.adk.runners.Runner", return_value=mock_runner_instance),
     ):
         findings = run_review(owner, repo, pr_number, head_sha=head_sha, dry_run=True)

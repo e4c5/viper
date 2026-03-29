@@ -115,7 +115,7 @@ def _run_with_single_stale_comment(
 
     # Patch provider factory and ADK Runner so run_review sees no findings (empty array).
     with (
-        patch("code_review.runner.get_provider", return_value=provider),
+        patch("code_review.orchestration_deps.get_provider", return_value=provider),
         patch("google.adk.runners.Runner") as mock_runner_cls,
     ):
         findings_json = "[]"
@@ -132,9 +132,9 @@ def _run_with_single_stale_comment(
     return provider, result
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_auto_resolve_stale_comments_when_capabilities_true(
     mock_get_scm_config, mock_get_llm_config, mock_get_context_window
 ):
@@ -152,9 +152,9 @@ def test_auto_resolve_stale_comments_when_capabilities_true(
     assert provider._resolved_ids == ["c-1"]
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_auto_resolve_not_called_when_capabilities_false(
     mock_get_scm_config, mock_get_llm_config, mock_get_context_window
 ):
@@ -175,9 +175,9 @@ def test_auto_resolve_not_called_when_capabilities_false(
     assert provider._resolved_ids == []
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_auto_resolve_not_called_in_dry_run(
     mock_get_scm_config, mock_get_llm_config, mock_get_context_window
 ):

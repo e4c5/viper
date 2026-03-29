@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from code_review import runner as runner_mod
+from code_review import orchestration_deps as runner_mod
 
 
 class ReviewOrchestrator:

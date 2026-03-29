@@ -53,10 +53,10 @@ def _orchestrator_run_env(
     mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
     with (
-        patch("code_review.runner.get_context_window", return_value=1_000_000),
-        patch("code_review.runner.get_provider") as mock_get_provider,
-        patch("code_review.runner.get_scm_config") as mock_scm,
-        patch("code_review.runner.get_llm_config") as mock_llm,
+        patch("code_review.orchestration_deps.get_context_window", return_value=1_000_000),
+        patch("code_review.orchestration_deps.get_provider") as mock_get_provider,
+        patch("code_review.orchestration_deps.get_scm_config") as mock_scm,
+        patch("code_review.orchestration_deps.get_llm_config") as mock_llm,
         patch("google.adk.runners.Runner", return_value=mock_runner_instance),
     ):
         mock_scm.return_value = MagicMock(
@@ -82,9 +82,9 @@ def _orchestrator_run_env(
 # --- ReviewOrchestrator._load_config_and_provider() ---
 
 
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_load_config_and_provider_calls_deps_and_returns_tuple(
     mock_get_scm_config, mock_get_llm_config, mock_get_provider
 ):
@@ -114,9 +114,9 @@ def test_load_config_and_provider_calls_deps_and_returns_tuple(
     assert result == (cfg, llm_cfg, provider)
 
 
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_load_config_and_provider_unwraps_secret_str(
     mock_get_scm_config, mock_get_llm_config, mock_get_provider
 ):
@@ -143,9 +143,9 @@ def test_load_config_and_provider_unwraps_secret_str(
     )
 
 
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_load_config_and_provider_uses_plain_token_when_no_get_secret_value(
     mock_get_scm_config, mock_get_llm_config, mock_get_provider
 ):
@@ -167,8 +167,8 @@ def test_load_config_and_provider_uses_plain_token_when_no_get_secret_value(
     )
 
 
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_load_config_and_provider_propagates_scm_config_exception(
     mock_get_scm_config, mock_get_llm_config
 ):
@@ -182,9 +182,9 @@ def test_load_config_and_provider_propagates_scm_config_exception(
     mock_get_llm_config.assert_not_called()
 
 
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_load_config_and_provider_propagates_get_provider_exception(
     mock_get_scm_config, mock_get_llm_config, mock_get_provider
 ):
@@ -249,8 +249,8 @@ def test_determine_skip_reason_returns_empty_list_when_pr_has_skip_label():
     provider.get_pr_info.return_value = MagicMock(labels=["skip-review", "other"], title="Fix bug")
     o = ReviewOrchestrator("o", "r", 1)
     with (
-        patch("code_review.runner._log_run_complete"),
-        patch("code_review.runner.observability") as mock_obs,
+        patch("code_review.orchestration_deps._log_run_complete"),
+        patch("code_review.orchestration_deps.observability") as mock_obs,
     ):
         result = o._determine_skip_reason(provider, cfg, "o", "r", 1, "trace-1", 0.0, MagicMock())
     assert result == []
@@ -328,8 +328,8 @@ def test_compute_idempotency_and_maybe_short_circuit_returns_empty_list_when_key
     existing_dicts = [{"path": "a.py", "body": f"<!-- code-review-agent:run={run_id} -->\nDone."}]
     o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
     with (
-        patch("code_review.runner._log_run_complete"),
-        patch("code_review.runner.observability") as mock_obs,
+        patch("code_review.orchestration_deps._log_run_complete"),
+        patch("code_review.orchestration_deps.observability") as mock_obs,
     ):
         result = o._compute_idempotency_and_maybe_short_circuit(
             cfg, llm_cfg, "o", "r", 1, "abc", existing_dicts, "trace", 0.0, MagicMock()
@@ -412,7 +412,7 @@ def test_detect_languages_for_files_returns_detected_and_review_standards():
 # --- Step 4: _create_agent_and_runner ---
 
 
-@patch("code_review.runner.create_review_agent")
+@patch("code_review.orchestration_deps.create_review_agent")
 def test_create_agent_and_runner_returns_session_id_service_runner(mock_create_agent):
     """_create_agent_and_runner returns (session_id, session_service, runner).
 
@@ -519,8 +519,8 @@ def test_record_observability_and_build_result_returns_findings_and_emits_log():
     finding = FindingV1(path="a.py", line=1, severity="low", code="X", message="m")
     to_post = [(finding, "fp1")]
     with (
-        patch("code_review.runner._log_run_complete") as mock_log,
-        patch("code_review.runner.observability") as mock_obs,
+        patch("code_review.orchestration_deps._log_run_complete") as mock_log,
+        patch("code_review.orchestration_deps.observability") as mock_obs,
     ):
         result = o._record_observability_and_build_result(
             "trace-1", "o", "r", 1, 0.0, MagicMock(), ["a.py"], [finding], 1, to_post
@@ -631,10 +631,10 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
     from code_review.providers.base import FileInfo
 
     with (
-        patch("code_review.runner.get_context_window", return_value=10),  # force file-by-file
-        patch("code_review.runner.get_provider") as mock_get_provider,
-        patch("code_review.runner.get_scm_config") as mock_scm,
-        patch("code_review.runner.get_llm_config") as mock_llm,
+        patch("code_review.orchestration_deps.get_context_window", return_value=10),  # force file-by-file
+        patch("code_review.orchestration_deps.get_provider") as mock_get_provider,
+        patch("code_review.orchestration_deps.get_scm_config") as mock_scm,
+        patch("code_review.orchestration_deps.get_llm_config") as mock_llm,
         patch("google.adk.runners.Runner") as mock_runner_cls,
         patch("google.adk.sessions.InMemorySessionService") as mock_session_svc_cls,
     ):
@@ -736,10 +736,10 @@ def test_single_shot_mode_prompt_contains_annotated_diff():
     from code_review.providers.base import FileInfo
 
     with (
-        patch("code_review.runner.get_context_window", return_value=1_000_000),  # force single-shot
-        patch("code_review.runner.get_provider") as mock_get_provider,
-        patch("code_review.runner.get_scm_config") as mock_scm,
-        patch("code_review.runner.get_llm_config") as mock_llm,
+        patch("code_review.orchestration_deps.get_context_window", return_value=1_000_000),  # force single-shot
+        patch("code_review.orchestration_deps.get_provider") as mock_get_provider,
+        patch("code_review.orchestration_deps.get_scm_config") as mock_scm,
+        patch("code_review.orchestration_deps.get_llm_config") as mock_llm,
         patch("google.adk.runners.Runner") as mock_runner_cls,
         patch("google.adk.sessions.InMemorySessionService") as mock_session_svc_cls,
     ):

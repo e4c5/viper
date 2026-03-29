@@ -385,11 +385,11 @@ def test_format_reply_dismissal_user_message_marks_original_and_triggering_comme
     assert "Comment id: 11" in msg
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_code_review_app_config")
+@patch("code_review.orchestration_deps._run_reply_dismissal_llm")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_sends_anchored_diff_context(
     mock_get_scm_config,
     mock_get_provider,
@@ -506,9 +506,9 @@ def test_create_review_agent():
     assert agent.name == "code_review_agent"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_ignore_list_and_posts_net_new(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -548,9 +548,9 @@ def test_run_review_ignore_list_and_posts_net_new(
     assert call_args[1]["head_sha"] == "abc123"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_raises_when_posting_without_head_sha(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -570,9 +570,9 @@ def test_run_review_raises_when_posting_without_head_sha(
     provider.post_review_comments.assert_not_called()
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_skips_when_pr_has_skip_label(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -602,10 +602,10 @@ def test_run_review_skips_when_pr_has_skip_label(
     provider.get_existing_review_comments.assert_not_called()
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_skips_when_idempotency_marker_present(
     mock_get_scm_config,
     mock_get_provider,
@@ -646,10 +646,10 @@ def test_run_review_skips_when_idempotency_marker_present(
     provider.post_pr_summary_comment.assert_not_called()
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_uses_file_by_file_mode_when_diff_exceeds_budget(
     mock_get_scm_config,
     mock_get_provider,
@@ -711,9 +711,9 @@ def _provider_with_review_decisions(
     return p
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_submits_request_changes_when_threshold_met(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -739,9 +739,9 @@ def test_run_review_submits_request_changes_when_threshold_met(
     assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_continues_when_submit_review_decision_raises(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -770,9 +770,9 @@ def test_run_review_continues_when_submit_review_decision_raises(
     provider.submit_review_decision.assert_called_once()
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_submits_approve_when_only_low_nit_open(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -799,9 +799,9 @@ def test_run_review_submits_approve_when_only_low_nit_open(
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_dry_run_does_not_submit_review_decision(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -826,9 +826,9 @@ def test_run_review_dry_run_does_not_submit_review_decision(
     provider.submit_review_decision.assert_not_called()
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_request_changes_from_pre_existing_unresolved_high_comment(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -867,9 +867,9 @@ def test_run_review_request_changes_from_pre_existing_unresolved_high_comment(
     assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_empty_incremental_scope_still_recomputes_review_decision(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -898,9 +898,9 @@ def test_run_review_empty_incremental_scope_still_recomputes_review_decision(
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_empty_scope_resolves_head_sha_before_submitting_review_decision(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -927,9 +927,9 @@ def test_run_review_empty_scope_resolves_head_sha_before_submitting_review_decis
 
 
 @patch("code_review.providers.bitbucket_server.httpx.Client")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_empty_incremental_scope_approves_when_bitbucket_suggestion_already_applied(
     mock_get_scm_config,
     mock_get_provider,
@@ -967,9 +967,9 @@ def test_run_review_empty_incremental_scope_approves_when_bitbucket_suggestion_a
 
 
 @patch("code_review.providers.bitbucket_server.httpx.Client")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_empty_incremental_scope_uses_comments_endpoint_state_for_bitbucket_gate(
     mock_get_scm_config,
     mock_get_provider,
@@ -1003,9 +1003,9 @@ def test_run_review_empty_incremental_scope_uses_comments_endpoint_state_for_bit
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_skips_agent_and_inline(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -1037,10 +1037,10 @@ def test_run_review_decision_only_skips_agent_and_inline(
     assert provider.submit_review_decision.call_args.kwargs.get("head_sha") == "from-api-sha"
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_code_review_app_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_skips_when_skip_if_bot_not_blocking_and_reply(
     mock_get_scm_config,
     mock_get_provider,
@@ -1087,10 +1087,10 @@ def test_run_review_decision_only_skips_when_skip_if_bot_not_blocking_and_reply(
     provider.submit_review_decision.assert_not_called()
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_code_review_app_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_skip_opt_in_ignored_when_bot_blocking(
     mock_get_scm_config,
     mock_get_provider,
@@ -1134,10 +1134,10 @@ def test_run_review_decision_only_skip_opt_in_ignored_when_bot_blocking(
     provider.submit_review_decision.assert_called_once()
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_code_review_app_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_skip_opt_in_ignored_for_comment_deleted(
     mock_get_scm_config,
     mock_get_provider,
@@ -1330,11 +1330,11 @@ def test_omit_marker_pr_summary_meets_expectations_when_review_decisions_disable
     assert "needs work" not in text.lower()
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_code_review_app_config")
+@patch("code_review.orchestration_deps._run_reply_dismissal_llm")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_skips_llm_when_scm_already_addressed(
     mock_get_scm_config,
     mock_get_provider,
@@ -1393,11 +1393,11 @@ def test_run_review_decision_only_reply_dismissal_skips_llm_when_scm_already_add
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_code_review_app_config")
+@patch("code_review.orchestration_deps._run_reply_dismissal_llm")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_keeps_gate_when_persistence_fails(
     mock_get_scm_config,
     mock_get_provider,
@@ -1434,11 +1434,11 @@ def test_run_review_decision_only_reply_dismissal_keeps_gate_when_persistence_fa
     assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_code_review_app_config")
+@patch("code_review.orchestration_deps._run_reply_dismissal_llm")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_agreed_excludes_thread(
     mock_get_scm_config,
     mock_get_provider,
@@ -1468,11 +1468,11 @@ def test_run_review_decision_only_reply_dismissal_agreed_excludes_thread(
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_code_review_app_config")
+@patch("code_review.orchestration_deps._run_reply_dismissal_llm")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_agreed_posts_durable_reply_when_unresolvable(
     mock_get_scm_config,
     mock_get_provider,
@@ -1518,11 +1518,11 @@ def test_run_review_decision_only_reply_dismissal_agreed_posts_durable_reply_whe
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_code_review_app_config")
+@patch("code_review.orchestration_deps._run_reply_dismissal_llm")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_agreed_posts_durable_reply_when_resolution_fails(
     mock_get_scm_config,
     mock_get_provider,
@@ -1559,11 +1559,11 @@ def test_run_review_decision_only_reply_dismissal_agreed_posts_durable_reply_whe
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_code_review_app_config")
+@patch("code_review.orchestration_deps._run_reply_dismissal_llm")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_disagreed_posts_reply(
     mock_get_scm_config,
     mock_get_provider,
@@ -1603,11 +1603,11 @@ def test_run_review_decision_only_reply_dismissal_disagreed_posts_reply(
     )
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_code_review_app_config")
+@patch("code_review.orchestration_deps._run_reply_dismissal_llm")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_skips_when_trigger_already_has_bot_reply(
     mock_get_scm_config,
     mock_get_provider,
@@ -1658,12 +1658,12 @@ def test_run_review_decision_only_reply_dismissal_skips_when_trigger_already_has
     assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
 
 
-@patch("code_review.runner.observability.record_reply_dismissal_outcome")
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.observability.record_reply_dismissal_outcome")
+@patch("code_review.orchestration_deps.get_code_review_app_config")
+@patch("code_review.orchestration_deps._run_reply_dismissal_llm")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_review_decision_only_skips_entire_run_when_actor_is_bot(
     mock_get_scm_config,
     mock_get_provider,

@@ -108,7 +108,7 @@ def _invoke_run_review(
         if create_review_agent_side_effect is not None:
             stack.enter_context(
                 patch(
-                    "code_review.runner.create_review_agent",
+                    "code_review.orchestration_deps.create_review_agent",
                     side_effect=create_review_agent_side_effect,
                 )
             )
@@ -116,10 +116,10 @@ def _invoke_run_review(
         run_review(*args, **kwargs)
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_large_pr_file_by_file_no_duplicate_posts(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
 ):
@@ -185,10 +185,10 @@ def test_large_pr_file_by_file_no_duplicate_posts(
     assert paths == {"a.py", "b.py"}
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_large_pr_file_by_file_uses_separate_sessions(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
 ):
@@ -236,10 +236,10 @@ def test_large_pr_file_by_file_uses_separate_sessions(
     )
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_large_pr_file_by_file_message_requests_file_diff(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
 ):
@@ -285,10 +285,10 @@ def test_large_pr_file_by_file_message_requests_file_diff(
     )
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_single_shot_mode_creates_agent_with_no_tools(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
 ):
@@ -346,10 +346,10 @@ def test_single_shot_mode_creates_agent_with_no_tools(
     assert len(messages_sent) == 1, "single-shot mode must make exactly one LLM call"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_file_by_file_mode_creates_agent_with_tools(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
 ):
@@ -395,10 +395,10 @@ def test_file_by_file_mode_creates_agent_with_tools(
     )
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_incremental_large_review_uses_embedded_file_diffs(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
 ):

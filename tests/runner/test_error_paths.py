@@ -127,10 +127,10 @@ def _build_file_by_file_run_async_side_effect(call_count, error_factory, finding
     return run_async_side_effect
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_post_review_comments_always_one_by_one(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
@@ -170,10 +170,10 @@ def test_post_review_comments_always_one_by_one(
     provider.post_review_comment.assert_not_called()
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_post_review_comment_skipped_not_fallback_to_pr_summary(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
@@ -218,10 +218,10 @@ def test_post_review_comment_skipped_not_fallback_to_pr_summary(
         )
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_file_by_file_skips_file_on_rate_limit_error(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
@@ -247,10 +247,10 @@ def test_file_by_file_skips_file_on_rate_limit_error(
     assert results[0].path == "b.py"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_file_by_file_skips_file_on_generic_error(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
@@ -276,10 +276,10 @@ def test_file_by_file_skips_file_on_generic_error(
     assert results[0].path == "b.py"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_file_by_file_authentication_error_is_fatal(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
@@ -311,10 +311,10 @@ def test_file_by_file_authentication_error_is_fatal(
     assert call_count[0] == 1
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_marker_comment_posted_for_omit_marker_providers(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
@@ -355,10 +355,10 @@ def test_run_marker_comment_posted_for_omit_marker_providers(
     assert any("inline comment" in str(b).lower() for b in bodies)
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_marker_comment_not_posted_for_standard_providers(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
@@ -395,10 +395,10 @@ def test_run_marker_comment_not_posted_for_standard_providers(
         )
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration_deps.get_context_window")
+@patch("code_review.orchestration_deps.get_llm_config")
+@patch("code_review.orchestration_deps.get_provider")
+@patch("code_review.orchestration_deps.get_scm_config")
 def test_run_marker_pr_summary_posted_when_inline_succeeds_for_omit_marker_providers(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
