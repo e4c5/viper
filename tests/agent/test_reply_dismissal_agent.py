@@ -63,6 +63,16 @@ def test_reply_dismissal_verdict_from_llm_fenced_no_language_tag():
     assert v.verdict == "agreed"
 
 
+def test_reply_dismissal_verdict_from_llm_json_fence_with_indented_tag():
+    text = """Here:
+```   json
+{"verdict": "agreed", "reply_text": ""}
+```"""
+    v = reply_dismissal_verdict_from_llm_text(text)
+    assert v is not None
+    assert v.verdict == "agreed"
+
+
 def test_reply_dismissal_verdict_repairs_python_style_apostrophe_escape():
     text = (
         "```json\n"

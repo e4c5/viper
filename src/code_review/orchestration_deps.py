@@ -7,7 +7,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import time  # noqa: F401
 import uuid
 from dataclasses import dataclass
@@ -66,6 +65,7 @@ from code_review.refinement.filters.self_retraction import (
     filter_self_retracted_findings as _filter_self_retracted_finding_messages,  # noqa: F401
 )
 from code_review.formatters.comment import finding_to_comment_body, infer_severity_from_comment_body
+from code_review.json_utils import iter_json_candidates
 from code_review.models import (
     get_context_window,  # noqa: F401
     get_max_output_tokens,  # noqa: F401
@@ -783,17 +783,7 @@ def _fingerprint_for_finding(
 
 def _parse_findings_json(text: str) -> object:
     """Parse a structured findings object from raw text or a fenced JSON block."""
-    text = text.strip()
-    candidates = []
-    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-    if fenced:
-        candidates.append(fenced.group(1).strip())
-    candidates.append(text)
-    seen: set[str] = set()
-    for raw in candidates:
-        if not raw or raw in seen:
-            continue
-        seen.add(raw)
+    for raw in iter_json_candidates(text):
         try:
             return json.loads(raw)
         except json.JSONDecodeError:

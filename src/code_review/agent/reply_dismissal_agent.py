@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import TYPE_CHECKING
 
 from code_review.config import get_llm_config
+from code_review.json_utils import iter_json_candidates
 from code_review.models import get_configured_model
 from code_review.schemas.reply_dismissal import ReplyDismissalVerdictV1
 
@@ -105,17 +105,4 @@ def reply_dismissal_verdict_from_llm_text(text: str) -> ReplyDismissalVerdictV1 
 
 def _reply_dismissal_json_candidates(text: str):
     """Yield raw JSON candidates from the body or a fenced JSON block."""
-    s = text.strip()
-    chunks: list[str] = []
-    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", s)
-    if fenced:
-        chunks.append(fenced.group(1).strip())
-    chunks.append(s)
-    seen: set[str] = set()
-    for chunk in chunks:
-        if not chunk or chunk in seen:
-            continue
-        seen.add(chunk)
-        yield chunk
-        if "\\'" in chunk:
-            yield chunk.replace("\\'", "'")
+    yield from iter_json_candidates(text, repair_python_escaped_apostrophes=True)

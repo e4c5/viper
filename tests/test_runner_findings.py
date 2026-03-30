@@ -23,6 +23,16 @@ def test_parse_findings_json_markdown_wrapped():
     assert out["findings"][0]["path"] == "y"
 
 
+def test_parse_findings_json_unlabeled_fence():
+    text = (
+        "```\n"
+        '{"findings":[{"path":"u","line":5,"severity":"low","code":"s","message":"msg"}]}'
+        "\n```"
+    )
+    out = _parse_findings_json(text)
+    assert out["findings"][0]["path"] == "u"
+
+
 def test_parse_findings_json_structured_object():
     text = (
         '{"findings":[{"path":"z","line":4,"severity":"low","code":"c","message":"m"}]}'
