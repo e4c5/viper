@@ -158,17 +158,6 @@ class ReviewOrchestrator:
             return ""
         return base_sha
 
-    def _fetch_pr_files_and_diffs(self, provider):
-        """Fetch the full-PR file list and diff.
-
-        Retained as a small compatibility wrapper for tests and helper callers;
-        incremental review flow uses ``_fetch_review_files_and_diffs``.
-        """
-        files = provider.get_pr_files(self.owner, self.repo, self.pr_number)
-        paths = [f.path for f in files]
-        full_diff = provider.get_pr_diff(self.owner, self.repo, self.pr_number)
-        return (files, paths, full_diff)
-
     def _fetch_review_files_and_diffs(
         self, provider, cfg
     ) -> tuple[list[object], list[str], str, str]:
@@ -192,14 +181,6 @@ class ReviewOrchestrator:
         paths = [f.path for f in files]
         full_diff = provider.get_pr_diff(self.owner, self.repo, self.pr_number)
         return (files, paths, full_diff, "")
-
-    def _build_ignore_set_and_filter_files(self, paths: list[str]) -> list[str]:
-        """
-        Optionally filter which file paths to review (e.g. by ignore patterns).
-        Currently returns paths unchanged; ignore_set is built in
-        _load_existing_comments_and_markers and used later to filter findings.
-        """
-        return paths
 
     def _detect_languages_for_files(self, paths: list[str]):
         """Run language detection on paths and return (detected, review_standards)."""
@@ -361,30 +342,21 @@ class ReviewOrchestrator:
 
     def _make_fingerprint_fn(self, provider):
         """Return a fingerprint function (FindingV1 -> str) backed by live file content."""
-        _cache: dict[str, dict[int, str]] | None = None
+        _cache: dict[str, list[str]] = {}
 
         def _fingerprint_fn(finding: runner_mod.FindingV1) -> str:
-            nonlocal _cache
-            if _cache is None:
-                if self.head_sha:
-                    unique_paths: list[str] = []
-                    seen: set[str] = set()
-                    # We build the cache lazily on first call so the paths list covers
-                    # all findings that may be encountered.
-                    _cache = {}
-                else:
-                    _cache = {}
-            file_lines_by_path = (
-                runner_mod._get_file_lines_by_path(
+            if not self.head_sha:
+                return ""
+            if finding.path not in _cache:
+                file_lines_by_path = runner_mod._get_file_lines_by_path(
                     provider,
                     self.owner,
                     self.repo,
                     self.head_sha,
                     [finding.path],
                 )
-                if self.head_sha
-                else {}
-            )
+                _cache[finding.path] = file_lines_by_path.get(finding.path, [])
+            file_lines_by_path = {finding.path: _cache[finding.path]}
             return (
                 runner_mod._fingerprint_for_finding(finding, file_lines_by_path)
                 if file_lines_by_path
@@ -1289,7 +1261,6 @@ class ReviewOrchestrator:
         files, paths, full_diff, incremental_base_sha = self._fetch_review_files_and_diffs(
             provider, cfg
         )
-        paths = self._build_ignore_set_and_filter_files(paths)
         self._log_review_scope_fetch(incremental_base_sha, self.head_sha, paths)
         empty_scope_result = self._maybe_finish_empty_scope_review(
             provider,

@@ -13,8 +13,8 @@ from code_review.runner import _generate_auto_pr_description, _maybe_post_starte
 from tests.conftest import runner_run_async_returning
 
 
-def test_review_orchestrator_imports_without_circular_dependency():
-    """Directly importing review_orchestrator should not trip runner's lazy back-import."""
+def test_canonical_orchestrator_imports_without_circular_dependency():
+    """Directly importing the canonical orchestrator module should not trip lazy imports."""
     result = subprocess.run(
         [
             sys.executable,
@@ -22,7 +22,7 @@ def test_review_orchestrator_imports_without_circular_dependency():
             (
                 "import sys; "
                 "sys.path.insert(0, 'viper/src'); "
-                "import code_review.review_orchestrator; "
+                "import code_review.orchestration.orchestrator; "
                 "print('ok')"
             ),
         ],
@@ -431,8 +431,7 @@ def test_compute_idempotency_and_maybe_short_circuit_uses_incremental_base_in_ke
     assert result is None
 
 
-# --- Step 3: _fetch_pr_files_and_diffs, _build_ignore_set_and_filter_files,
-#            _detect_languages_for_files ---
+# --- Step 3: _fetch_review_files_and_diffs, _detect_languages_for_files ---
 
 
 def test_incremental_base_sha_uses_cfg_head_sha_when_parameter_missing():
@@ -443,8 +442,8 @@ def test_incremental_base_sha_uses_cfg_head_sha_when_parameter_missing():
     assert result == "base123"
 
 
-def test_fetch_pr_files_and_diffs_returns_files_paths_and_full_diff():
-    """_fetch_pr_files_and_diffs returns (files, paths, full_diff) from provider."""
+def test_fetch_review_files_and_diffs_returns_files_paths_and_full_diff():
+    """_fetch_review_files_and_diffs returns (files, paths, full_diff, base_sha)."""
     from code_review.providers.base import FileInfo
 
     provider = MagicMock()
@@ -455,21 +454,16 @@ def test_fetch_pr_files_and_diffs_returns_files_paths_and_full_diff():
     provider.get_pr_diff.return_value = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py"
 
     o = ReviewOrchestrator("o", "r", 1)
-    files, paths, full_diff = o._fetch_pr_files_and_diffs(provider)
+    files, paths, full_diff, incremental_base_sha = o._fetch_review_files_and_diffs(
+        provider, MagicMock(base_sha="", head_sha="")
+    )
 
     assert len(files) == 2
     assert paths == ["foo.py", "bar.go"]
     assert "diff --git" in full_diff
+    assert incremental_base_sha == ""
     provider.get_pr_files.assert_called_once_with("o", "r", 1)
     provider.get_pr_diff.assert_called_once_with("o", "r", 1)
-
-
-def test_build_ignore_set_and_filter_files_returns_paths_unchanged():
-    """_build_ignore_set_and_filter_files currently returns paths unchanged (no filtering)."""
-    o = ReviewOrchestrator("o", "r", 1)
-    paths = ["a.py", "b.go", "c.rs"]
-    result = o._build_ignore_set_and_filter_files(paths)
-    assert result == ["a.py", "b.go", "c.rs"]
 
 
 def test_detect_languages_for_files_returns_detected_and_review_standards():
