@@ -1,0 +1,87 @@
+name: Code Review Comment Events
+
+on:
+  issue_comment:
+    types:
+      - created
+      - edited
+      - deleted
+  pull_request_review_comment:
+    types:
+      - created
+      - edited
+      - deleted
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: code-review-comment-${{ github.event_name }}-${{ github.event.comment.id }}
+  cancel-in-progress: true
+
+jobs:
+  code-review-comment-events:
+    name: Refresh review decision
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: >
+      github.event_name != 'issue_comment' ||
+      github.event.issue.pull_request != null
+
+    env:
+      IMAGE: e4c5/code-review-agent:1.0.1
+
+      SCM_PROVIDER: github
+      SCM_URL: https://api.github.com
+      SCM_OWNER: ${{ github.repository_owner }}
+      SCM_REPO: ${{ github.event.repository.name }}
+      SCM_PR_NUM: ${{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number }}
+      SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      LLM_PROVIDER: ${{ vars.CODE_REVIEW_LLM_PROVIDER || 'openrouter' }}
+      LLM_MODEL: ${{ vars.CODE_REVIEW_LLM_MODEL || 'google/gemini-3.1-flash-lite-preview' }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+
+      SCM_REVIEW_DECISION_ENABLED: "true"
+      CODE_REVIEW_REVIEW_DECISION_ONLY: "1"
+      CODE_REVIEW_REPLY_DISMISSAL_ENABLED: "true"
+      CODE_REVIEW_EVENT_COMMENT_ID: ${{ github.event.comment.id }}
+      CODE_REVIEW_EVENT_ACTOR_LOGIN: ${{ github.event.sender.login }}
+      CODE_REVIEW_EVENT_ACTOR_ID: ${{ github.event.sender.id }}
+      CODE_REVIEW_LOG_LEVEL: INFO
+
+    steps:
+      - name: Skip when LLM secret is not configured
+        if: ${{ env.LLM_API_KEY == '' }}
+        run: echo "LLM_API_KEY is not configured; skipping review-decision refresh."
+
+      - name: Pull agent image
+        if: ${{ env.LLM_API_KEY != '' }}
+        run: docker pull "$IMAGE"
+
+      - name: Refresh review decision after comment activity
+        if: ${{ env.LLM_API_KEY != '' }}
+        run: |
+          docker run --rm \
+            -e SCM_PROVIDER \
+            -e SCM_URL \
+            -e SCM_OWNER \
+            -e SCM_REPO \
+            -e SCM_PR_NUM \
+            -e SCM_TOKEN \
+            -e LLM_PROVIDER \
+            -e LLM_MODEL \
+            -e LLM_API_KEY \
+            -e SCM_REVIEW_DECISION_ENABLED \
+            -e CODE_REVIEW_REVIEW_DECISION_ONLY \
+            -e CODE_REVIEW_REPLY_DISMISSAL_ENABLED \
+            -e CODE_REVIEW_EVENT_COMMENT_ID \
+            -e CODE_REVIEW_EVENT_ACTOR_LOGIN \
+            -e CODE_REVIEW_EVENT_ACTOR_ID \
+            -e CODE_REVIEW_LOG_LEVEL \
+            "$IMAGE" \
+            --owner "$SCM_OWNER" \
+            --repo "$SCM_REPO" \
+            --pr "$SCM_PR_NUM" \
+            --review-decision-only
