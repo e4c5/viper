@@ -10,7 +10,6 @@ import os
 import time  # noqa: F401
 import uuid
 from dataclasses import dataclass
-from typing import Any
 
 from google.genai import types
 
@@ -39,6 +38,8 @@ from code_review.diff.fingerprint import (
 )
 from code_review.diff.line_index import (
     build_diff_line_index as _build_diff_line_index,  # noqa: F401
+)
+from code_review.diff.line_index import (
     build_per_file_line_index as _build_per_file_line_index,  # noqa: F401
 )
 from code_review.diff.parser import (
@@ -47,23 +48,6 @@ from code_review.diff.parser import (
     parse_unified_diff,
 )
 from code_review.diff.position import get_diff_hunk_for_line
-from code_review.refinement.filters.anchor_relocator import (
-    _ANCHOR_RELOCATION_WINDOW,  # noqa: F401
-    _find_closest_anchor_line,  # noqa: F401
-    _maybe_relocate_finding,  # noqa: F401
-    relocate_findings_by_anchor as _relocate_findings_by_anchor,  # noqa: F401
-)
-from code_review.refinement.filters.contradiction import (
-    _message_describes_syntax_or_missing_token_issue,  # noqa: F401
-    filter_obviously_contradicted_findings as _filter_obviously_contradicted_findings,  # noqa: F401
-)
-from code_review.refinement.filters.patch_validator import (
-    validate_suggested_patches as _validate_suggested_patches,  # noqa: F401
-)
-from code_review.refinement.filters.self_retraction import (
-    _finding_message_looks_self_retracted,  # noqa: F401
-    filter_self_retracted_findings as _filter_self_retracted_finding_messages,  # noqa: F401
-)
 from code_review.formatters.comment import finding_to_comment_body, infer_severity_from_comment_body
 from code_review.json_utils import iter_json_candidates
 from code_review.models import (
@@ -75,9 +59,30 @@ from code_review.providers.base import (
     BotAttributionIdentity,
     InlineComment,
     RateLimitError,  # noqa: F401
-    ReviewDecision,
-    UnresolvedReviewItem,
     unified_diff_for_path,
+)
+from code_review.refinement.filters.anchor_relocator import (
+    _ANCHOR_RELOCATION_WINDOW,  # noqa: F401
+    _find_closest_anchor_line,  # noqa: F401
+    _maybe_relocate_finding,  # noqa: F401
+)
+from code_review.refinement.filters.anchor_relocator import (
+    relocate_findings_by_anchor as _relocate_findings_by_anchor,  # noqa: F401
+)
+from code_review.refinement.filters.contradiction import (
+    _message_describes_syntax_or_missing_token_issue,  # noqa: F401
+)
+from code_review.refinement.filters.contradiction import (
+    filter_obviously_contradicted_findings as _filter_obviously_contradicted_findings,  # noqa: F401
+)
+from code_review.refinement.filters.patch_validator import (
+    validate_suggested_patches as _validate_suggested_patches,  # noqa: F401
+)
+from code_review.refinement.filters.self_retraction import (
+    _finding_message_looks_self_retracted,  # noqa: F401
+)
+from code_review.refinement.filters.self_retraction import (
+    filter_self_retracted_findings as _filter_self_retracted_finding_messages,  # noqa: F401
 )
 from code_review.reply_dismissal_state import REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT  # noqa: F401
 from code_review.schemas.findings import FindingsBatchV1, FindingV1
@@ -251,10 +256,6 @@ def _idempotency_key_seen_in_comments(comments: list, key: str) -> bool:
     return False
 
 
-from code_review.comments.manager import (  # noqa: E402
-    _build_ignore_set,
-    _should_skip_finding_for_dedup,
-)
 
 
 def _get_file_lines_by_path(
@@ -624,18 +625,11 @@ def _post_omit_marker_pr_summary_comment(
 
 
 from code_review.quality.gate import (  # noqa: E402
-    _log_quality_gate_review_outcome,
-    _compute_quality_gate_review_outcome,
-    _compute_review_decision_from_counts,
-    _quality_gate_dedupe_key_for_item,
-    _quality_gate_dedupe_key_for_new_finding,
-    _quality_gate_fetch_unresolved_items,
-    _quality_gate_bump_seen,
-    _quality_gate_high_medium_counts,
+    _compute_quality_gate_review_outcome,  # noqa: F401
+    _log_quality_gate_review_outcome,  # noqa: F401
 )
 from code_review.quality.outcome import (  # noqa: E402
-    QualityGateOutcome,
-    QualityGateReviewOutcome,
+    QualityGateReviewOutcome,  # noqa: F401
 )
 
 

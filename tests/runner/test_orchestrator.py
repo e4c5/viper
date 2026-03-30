@@ -17,7 +17,6 @@ from code_review.orchestration_deps import (
 )
 from tests.conftest import runner_run_async_returning
 
-
 TEST_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -62,8 +61,13 @@ def _orchestrator_run_env(
     mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
     with (
-        patch("code_review.orchestration.orchestrator.runner_mod.get_context_window", return_value=1_000_000),
-        patch("code_review.orchestration.orchestrator.runner_mod.get_provider") as mock_get_provider,
+        patch(
+            "code_review.orchestration.orchestrator.runner_mod.get_context_window",
+            return_value=1_000_000,
+        ),
+        patch(
+            "code_review.orchestration.orchestrator.runner_mod.get_provider"
+        ) as mock_get_provider,
         patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config") as mock_scm,
         patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config") as mock_llm,
         patch("google.adk.runners.Runner", return_value=mock_runner_instance),
@@ -367,7 +371,9 @@ def test_comment_manager_filter_duplicates_returns_to_post():
 
     mgr = CommentManager()  # empty ignore_set
     finding = FindingV1(path="foo.py", line=1, severity="low", code="X", message="msg")
-    fp_fn = lambda f: "fp-abc"
+
+    def fp_fn(_finding):
+        return "fp-abc"
 
     to_post = mgr.filter_duplicates([finding], fp_fn)
 
@@ -680,8 +686,13 @@ def test_run_batch_mode_message_includes_head_sha_and_batch_count():
     from code_review.providers.base import FileInfo
 
     with (
-        patch("code_review.orchestration.orchestrator.runner_mod.get_context_window", return_value=10),
-        patch("code_review.orchestration.orchestrator.runner_mod.get_provider") as mock_get_provider,
+        patch(
+            "code_review.orchestration.orchestrator.runner_mod.get_context_window",
+            return_value=10,
+        ),
+        patch(
+            "code_review.orchestration.orchestrator.runner_mod.get_provider"
+        ) as mock_get_provider,
         patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config") as mock_scm,
         patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config") as mock_llm,
         patch("google.adk.runners.Runner") as mock_runner_cls,
