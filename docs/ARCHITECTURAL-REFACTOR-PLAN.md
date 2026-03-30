@@ -131,6 +131,8 @@ The refactor will be executed in four phases to maintain system stability.
 4. Run the full test suite (including integration and E2E where available).
 5. Update `docs/DEVELOPER_GUIDE.md` to reflect the new architecture.
 
+> Status note: the implementation branch has completed the architectural delegation work, but the full Phase 4 cleanup remains open. `orchestration_deps.py`, `review_orchestrator.py`, and `review_execution.py` still exist as compatibility layers, and several tests still depend on `code_review.runner` or `code_review.orchestration_deps` as legacy import hubs.
+
 ## 5. Risk Mitigation
 
 - **Test-Driven Refactor**: Every move must be followed by running the existing test suite (`pytest`).

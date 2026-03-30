@@ -90,8 +90,8 @@ src/code_review/
 ├── __main__.py              # CLI: Typer app → run_review()
 ├── config.py                 # SCMConfig, LLMConfig (Pydantic Settings); get_scm_config(), get_llm_config()
 ├── models.py                 # get_configured_model(), get_context_window(), get_max_output_tokens()
-├── runner.py                 # run_review(); thin public entry point with explicit re-exports
-├── orchestration_deps.py     # Shared procedural helpers used by orchestration internals
+├── runner.py                 # run_review(); thin public entry point with explicit compatibility re-exports
+├── orchestration_deps.py     # Legacy helper hub retained temporarily for compatibility during Phase 4 cleanup
 ├── observability.py          # Optional Prometheus/OTel; start_run(), finish_run(), get_prometheus_registry()
 ├── agent/
 │   ├── __init__.py           # create_review_agent
@@ -151,7 +151,7 @@ src/code_review/
 | `orchestration/orchestrator.py` | `ReviewOrchestrator` — owns the full review lifecycle: config, provider, skip/idempotency, agent runs, filter, post. |
 | `orchestration/execution.py` | Agent execution helpers (single-shot and multi-batch `run_async` wrappers). |
 | `orchestration/filter.py` | `ReviewFilter` — encapsulates PR skip-label and title-pattern logic. |
-| `orchestration_deps.py` | Shared procedural helpers used internally by orchestration. Re-exports symbols from domain modules for backward-compatible patching in tests. |
+| `orchestration_deps.py` | Legacy helper hub retained temporarily during cleanup. It still contains helper implementations plus re-exports for backward-compatible test patching, so Phase 4 cleanup is not fully complete yet. |
 | `diff/analyzer.py` | `DiffAnalyzer` — token estimation (`estimate_tokens`) and path normalization (`normalize_path`). |
 | `diff/line_index.py` | `build_diff_line_index`, `build_per_file_line_index` — hunk-based line lookup structures. |
 | `refinement/filters/` | Deterministic finding post-processors: anchor relocation, self-retraction filter, contradiction filter, patch validation. |
