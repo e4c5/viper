@@ -2,14 +2,50 @@
 
 from __future__ import annotations
 
-from code_review.orchestration_deps import *  # noqa: F401,F403
-from code_review.review_orchestrator import ReviewOrchestrator
+# -- Symbols re-exported from orchestration_deps (defined there) --
+from code_review.orchestration_deps import (  # noqa: F401
+    AGENT_VERSION,
+    _build_idempotency_key,
+    _diff_visible_new_lines,
+    _findings_from_response,
+    _format_reply_dismissal_user_message,
+    _generate_auto_pr_description,
+    _idempotency_key_seen_in_comments,
+    _maybe_post_started_review_comment,
+    _normalize_path_for_anchor,
+    _omit_marker_pr_summary_visible_text,
+    _parse_findings_json,
+    _post_comments_one_by_one,
+    _reply_added_event_authored_by_bot,
+    _compute_quality_gate_review_outcome,
+)
+
+# -- Symbols from canonical domain modules (also available via orchestration_deps) --
+from code_review.comments.manager import _build_ignore_set  # noqa: F401
+from code_review.quality.outcome import QualityGateReviewOutcome  # noqa: F401
+from code_review.refinement.filters.anchor_relocator import (  # noqa: F401
+    relocate_findings_by_anchor as _relocate_findings_by_anchor,
+)
+from code_review.refinement.filters.contradiction import (  # noqa: F401
+    _message_describes_syntax_or_missing_token_issue,
+    filter_obviously_contradicted_findings as _filter_obviously_contradicted_findings,
+)
+from code_review.refinement.filters.patch_validator import (  # noqa: F401
+    validate_suggested_patches as _validate_suggested_patches,
+)
+from code_review.refinement.filters.self_retraction import (  # noqa: F401
+    _finding_message_looks_self_retracted,
+    filter_self_retracted_findings as _filter_self_retracted_finding_messages,
+)
+
+# -- Core types --
+from code_review.orchestration.filter import ReviewFilter  # noqa: F401
+from code_review.review_orchestrator import ReviewOrchestrator  # noqa: F401
 from code_review.schemas.findings import FindingV1
 from code_review.schemas.review_decision_event import (
     ReviewDecisionEventContext,
     review_decision_event_context_from_env,
 )
-from code_review.orchestration.filter import ReviewFilter  # noqa: F401
 
 
 def run_review(

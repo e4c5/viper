@@ -90,7 +90,8 @@ src/code_review/
 ├── __main__.py              # CLI: Typer app → run_review()
 ├── config.py                 # SCMConfig, LLMConfig (Pydantic Settings); get_scm_config(), get_llm_config()
 ├── models.py                 # get_configured_model(), get_context_window(), get_max_output_tokens()
-├── runner.py                 # run_review(); orchestration and ADK Runner
+├── runner.py                 # run_review(); thin public entry point with explicit re-exports
+├── orchestration_deps.py     # Shared procedural helpers used by orchestration internals
 ├── observability.py          # Optional Prometheus/OTel; start_run(), finish_run(), get_prometheus_registry()
 ├── agent/
 │   ├── __init__.py           # create_review_agent
@@ -99,6 +100,23 @@ src/code_review/
 │       ├── __init__.py
 │       ├── gitea_tools.py    # create_gitea_tools(), create_findings_only_tools() — wrap ProviderInterface
 │       └── review_helpers.py # detect_language_context() — agent tool
+├── orchestration/
+│   ├── __init__.py           # Re-exports ReviewOrchestrator, ReviewFilter
+│   ├── orchestrator.py       # ReviewOrchestrator — main review orchestration class
+│   ├── execution.py          # Agent execution helpers (_run_agent_and_collect_response, etc.)
+│   └── filter.py             # ReviewFilter — PR skip-label/title-pattern logic
+├── comments/
+│   └── manager.py            # CommentManager, _build_ignore_set, _should_skip_finding_for_dedup
+├── quality/
+│   ├── gate.py               # QualityGate, _compute_quality_gate_review_outcome
+│   └── outcome.py            # QualityGateOutcome, QualityGateReviewOutcome
+├── refinement/
+│   ├── __init__.py
+│   └── filters/
+│       ├── anchor_relocator.py  # relocate_findings_by_anchor (_relocate_findings_by_anchor)
+│       ├── contradiction.py     # filter_obviously_contradicted_findings, _message_describes_syntax_or_missing_token_issue
+│       ├── patch_validator.py   # validate_suggested_patches (_validate_suggested_patches)
+│       └── self_retraction.py   # filter_self_retracted_findings, _finding_message_looks_self_retracted
 ├── providers/
 │   ├── __init__.py           # get_provider(name, base_url, token); exports base types
 │   ├── base.py               # ProviderInterface, InlineComment, ReviewComment, FileInfo, PRInfo, ProviderCapabilities
@@ -110,6 +128,8 @@ src/code_review/
 ├── schemas/
 │   └── findings.py          # FindingV1 (path, line, severity, code, message, ...)
 ├── diff/
+│   ├── analyzer.py          # DiffAnalyzer (estimate_tokens, normalize_path)
+│   ├── line_index.py        # build_diff_line_index, build_per_file_line_index
 │   ├── parser.py             # parse_unified_diff(), DiffHunk, iter_new_lines()
 │   ├── position.py          # get_commentable_positions(), position_for_line(), CommentablePosition
 │   └── fingerprint.py       # build_fingerprint(), surrounding_content_hash(), format_comment_body_with_marker(), parse_marker_from_comment_body()
@@ -122,6 +142,22 @@ src/code_review/
 └── formatters/
     └── comment.py           # finding_to_comment_body(f) → "[Severity] message"
 ```
+
+### 3.1 Module Responsibilities
+
+| Module | Responsibility |
+|--------|----------------|
+| `runner.py` | Public entry point; thin wrapper that calls `ReviewOrchestrator.run()`. Re-exports key symbols for test compatibility. |
+| `orchestration/orchestrator.py` | `ReviewOrchestrator` — owns the full review lifecycle: config, provider, skip/idempotency, agent runs, filter, post. |
+| `orchestration/execution.py` | Agent execution helpers (single-shot and multi-batch `run_async` wrappers). |
+| `orchestration/filter.py` | `ReviewFilter` — encapsulates PR skip-label and title-pattern logic. |
+| `orchestration_deps.py` | Shared procedural helpers used internally by orchestration. Re-exports symbols from domain modules for backward-compatible patching in tests. |
+| `diff/analyzer.py` | `DiffAnalyzer` — token estimation (`estimate_tokens`) and path normalization (`normalize_path`). |
+| `diff/line_index.py` | `build_diff_line_index`, `build_per_file_line_index` — hunk-based line lookup structures. |
+| `refinement/filters/` | Deterministic finding post-processors: anchor relocation, self-retraction filter, contradiction filter, patch validation. |
+| `comments/manager.py` | `CommentManager` — loading existing comments, building ignore sets, dedup. |
+| `quality/gate.py` | `QualityGate` — severity counting, threshold comparison, review decision computation. |
+| `quality/outcome.py` | `QualityGateOutcome`, `QualityGateReviewOutcome` — dataclasses for gate results. |
 
 ---
 
