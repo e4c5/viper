@@ -20,7 +20,7 @@ At a high level, the workflow:
 1. triggers on pull request events
 2. passes GitHub PR metadata into the container as `SCM_*` environment variables
 3. passes your LLM configuration as `LLM_*` environment variables
-4. runs the agent image with the `review` command
+4. runs the agent image with the appropriate CLI flags
 5. fetches the PR diff and changed files from GitHub
 6. asks the configured LLM to review the diff
 7. posts inline comments on the PR for findings that survive filtering and deduplication
@@ -126,7 +126,6 @@ on:
 
 permissions:
   contents: read
-  packages: read
   pull-requests: write
 
 jobs:
@@ -134,7 +133,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      IMAGE: e4c5/code-review-agent:latest
+      IMAGE: e4c5/code-review-agent:1.0.1
 
       SCM_PROVIDER: github
       SCM_URL: https://api.github.com
@@ -144,8 +143,8 @@ jobs:
       SCM_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      LLM_PROVIDER: gemini
-      LLM_MODEL: gemini-2.5-flash
+      LLM_PROVIDER: openrouter
+      LLM_MODEL: google/gemini-3.1-flash-lite-preview
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
 
       CODE_REVIEW_LOG_LEVEL: INFO
@@ -230,7 +229,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
 
     env:
-      IMAGE: your-dockerhub-user/code-review-agent:v1.2.3
+      IMAGE: e4c5/code-review-agent:1.0.1
 
       SCM_PROVIDER: github
       SCM_URL: https://api.github.com
@@ -240,8 +239,8 @@ jobs:
       SCM_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      LLM_PROVIDER: openai
-      LLM_MODEL: gpt-5-mini
+      LLM_PROVIDER: openrouter
+      LLM_MODEL: google/gemini-3.1-flash-lite-preview
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
 
       SCM_SKIP_LABEL: skip-ai-review
