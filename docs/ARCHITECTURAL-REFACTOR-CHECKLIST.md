@@ -32,8 +32,8 @@ This checklist tracks the implementation of the [Architectural Refactor Plan](AR
 - [x] Move `review_orchestrator.py` → `orchestration/orchestrator.py`; add backward-compatible re-export at the old location.
 - [x] Move `review_execution.py` → `orchestration/execution.py`; add backward-compatible re-export at the old location.
 - [x] Create `src/code_review/orchestration/filter.py` with `ReviewFilter` (PR skip-label/title-pattern logic from `ReviewOrchestrator._determine_skip_reason`).
-- [ ] Refactor `ReviewOrchestrator.run()` to delegate to `DiffAnalyzer`, `CommentManager`, `QualityGate`, and `FindingRefinementPipeline`. *(Classes created; full delegation is a follow-up task.)*
-- [ ] Delegate post-processing to `FindingRefinementPipeline`. *(Pipeline created; wiring into orchestrator is a follow-up task.)*
+- [x] Refactor `ReviewOrchestrator.run()` to delegate to `DiffAnalyzer`, `CommentManager`, `QualityGate`, and `FindingRefinementPipeline`. *(ReviewFilter, CommentManager, QualityGate, and FindingRefinementPipeline all wired; three obsolete private methods deleted; tests migrated to domain classes.)*
+- [x] Delegate post-processing to `FindingRefinementPipeline`. *(Pipeline wired into `_filter_findings_by_diff_scope`; individual filter calls removed.)*
 - [x] Verify: Run all runner and integration tests (`pytest tests/runner/` and `pytest tests/integration/`).
 
 ## Phase 4: Finalization

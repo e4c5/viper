@@ -55,6 +55,7 @@ class CommentManager:
         self.ignore_set: set[tuple[str, str]] = set()
         self.resolved_fingerprints: set[tuple[str, str]] = set()
         self._resolved_body_set: set[tuple[str, str]] = set()
+        self.existing_comments: list = []
 
     def load_existing_comments(
         self,
@@ -65,6 +66,7 @@ class CommentManager:
     ) -> None:
         """Fetch existing review comments and build ignore/resolved sets from markers."""
         existing = provider.get_existing_review_comments(owner, repo, pr_number)
+        self.existing_comments = list(existing)
         existing_dicts = [c.model_dump() for c in existing]
         self.ignore_set = _build_ignore_set(existing_dicts)
 

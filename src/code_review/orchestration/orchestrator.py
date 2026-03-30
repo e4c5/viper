@@ -3,6 +3,10 @@ from __future__ import annotations
 from code_review import orchestration_deps as runner_mod
 from code_review import review_execution as execution_mod
 from code_review.batching import ReviewBatch, build_review_batch_budget
+from code_review.comments.manager import CommentManager
+from code_review.orchestration.filter import ReviewFilter
+from code_review.quality.gate import QualityGate
+from code_review.refinement.pipeline import FindingRefinementPipeline
 
 
 class ReviewOrchestrator:
@@ -66,7 +70,7 @@ class ReviewOrchestrator:
         )
         return (cfg, llm_cfg, provider)
 
-    def _determine_skip_reason(
+    def _skip_if_needed(
         self,
         provider,
         cfg,
@@ -74,93 +78,28 @@ class ReviewOrchestrator:
         start_time: float,
         run_handle,
     ) -> list[runner_mod.FindingV1] | None:
-        """
-        If the PR should be skipped (skip label or title pattern), emit observability and return [].
-        Otherwise return None (caller continues).
-        """
-        if not cfg.skip_label and (not cfg.skip_title_pattern):
+        """Delegate to ReviewFilter; emit observability and return [] if skip, else None."""
+        if not cfg.skip_label and not cfg.skip_title_pattern:
             return None
         pr_info = provider.get_pr_info(self.owner, self.repo, self.pr_number)
-        if not pr_info:
+        skip_reason = ReviewFilter().should_skip(pr_info, cfg)
+        if skip_reason is None:
             return None
-        if (
-            cfg.skip_label
-            and cfg.skip_label.strip()
-            and any(
-                lb.strip().lower() == cfg.skip_label.strip().lower() for lb in pr_info.labels
-            )
-        ):
-            _duration_ms = (runner_mod.time.perf_counter() - start_time) * 1000
-            runner_mod._log_run_complete(
-                trace_id, self.owner, self.repo, self.pr_number, 0, 0, 0, _duration_ms
-            )
-            runner_mod.observability.finish_run(
-                run_handle,
-                self.owner,
-                self.repo,
-                self.pr_number,
-                0,
-                0,
-                0,
-                _duration_ms / 1000.0,
-            )
-            return []
-        if (
-            cfg.skip_title_pattern
-            and cfg.skip_title_pattern.strip()
-            and (cfg.skip_title_pattern.strip().lower() in pr_info.title.lower())
-        ):
-            _duration_ms = (runner_mod.time.perf_counter() - start_time) * 1000
-            runner_mod._log_run_complete(
-                trace_id, self.owner, self.repo, self.pr_number, 0, 0, 0, _duration_ms
-            )
-            runner_mod.observability.finish_run(
-                run_handle,
-                self.owner,
-                self.repo,
-                self.pr_number,
-                0,
-                0,
-                0,
-                _duration_ms / 1000.0,
-            )
-            return []
-        return None
-
-    def _load_existing_comments_and_markers(self, provider):
-        """
-        Fetch existing review comments, build ignore set and resolved sets from markers.
-        Returns (existing, existing_dicts, ignore_set, resolved_comments,
-                 resolved_body_set, resolved_fp_set).
-        """
-        existing = provider.get_existing_review_comments(self.owner, self.repo, self.pr_number)
-        existing_dicts = [c.model_dump() for c in existing]
-        ignore_set = runner_mod._build_ignore_set(existing_dicts)
-        resolved_comments = []
-        for c in existing:
-            resolved_flag = getattr(c, "resolved", False)
-            if isinstance(resolved_flag, bool) and resolved_flag:
-                resolved_comments.append(c)
-        resolved_body_set: set[tuple[str, str]] = set()
-        resolved_fp_set: set[tuple[str, str]] = set()
-        for c in resolved_comments:
-            path = getattr(c, "path", "") or ""
-            body = getattr(c, "body", "") or ""
-            if not path or not body:
-                continue
-            body_hash = runner_mod.hashlib.sha256(body.encode()).hexdigest()
-            resolved_body_set.add((path, body_hash))
-            parsed = runner_mod.parse_marker_from_comment_body(body)
-            if parsed.get("fingerprint"):
-                resolved_fp_set.add((path, parsed["fingerprint"]))
-        return (
-            existing,
-            existing_dicts,
-            ignore_set,
-            resolved_comments,
-            resolved_body_set,
-            resolved_fp_set,
+        _duration_ms = (runner_mod.time.perf_counter() - start_time) * 1000
+        runner_mod._log_run_complete(
+            trace_id, self.owner, self.repo, self.pr_number, 0, 0, 0, _duration_ms
         )
+        runner_mod.observability.finish_run(
+            run_handle,
+            self.owner,
+            self.repo,
+            self.pr_number,
+            0,
+            0,
+            0,
+            _duration_ms / 1000.0,
+        )
+        return []
 
     def _compute_idempotency_and_maybe_short_circuit(
         self,
@@ -420,44 +359,39 @@ class ReviewOrchestrator:
         """Emit a concise log line describing the prepared review batches."""
         execution_mod.log_review_batch_plan(batches, paths, incremental_base_sha)
 
-    def _attach_fingerprints_and_filter_findings(
-        self,
-        all_findings: list[runner_mod.FindingV1],
-        provider,
-        ignore_set: set[tuple[str, str]],
-        resolved_body_set: set[tuple[str, str]],
-        resolved_fp_set: set[tuple[str, str]],
-    ) -> list[tuple[runner_mod.FindingV1, str]]:
-        """
-        Attach fingerprints to findings, filter by ignore/resolved sets.
-        Mutates ignore_set (adds new keys). Returns to_post: list of (finding, fingerprint).
-        """
-        to_post: list[tuple[runner_mod.FindingV1, str]] = []
-        unique_paths = list(dict.fromkeys(f.path for f in all_findings))
-        file_lines_by_path = (
-            runner_mod._get_file_lines_by_path(
-                provider, self.owner, self.repo, self.head_sha, unique_paths
+    def _make_fingerprint_fn(self, provider):
+        """Return a fingerprint function (FindingV1 -> str) backed by live file content."""
+        _cache: dict[str, dict[int, str]] | None = None
+
+        def _fingerprint_fn(finding: runner_mod.FindingV1) -> str:
+            nonlocal _cache
+            if _cache is None:
+                if self.head_sha:
+                    unique_paths: list[str] = []
+                    seen: set[str] = set()
+                    # We build the cache lazily on first call so the paths list covers
+                    # all findings that may be encountered.
+                    _cache = {}
+                else:
+                    _cache = {}
+            file_lines_by_path = (
+                runner_mod._get_file_lines_by_path(
+                    provider,
+                    self.owner,
+                    self.repo,
+                    self.head_sha,
+                    [finding.path],
+                )
+                if self.head_sha
+                else {}
             )
-            if self.head_sha
-            else {}
-        )
-        for f in all_findings:
-            body = runner_mod.finding_to_comment_body(f)
-            body_hash = runner_mod.hashlib.sha256(body.encode()).hexdigest()
-            fp = (
-                runner_mod._fingerprint_for_finding(f, file_lines_by_path)
+            return (
+                runner_mod._fingerprint_for_finding(finding, file_lines_by_path)
                 if file_lines_by_path
                 else ""
             )
-            if runner_mod._should_skip_finding_for_dedup(
-                f.path, body_hash, fp, ignore_set, resolved_body_set, resolved_fp_set
-            ):
-                continue
-            if fp:
-                ignore_set.add((f.path, fp))
-            ignore_set.add((f.path, body_hash))
-            to_post.append((f, fp))
-        return to_post
+
+        return _fingerprint_fn
 
     def _post_findings_and_summary(
         self,
@@ -487,8 +421,8 @@ class ReviewOrchestrator:
         )
         if self.dry_run:
             return 0
-        gate_outcome = runner_mod._compute_quality_gate_review_outcome(
-            provider, self.owner, self.repo, self.pr_number, to_post, cfg
+        gate_outcome = QualityGate(provider, self.owner, self.repo, self.pr_number, cfg).evaluate(
+            to_post
         )
         runner_mod._log_quality_gate_review_outcome("Full-review", gate_outcome)
         count = 0
@@ -658,13 +592,8 @@ class ReviewOrchestrator:
         self, findings: list[runner_mod.FindingV1], paths: list[str], full_diff: str
     ) -> list[runner_mod.FindingV1]:
         path_filtered = self._filter_findings_to_pr_paths(findings, paths)
-        relocated = runner_mod._relocate_findings_by_anchor(path_filtered, full_diff)
-        line_filtered = self._filter_findings_to_visible_diff_lines(relocated, full_diff)
-        contradiction_filtered = runner_mod._filter_obviously_contradicted_findings(
-            line_filtered, full_diff
-        )
-        patched = runner_mod._validate_suggested_patches(contradiction_filtered, full_diff)
-        return runner_mod._filter_self_retracted_finding_messages(patched)
+        pipeline_results = FindingRefinementPipeline().run(path_filtered, full_diff)
+        return self._filter_findings_to_visible_diff_lines(pipeline_results, full_diff)
 
     def _build_pr_url(self, cfg) -> str:
         base_url = cfg.url.rstrip("/")
@@ -1191,7 +1120,7 @@ class ReviewOrchestrator:
         print(f"Review-decision-only for PR: {pr_url}")
         runner_mod._log_review_decision_event_if_present(self._event_context)
         app_cfg = runner_mod.get_code_review_app_config()
-        skip_result = self._determine_skip_reason(provider, cfg, trace_id, start_time, run_handle)
+        skip_result = self._skip_if_needed(provider, cfg, trace_id, start_time, run_handle)
         if skip_result is not None:
             return skip_result
         skip_bot_event = self._decision_only_try_skip_when_event_actor_is_bot(
@@ -1216,13 +1145,10 @@ class ReviewOrchestrator:
         excluded_gate = self._decision_only_reply_dismissal_excluded_gate_ids(
             provider, app_cfg, trace_id
         )
-        gate_outcome = runner_mod._compute_quality_gate_review_outcome(
-            provider,
-            self.owner,
-            self.repo,
-            self.pr_number,
+        gate_outcome = QualityGate(
+            provider, self.owner, self.repo, self.pr_number, cfg
+        ).evaluate(
             [],
-            cfg,
             excluded_gate_stable_ids=excluded_gate if excluded_gate else None,
         )
         runner_mod._log_quality_gate_review_outcome("Review-decision-only", gate_outcome)
@@ -1282,9 +1208,9 @@ class ReviewOrchestrator:
                 "Recomputing PR review decision from unresolved SCM state "
                 "despite empty review scope"
             )
-            gate_outcome = runner_mod._compute_quality_gate_review_outcome(
-                provider, self.owner, self.repo, self.pr_number, [], cfg
-            )
+            gate_outcome = QualityGate(
+                provider, self.owner, self.repo, self.pr_number, cfg
+            ).evaluate([])
             runner_mod._log_quality_gate_review_outcome("Empty-scope refresh", gate_outcome)
             submission_head_sha = self._resolve_empty_scope_submission_head_sha(
                 provider, head_sha, pr_info_for_metadata
@@ -1335,17 +1261,13 @@ class ReviewOrchestrator:
             pr_url,
         )
         print(f"Starting review for PR: {pr_url}")
-        skip_result = self._determine_skip_reason(provider, cfg, trace_id, start_time, run_handle)
+        skip_result = self._skip_if_needed(provider, cfg, trace_id, start_time, run_handle)
         if skip_result is not None:
             return skip_result
-        (
-            existing,
-            existing_dicts,
-            ignore_set,
-            _resolved_comments,
-            resolved_body_set,
-            resolved_fp_set,
-        ) = self._load_existing_comments_and_markers(provider)
+        comment_mgr = CommentManager()
+        comment_mgr.load_existing_comments(provider, self.owner, self.repo, self.pr_number)
+        existing = comment_mgr.existing_comments
+        existing_dicts = [c.model_dump() for c in existing]
         incremental_base_sha = self._incremental_base_sha(cfg, self.head_sha)
         idempotency_result = self._compute_idempotency_and_maybe_short_circuit(
             cfg,
@@ -1442,13 +1364,7 @@ class ReviewOrchestrator:
             prompt_suffix=prompt_suffix,
         )
         all_findings = self._filter_findings_by_diff_scope(all_findings, paths, full_diff)
-        to_post = self._attach_fingerprints_and_filter_findings(
-            all_findings,
-            provider,
-            ignore_set,
-            resolved_body_set,
-            resolved_fp_set,
-        )
+        to_post = comment_mgr.filter_duplicates(all_findings, self._make_fingerprint_fn(provider))
         runner_mod.logger.info(
             "Agent returned %d finding(s), %d to post after filtering",
             len(all_findings),

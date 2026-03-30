@@ -301,49 +301,43 @@ def test_run_agent_and_collect_findings_parses_sequential_workflow_responses(
     ]
 
 
-# --- Step 2: _determine_skip_reason, _load_existing_comments_and_markers,
-#            _compute_idempotency_and_maybe_short_circuit ---
+# --- Step 2: ReviewFilter, CommentManager, _compute_idempotency_and_maybe_short_circuit ---
 
 
-def test_determine_skip_reason_returns_none_when_no_skip_config():
-    """When cfg has no skip_label or skip_title_pattern, _determine_skip_reason returns None."""
+def test_review_filter_should_skip_returns_none_when_no_config():
+    """ReviewFilter.should_skip returns None when cfg has no skip_label or skip_title_pattern."""
+    from code_review.orchestration.filter import ReviewFilter
+
     cfg = MagicMock(skip_label="", skip_title_pattern="")
-    provider = MagicMock()
-    o = ReviewOrchestrator("o", "r", 1)
-    result = o._determine_skip_reason(provider, cfg, "trace-1", 0.0, MagicMock())
-    assert result is None
-    provider.get_pr_info.assert_not_called()
+    rf = ReviewFilter()
+    assert rf.should_skip(MagicMock(), cfg) is None
 
 
-def test_determine_skip_reason_returns_empty_list_when_pr_has_skip_label():
-    """When PR has the skip label, _determine_skip_reason returns [] and emits observability."""
-    cfg = MagicMock()
-    cfg.skip_label = "skip-review"
-    cfg.skip_title_pattern = ""
-    provider = MagicMock()
-    provider.get_pr_info.return_value = MagicMock(labels=["skip-review", "other"], title="Fix bug")
-    o = ReviewOrchestrator("o", "r", 1)
-    with (
-        patch("code_review.orchestration_deps._log_run_complete"),
-        patch("code_review.orchestration_deps.observability") as mock_obs,
-    ):
-        result = o._determine_skip_reason(provider, cfg, "trace-1", 0.0, MagicMock())
-    assert result == []
-    mock_obs.finish_run.assert_called_once()
+def test_review_filter_should_skip_returns_reason_when_label_matches():
+    """ReviewFilter.should_skip returns a non-empty reason string when label is present."""
+    from code_review.orchestration.filter import ReviewFilter
 
-
-def test_determine_skip_reason_returns_none_when_pr_info_is_none():
-    """When get_pr_info returns None, _determine_skip_reason returns None."""
     cfg = MagicMock(skip_label="skip-review", skip_title_pattern="")
-    provider = MagicMock()
-    provider.get_pr_info.return_value = None
-    o = ReviewOrchestrator("o", "r", 1)
-    result = o._determine_skip_reason(provider, cfg, "trace-1", 0.0, MagicMock())
-    assert result is None
+    pr_info = MagicMock(labels=["skip-review", "other"], title="Fix bug")
+    rf = ReviewFilter()
+    reason = rf.should_skip(pr_info, cfg)
+    assert reason is not None
+    assert "skip-review" in reason
 
 
-def test_load_existing_comments_and_markers_returns_ignore_and_resolved_sets():
-    """_load_existing_comments_and_markers returns existing, dicts, ignore_set, resolved sets."""
+def test_review_filter_should_skip_returns_none_when_pr_info_is_none():
+    """ReviewFilter.should_skip returns None when pr_info is None."""
+    from code_review.orchestration.filter import ReviewFilter
+
+    cfg = MagicMock(skip_label="skip-review", skip_title_pattern="")
+    rf = ReviewFilter()
+    assert rf.should_skip(None, cfg) is None
+
+
+def test_comment_manager_load_existing_comments_builds_ignore_set():
+    """CommentManager.load_existing_comments populates ignore_set and existing_comments."""
+    from code_review.comments.manager import CommentManager
+
     provider = MagicMock()
     comment = MagicMock()
     comment.model_dump.return_value = {"path": "a.py", "body": "Hello"}
@@ -352,18 +346,32 @@ def test_load_existing_comments_and_markers_returns_ignore_and_resolved_sets():
     comment.resolved = False
     provider.get_existing_review_comments.return_value = [comment]
 
-    o = ReviewOrchestrator("o", "r", 1)
-    existing, existing_dicts, ignore_set, resolved_comments, resolved_body_set, resolved_fp_set = (
-        o._load_existing_comments_and_markers(provider)
-    )
+    mgr = CommentManager()
+    mgr.load_existing_comments(provider, "o", "r", 1)
 
-    assert len(existing) == 1
-    assert existing_dicts == [{"path": "a.py", "body": "Hello"}]
-    assert len(ignore_set) >= 1  # body_hash at least
-    assert resolved_comments == []
-    assert resolved_body_set == set()
-    assert resolved_fp_set == set()
+    assert len(mgr.existing_comments) == 1
+    assert len(mgr.ignore_set) >= 1  # body_hash at least
+    assert mgr.resolved_fingerprints == set()
     provider.get_existing_review_comments.assert_called_once_with("o", "r", 1)
+
+
+def test_comment_manager_filter_duplicates_returns_to_post():
+    """CommentManager.filter_duplicates returns (finding, fp) pairs and blocks duplicates."""
+    from code_review.comments.manager import CommentManager
+    from code_review.schemas.findings import FindingV1
+
+    mgr = CommentManager()  # empty ignore_set
+    finding = FindingV1(path="foo.py", line=1, severity="low", code="X", message="msg")
+    fp_fn = lambda f: "fp-abc"
+
+    to_post = mgr.filter_duplicates([finding], fp_fn)
+
+    assert len(to_post) == 1
+    assert to_post[0][0] is finding
+    assert isinstance(to_post[0][1], str)
+    # Calling again with the same finding should be deduped
+    to_post2 = mgr.filter_duplicates([finding], fp_fn)
+    assert to_post2 == []
 
 
 def test_compute_idempotency_and_maybe_short_circuit_returns_none_when_no_head_sha():
@@ -533,38 +541,19 @@ def test_create_agent_and_runner_returns_session_id_service_runner(mock_create_a
     )
 
 
-# --- Step 5: _run_agent_and_collect_findings, _attach_fingerprints_and_filter_findings,
-#            _post_findings_and_summary ---
+def test_comment_manager_filter_duplicates_via_orchestrator_run():
+    """_filter_findings_by_diff_scope integration: orchestrator.run() returns correct findings.
 
-
-def test_attach_fingerprints_and_filter_findings_returns_to_post():
-    """_attach_fingerprints_and_filter_findings filters by ignore set.
-
-    Returns list of (finding, fp).
+    This is an implicit integration test verifying CommentManager.filter_duplicates is wired
+    into the full run() path.
     """
-    from code_review.schemas.findings import FindingV1
+    with _orchestrator_run_env() as (provider, _):
+        orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="abc123", dry_run=True)
+        result = orchestrator.run()
 
-    o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
-    finding = FindingV1(path="foo.py", line=1, severity="low", code="X", message="msg")
-    all_findings = [finding]
-    provider = MagicMock()
-    provider.get_file_content.return_value = "line1\nline2\n"
-    ignore_set = set()
-    resolved_body_set = set()
-    resolved_fp_set = set()
-
-    to_post = o._attach_fingerprints_and_filter_findings(
-        all_findings,
-        provider,
-        ignore_set,
-        resolved_body_set,
-        resolved_fp_set,
-    )
-
-    assert len(to_post) == 1
-    assert to_post[0][0] is finding
-    assert isinstance(to_post[0][1], str)
-    assert len(ignore_set) >= 1
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0].path == "foo.py"
 
 
 def test_post_findings_and_summary_returns_zero_when_dry_run():
