@@ -6,8 +6,9 @@ line-visibility guardrail). Without this check the patch would be rendered as a
 suggestion block replacing the wrong code.
 """
 
-
-from code_review.runner import _validate_suggested_patches
+from code_review.refinement.filters.patch_validator import (
+    validate_suggested_patches as _validate_suggested_patches,
+)
 from code_review.schemas.findings import FindingV1
 
 # A minimal diff with two files.

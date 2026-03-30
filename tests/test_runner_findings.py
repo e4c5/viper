@@ -1,11 +1,8 @@
 """Tests for runner findings parsing and ignore set."""
 
+from code_review.comments.manager import _build_ignore_set
 from code_review.formatters.comment import finding_to_comment_body
-from code_review.runner import (
-    _build_ignore_set,
-    _findings_from_response,
-    _parse_findings_json,
-)
+from code_review.orchestration_deps import _findings_from_response, _parse_findings_json
 from code_review.schemas.findings import FindingV1
 
 

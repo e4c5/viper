@@ -1203,7 +1203,7 @@ def test_run_review_decision_only_skip_opt_in_ignored_for_comment_deleted(
 
 def test_compute_quality_gate_review_outcome_matches_thresholds():
     """Shared outcome helper stays aligned with threshold semantics."""
-    from code_review.runner import _compute_quality_gate_review_outcome
+    from code_review.quality.gate import _compute_quality_gate_review_outcome
 
     provider = MagicMock()
     provider.get_unresolved_review_items_for_quality_gate = MagicMock(return_value=[])
@@ -1224,7 +1224,7 @@ def test_compute_quality_gate_review_outcome_matches_thresholds():
 
 
 def test_compute_quality_gate_review_outcome_excludes_stable_ids():
-    from code_review.runner import _compute_quality_gate_review_outcome
+    from code_review.quality.gate import _compute_quality_gate_review_outcome
 
     provider = MagicMock()
     provider.get_unresolved_review_items_for_quality_gate = MagicMock(
@@ -1264,10 +1264,8 @@ def test_compute_quality_gate_review_outcome_excludes_stable_ids():
 
 
 def test_omit_marker_pr_summary_omits_meets_expectations_when_gate_requests_changes():
-    from code_review.runner import (
-        QualityGateReviewOutcome,
-        _omit_marker_pr_summary_visible_text,
-    )
+    from code_review.orchestration_deps import _omit_marker_pr_summary_visible_text
+    from code_review.quality.outcome import QualityGateReviewOutcome
 
     cfg = _review_decision_scm_config()
     provider = MagicMock()
@@ -1292,10 +1290,8 @@ def test_omit_marker_pr_summary_omits_meets_expectations_when_gate_requests_chan
 
 
 def test_omit_marker_pr_summary_keeps_meets_expectations_when_gate_approves():
-    from code_review.runner import (
-        QualityGateReviewOutcome,
-        _omit_marker_pr_summary_visible_text,
-    )
+    from code_review.orchestration_deps import _omit_marker_pr_summary_visible_text
+    from code_review.quality.outcome import QualityGateReviewOutcome
 
     cfg = _review_decision_scm_config()
     provider = MagicMock()
@@ -1319,10 +1315,8 @@ def test_omit_marker_pr_summary_keeps_meets_expectations_when_gate_approves():
 
 
 def test_omit_marker_pr_summary_meets_expectations_when_review_decisions_disabled():
-    from code_review.runner import (
-        QualityGateReviewOutcome,
-        _omit_marker_pr_summary_visible_text,
-    )
+    from code_review.orchestration_deps import _omit_marker_pr_summary_visible_text
+    from code_review.quality.outcome import QualityGateReviewOutcome
 
     cfg = _scm_config(
         review_decision_enabled=False,

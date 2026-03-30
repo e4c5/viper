@@ -1,8 +1,8 @@
 """Tests for dropping findings whose messages retract or negate the issue."""
 
-from code_review.runner import (
-    _filter_self_retracted_finding_messages,
+from code_review.refinement.filters.self_retraction import (
     _finding_message_looks_self_retracted,
+    filter_self_retracted_findings as _filter_self_retracted_finding_messages,
 )
 from code_review.schemas.findings import FindingV1
 

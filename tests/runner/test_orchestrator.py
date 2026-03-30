@@ -8,11 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from code_review.runner import (
-    ReviewOrchestrator,
-    _generate_auto_pr_description,
-    _maybe_post_started_review_comment,
-)
+from code_review.orchestration.orchestrator import ReviewOrchestrator
+from code_review.runner import _generate_auto_pr_description, _maybe_post_started_review_comment
 from tests.conftest import runner_run_async_returning
 
 

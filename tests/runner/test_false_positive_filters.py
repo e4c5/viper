@@ -1,8 +1,8 @@
 """Tests for deterministic false-positive filters applied before posting findings."""
 
-from code_review.runner import (
-    _filter_obviously_contradicted_findings,
+from code_review.refinement.filters.contradiction import (
     _message_describes_syntax_or_missing_token_issue,
+    filter_obviously_contradicted_findings as _filter_obviously_contradicted_findings,
 )
 from code_review.schemas.findings import FindingV1
 

@@ -13,7 +13,7 @@ from code_review.config import (
     get_scm_config,
     reset_config_cache,
 )
-from code_review.runner import ReviewOrchestrator
+from code_review.orchestration.orchestrator import ReviewOrchestrator
 
 
 def test_scm_config_invalid_url_raises():
