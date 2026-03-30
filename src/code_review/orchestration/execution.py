@@ -1,0 +1,266 @@
+from __future__ import annotations
+
+from code_review import orchestration_deps as runner_mod
+from code_review.batching import ReviewBatch, build_review_batches
+
+
+def create_agent_and_runner(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+    provider,
+    review_standards: str,
+    batches: list[ReviewBatch],
+    *,
+    context_brief_attached: bool = False,
+):
+    """Build the batch-review SequentialAgent, session service, and ADK Runner."""
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+
+    from code_review.agent.workflows import create_sequential_batch_review_agent
+
+    agent = create_sequential_batch_review_agent(
+        provider,
+        review_standards,
+        batches,
+        head_sha=head_sha,
+        context_brief_attached=context_brief_attached,
+    )
+    session_id = f"{owner}/{repo}/pr-{pr_number}/{runner_mod.uuid.uuid4().hex[:12]}"
+    session_service = InMemorySessionService()
+    runner = Runner(
+        agent=agent,
+        app_name=runner_mod.APP_NAME,
+        session_service=session_service,
+        auto_create_session=True,
+    )
+    runner._uses_sequential_batch_review = True
+    return (session_id, session_service, runner)
+
+
+def run_agent_and_collect_findings(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+    provider,
+    review_standards: str,
+    runner,
+    session_service,
+    session_id: str,
+    batches: list[ReviewBatch],
+    *,
+    context_brief_attached: bool = False,
+    prompt_suffix: str = "",
+) -> list[runner_mod.FindingV1]:
+    """Run batch review and parse responses into findings."""
+    if not batches:
+        return []
+    return _run_sequential_batch_review_mode(
+        owner,
+        repo,
+        pr_number,
+        head_sha,
+        provider,
+        review_standards,
+        runner,
+        session_service,
+        session_id,
+        batches=batches,
+        batch_count=len(batches),
+        context_brief_attached=context_brief_attached,
+        prompt_suffix=prompt_suffix,
+    )
+
+
+def _run_sequential_batch_review_mode(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+    provider,
+    review_standards: str,
+    runner,
+    session_service,
+    session_id: str,
+    *,
+    batches: list[ReviewBatch],
+    batch_count: int,
+    context_brief_attached: bool = False,
+    prompt_suffix: str = "",
+) -> list[runner_mod.FindingV1]:
+    """Run the SequentialAgent batch workflow and preserve successful batches on rate limit."""
+    content = build_batch_review_content(
+        owner=owner,
+        repo=repo,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        batch_count=batch_count,
+        prompt_suffix=prompt_suffix,
+    )
+    try:
+        responses = runner_mod._run_agent_and_collect_responses(
+            runner, session_service, session_id, content
+        )
+    except runner_mod.PartialResponseCollectionError as exc:
+        if isinstance(exc.cause, runner_mod.RateLimitError):
+            return _recover_rate_limited_batches(
+                owner,
+                repo,
+                pr_number,
+                head_sha,
+                provider,
+                review_standards,
+                batches,
+                completed_responses=exc.responses,
+                context_brief_attached=context_brief_attached,
+                prompt_suffix=prompt_suffix,
+                error=exc.cause,
+            )
+        raise exc.cause from exc
+    return findings_from_batch_responses(responses)
+
+
+def build_batch_review_content(
+    *,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+    batch_count: int,
+    prompt_suffix: str = "",
+):
+    """Build the user message used to execute a prepared batch-review workflow."""
+    msg = (
+        "Review the prepared PR batches sequentially. "
+        f"owner={owner}, repo={repo}, pr_number={pr_number}."
+        + (f" head_sha={head_sha}." if head_sha else "")
+        + f" Prepared batch count: {batch_count}."
+    )
+    if prompt_suffix:
+        msg += "\n\n" + prompt_suffix
+    if runner_mod.logger.isEnabledFor(runner_mod.logging.DEBUG):
+        runner_mod.logger.debug(
+            "LLM request (batch SequentialAgent) session=%s prompt=%s",
+            "<dynamic>",
+            msg,
+        )
+    return runner_mod.types.Content(role="user", parts=[runner_mod.types.Part(text=msg)])
+
+
+def findings_from_batch_responses(
+    responses: list[tuple[str, str]],
+) -> list[runner_mod.FindingV1]:
+    """Parse structured findings from a list of batch response texts."""
+    all_findings: list[runner_mod.FindingV1] = []
+    for _author, response_text in responses:
+        all_findings.extend(runner_mod._findings_from_response(response_text))
+    return all_findings
+
+
+def batch_index_from_author(author: str) -> int | None:
+    """Extract the original batch index from a workflow response author name."""
+    prefix = "batch_review_"
+    if not author.startswith(prefix):
+        return None
+    suffix = author[len(prefix) :]
+    return int(suffix) if suffix.isdigit() else None
+
+
+def _recover_rate_limited_batches(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+    provider,
+    review_standards: str,
+    batches: list[ReviewBatch],
+    *,
+    completed_responses: list[tuple[str, str]],
+    context_brief_attached: bool,
+    prompt_suffix: str,
+    error: runner_mod.RateLimitError,
+) -> list[runner_mod.FindingV1]:
+    """Keep successful batch responses and isolate the remaining batches one-by-one."""
+    completed_batch_indexes = {
+        batch_index
+        for author, _text in completed_responses
+        if (batch_index := batch_index_from_author(author)) is not None
+    }
+    runner_mod.logger.warning(
+        "Batch review hit rate limit after %d/%d completed batch response(s); "
+        "continuing remaining batches individually: %s",
+        len(completed_batch_indexes),
+        len(batches),
+        error,
+    )
+    all_findings = findings_from_batch_responses(completed_responses)
+    for batch_index, batch in enumerate(batches):
+        if batch_index in completed_batch_indexes:
+            continue
+        session_id, session_service, runner = create_agent_and_runner(
+            owner,
+            repo,
+            pr_number,
+            head_sha,
+            provider,
+            review_standards,
+            [batch],
+            context_brief_attached=context_brief_attached,
+        )
+        content = build_batch_review_content(
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            batch_count=1,
+            prompt_suffix=prompt_suffix,
+        )
+        try:
+            responses = runner_mod._run_agent_and_collect_responses(
+                runner, session_service, session_id, content
+            )
+        except runner_mod.PartialResponseCollectionError as exc:
+            if isinstance(exc.cause, runner_mod.RateLimitError):
+                runner_mod.logger.warning(
+                    "Skipping rate-limited batch %d/%d paths=%s: %s",
+                    batch_index + 1,
+                    len(batches),
+                    ", ".join(batch.paths),
+                    exc.cause,
+                )
+                continue
+            raise exc.cause from exc
+        all_findings.extend(findings_from_batch_responses(responses))
+    return all_findings
+
+
+def build_review_batches_for_scope(
+    files: list[object], paths: list[str], full_diff: str, diff_budget: int
+) -> list[ReviewBatch]:
+    """Slice the scoped diff by file and pack the resulting segments into ordered batches."""
+    scoped_diff_by_path = {
+        path: runner_mod.unified_diff_for_path(full_diff, path) for path in paths
+    }
+    return build_review_batches(
+        files,
+        scoped_diff_by_path,
+        diff_budget_tokens=max(1, diff_budget),
+    )
+
+
+def log_review_batch_plan(
+    batches: list[ReviewBatch], paths: list[str], incremental_base_sha: str
+) -> None:
+    """Emit a concise log line describing the prepared review batches."""
+    segment_count = sum(len(batch.segments) for batch in batches)
+    mode_label = "incremental batch mode" if incremental_base_sha else "batch mode"
+    runner_mod.logger.info(
+        "Running agent on %d file(s) across %d batch(es) and %d segment(s) (%s)",
+        len(paths),
+        len(batches),
+        segment_count,
+        mode_label,
+    )

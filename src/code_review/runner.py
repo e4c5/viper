@@ -9,6 +9,7 @@ from code_review.schemas.review_decision_event import (
     ReviewDecisionEventContext,
     review_decision_event_context_from_env,
 )
+from code_review.orchestration.filter import ReviewFilter  # noqa: F401
 
 
 def run_review(
