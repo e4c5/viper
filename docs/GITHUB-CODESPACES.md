@@ -1,7 +1,6 @@
 # GitHub Codespaces
 
-This repository includes a recommended GitHub Codespaces setup in
-`.devcontainer/devcontainer.json`.
+How to setup a GitHub Codespaces with `.devcontainer/devcontainer.json`. for this project
 
 ## What the Codespace config does
 

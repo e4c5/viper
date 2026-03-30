@@ -49,6 +49,7 @@ Tests mirror `src/`: `tests/test_runner.py`, `tests/providers/`, `tests/runner/`
 - **Provider interface** (`providers/base.py`): Adding a method? Implement it in all providers (gitea, github, gitlab, bitbucket, bitbucket_server) or document the default.
 - **Finding schema** (`schemas/findings.py`): `FindingV1` is the agent output contract. Backward-compatible changes only (optional fields, defaults).
 - **Agent instruction** (`agent/agent.py`): Keep findings-only instruction clear that the agent must **not** post or fetch existing comments; the runner handles that.
+- **Custom boundaries**: Keep SCM provider behavior, idempotency/dedupe, diff anchoring/relocation, stale-comment resolution, and review-decision policy in Python rather than moving them into ADK state or tools.
 
 ---
 
@@ -57,7 +58,6 @@ Tests mirror `src/`: `tests/test_runner.py`, `tests/providers/`, `tests/runner/`
 - **README.md** — Quick start, config, Docker/CI, observability.
 - **docs/SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md** — Per-SCM approve / needs-work / merge checks vs `SCM_REVIEW_DECISION_*`; review-decision-only and reply-dismissal (end user).
 - **docs/DEVELOPER_GUIDE.md** — Full implementation guide: architecture, flow, modules, config, extension points, testing.
-- **docs/WHAT-STAYS-CUSTOM.md** — Guardrails for which product logic should remain outside ADK.
 
 **ADK**: Runner builds an ADK Agent (model, instruction, tools from `agent/tools/`) and uses Runner + InMemorySessionService; it calls `Runner.run()` then parses the final response for a JSON array of findings. Tools delegate to the provider; the agent does not post or fetch comments.
 
