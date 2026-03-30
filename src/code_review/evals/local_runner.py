@@ -13,7 +13,8 @@ from code_review.evals.corpus import (
     load_golden_pr_review_cases,
     load_reply_dismissal_eval_cases,
 )
-from code_review.orchestration_deps import _findings_from_response, _run_agent_and_collect_response
+from code_review.orchestration.execution import run_agent_and_collect_response
+from code_review.orchestration_deps import _findings_from_response
 from code_review.providers.base import ProviderCapabilities
 from code_review.standards import get_review_standards
 
@@ -139,7 +140,7 @@ def _run_agent_text(agent, user_text: str) -> str:
         auto_create_session=True,
     )
     content = types.Content(role="user", parts=[types.Part(text=user_text)])
-    return _run_agent_and_collect_response(runner, session_service, "eval-session", content)
+    return run_agent_and_collect_response(runner, session_service, "eval-session", content)
 
 
 def _golden_pr_review_user_message(case: GoldenPrReviewCase) -> str:

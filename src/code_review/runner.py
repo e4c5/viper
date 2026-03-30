@@ -40,7 +40,7 @@ from code_review.refinement.filters.self_retraction import (  # noqa: F401
 
 # -- Core types --
 from code_review.orchestration.filter import ReviewFilter  # noqa: F401
-from code_review.review_orchestrator import ReviewOrchestrator  # noqa: F401
+from code_review.orchestration.orchestrator import ReviewOrchestrator  # noqa: F401
 from code_review.schemas.findings import FindingV1
 from code_review.schemas.review_decision_event import (
     ReviewDecisionEventContext,

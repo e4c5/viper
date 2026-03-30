@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from code_review import orchestration_deps as runner_mod
-from code_review import review_execution as execution_mod
+from code_review.orchestration import execution as execution_mod
 from code_review.batching import ReviewBatch, build_review_batch_budget
 from code_review.comments.manager import CommentManager
 from code_review.orchestration.filter import ReviewFilter
