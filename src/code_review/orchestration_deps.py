@@ -10,8 +10,12 @@ import os
 import time  # noqa: F401
 import uuid
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from google.genai import types
+
+if TYPE_CHECKING:
+    from google.adk.agents.callback_context import ReadonlyContext
 
 import code_review
 from code_review import observability  # noqa: F401
@@ -905,6 +909,44 @@ def _run_agent_and_collect_response(
     return asyncio.run(_collect_response_async(runner, session_id, content))
 
 
+def _bypass_adk_templating(agent: Any) -> None:
+    """
+    Recursively wrap agent instructions in a provider that bypasses ADK templating.
+
+    ADK's inject_session_state (instructions_utils.py) identifies all {Identifier}
+    patterns in agent instructions and attempts to substitute them from session state,
+    crashing with KeyError if the variable is missing. This is problematic for
+    code review when instructions contain raw diffs (e.g. {HOME} in a path).
+
+    By providing a callable for the instruction field, ADK's canonical_instruction
+    (llm_agent.py) returns bypass_state_injection=True, which skips the injection pass.
+    """
+    # Recursively handle sub-agents (e.g. in a SequentialAgent)
+    sub_agents = getattr(agent, "sub_agents", [])
+    for sa in sub_agents:
+        _bypass_adk_templating(sa)
+
+    # Wrap the instruction if it exists and is a string (typically an LlmAgent)
+    instruction = getattr(agent, "instruction", None)
+    if isinstance(instruction, str):
+        instr_str = instruction
+
+        async def _instr_provider(_: ReadonlyContext) -> str:
+            return instr_str
+
+        agent.instruction = _instr_provider
+
+    # Also handle global_instruction if it exists
+    global_instruction = getattr(agent, "global_instruction", None)
+    if isinstance(global_instruction, str):
+        global_str = global_instruction
+
+        async def _global_instr_provider(_: ReadonlyContext) -> str:
+            return global_str
+
+        agent.global_instruction = _global_instr_provider
+
+
 async def _collect_final_response_texts_async(
     runner, session_id: str, content: types.Content
 ) -> list[tuple[str, str]]:
@@ -915,6 +957,9 @@ async def _collect_final_response_texts_async(
         "[batch] _collect_final_response_texts_async starting session=%s",
         session_id,
     )
+    # Bypass ADK's aggressive instruction template substitution globally.
+    _bypass_adk_templating(runner.agent)
+
     responses: list[tuple[str, str]] = []
     event_count = 0
     try:
