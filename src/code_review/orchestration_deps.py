@@ -320,8 +320,7 @@ def _maybe_post_started_review_comment(
     if not paths:
         return
     description = (getattr(pr_info, "description", "") or "").strip()
-    # Treat very short descriptions as effectively missing.
-    if len(description) >= 40:
+    if description:
         return
     generated = _generate_auto_pr_description(getattr(pr_info, "title", "") or "", paths)
     if not generated or not generated.strip():
@@ -711,7 +710,7 @@ def _maybe_submit_review_decision(
     dry_run: bool,
     cfg,
     *,
-    gate_outcome: QualityGateReviewOutcome,
+    gate_outcome: QualityGateReviewOutcome | None,
 ) -> None:
     """Submit or log PR-level review decision when configured and supported.
 
@@ -721,6 +720,12 @@ def _maybe_submit_review_decision(
         logger.info(
             "Skipping PR review decision submission: SCM_REVIEW_DECISION_ENABLED is false "
             "(enable to push the computed gate to the SCM).",
+        )
+        return
+    if gate_outcome is None:
+        logger.warning(
+            "Skipping PR review decision submission: quality gate could not be computed "
+            "because unresolved review-item lookup failed."
         )
         return
 

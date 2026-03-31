@@ -1,5 +1,6 @@
 """Unit tests for ReviewOrchestrator and its extracted helpers (RUN_REVIEW_REFACTOR_PLAN)."""
 
+import hashlib
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -18,6 +19,7 @@ from code_review.orchestration_deps import (
 from tests.conftest import runner_run_async_returning
 
 TEST_REPO_ROOT = Path(__file__).resolve().parents[2]
+TEST_SRC_ROOT = TEST_REPO_ROOT / "src"
 
 
 def test_canonical_orchestrator_imports_without_circular_dependency():
@@ -28,7 +30,7 @@ def test_canonical_orchestrator_imports_without_circular_dependency():
             "-c",
             (
                 "import sys; "
-                "sys.path.insert(0, 'src'); "
+                f"sys.path.insert(0, {str(TEST_SRC_ROOT)!r}); "
                 "import code_review.orchestration.orchestrator; "
                 "print('ok')"
             ),
@@ -385,6 +387,23 @@ def test_comment_manager_filter_duplicates_returns_to_post():
     assert to_post2 == []
 
 
+def test_comment_manager_filter_duplicates_skips_resolved_body_hash():
+    """Resolved comments should suppress reposts even without a matching fingerprint."""
+    from code_review.comments.manager import CommentManager
+    from code_review.formatters.comment import finding_to_comment_body
+    from code_review.schemas.findings import FindingV1
+
+    mgr = CommentManager()
+    finding = FindingV1(path="foo.py", line=1, severity="low", code="X", message="msg")
+    body = finding_to_comment_body(finding)
+    body_hash = hashlib.sha256(body.encode()).hexdigest()
+    mgr._resolved_body_set.add((finding.path, body_hash))
+
+    to_post = mgr.filter_duplicates([finding], lambda _finding: "")
+
+    assert to_post == []
+
+
 def test_compute_idempotency_and_maybe_short_circuit_returns_none_when_no_head_sha():
     """When head_sha is empty, _compute_idempotency_and_maybe_short_circuit returns None."""
     o = ReviewOrchestrator("o", "r", 1, head_sha="")
@@ -649,6 +668,21 @@ def test_maybe_post_started_review_comment_skips_when_description_present():
 
     _maybe_post_started_review_comment(provider, "o", "r", 1, pr_info, paths)
 
+    provider.post_pr_summary_comment.assert_not_called()
+
+
+def test_maybe_post_started_review_comment_skips_when_description_is_short_but_intentional():
+    """Short non-empty descriptions should not be overwritten by the auto-generated summary."""
+    provider = MagicMock()
+    pr_info = MagicMock(
+        title="T",
+        description="WIP fix.",
+    )
+    paths = ["foo.py"]
+
+    _maybe_post_started_review_comment(provider, "o", "r", 1, pr_info, paths)
+
+    provider.update_pr_description.assert_not_called()
     provider.post_pr_summary_comment.assert_not_called()
 
 

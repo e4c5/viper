@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -282,7 +282,7 @@ def _split_single_hunk(
     start_index = 0
     while start_index < len(hunk.lines):
         end_index = start_index + 1
-        best_end_index = end_index
+        best_end_index = start_index
         while end_index <= len(hunk.lines):
             candidate = _render_hunk_slice(header_lines, hunk, start_index, end_index)
             if estimate_tokens(candidate) > segment_budget_tokens:
@@ -290,10 +290,50 @@ def _split_single_hunk(
             best_end_index = end_index
             end_index += 1
         if best_end_index == start_index:
-            best_end_index = start_index + 1
+            out.extend(
+                _split_oversized_hunk_line(
+                    header_lines,
+                    hunk,
+                    start_index,
+                    segment_budget_tokens=segment_budget_tokens,
+                )
+            )
+            start_index += 1
+            continue
         out.append(_render_hunk_slice(header_lines, hunk, start_index, best_end_index))
         start_index = best_end_index
     return out
+
+
+def _split_oversized_hunk_line(
+    header_lines: Sequence[str],
+    hunk: DiffHunk,
+    line_index: int,
+    *,
+    segment_budget_tokens: int,
+) -> list[str]:
+    content, old_ln, new_ln = hunk.lines[line_index]
+    old_start, new_start = _slice_start_positions(hunk, line_index)
+    old_count = 1 if old_ln is not None else 0
+    new_count = 1 if new_ln is not None else 0
+
+    def render_fragment(fragment: str) -> str:
+        fragment_hunk = DiffHunk(
+            path=hunk.path,
+            old_start=old_start,
+            old_count=old_count,
+            new_start=new_start,
+            new_count=new_count,
+            lines=[(fragment, old_ln, new_ln)],
+        )
+        return _render_hunk_slice(header_lines, fragment_hunk, 0, 1)
+
+    fragments = _split_long_line(
+        content,
+        segment_budget_tokens,
+        lambda fragment: estimate_tokens(render_fragment(fragment)),
+    )
+    return [render_fragment(fragment) for fragment in fragments]
 
 
 def _render_hunk_slice(
@@ -351,7 +391,7 @@ def _split_plain_text_segment(diff_text: str, segment_budget_tokens: int) -> lis
     start_index = 0
     while start_index < len(lines):
         end_index = start_index + 1
-        best_end_index = end_index
+        best_end_index = start_index
         while end_index <= len(lines):
             candidate = "\n".join(lines[start_index:end_index]).strip()
             if estimate_tokens(candidate) > segment_budget_tokens:
@@ -359,7 +399,44 @@ def _split_plain_text_segment(diff_text: str, segment_budget_tokens: int) -> lis
             best_end_index = end_index
             end_index += 1
         if best_end_index == start_index:
-            best_end_index = start_index + 1
+            out.extend(
+                ("line_fallback", fragment.strip())
+                for fragment in _split_long_line(
+                    lines[start_index],
+                    segment_budget_tokens,
+                    estimate_tokens,
+                )
+            )
+            start_index += 1
+            continue
         out.append(("line_fallback", "\n".join(lines[start_index:best_end_index]).strip()))
         start_index = best_end_index
     return out
+
+
+def _split_long_line(
+    line: str,
+    segment_budget_tokens: int,
+    estimate: Callable[[str], int],
+) -> list[str]:
+    if estimate(line) <= segment_budget_tokens or not line:
+        return [line]
+
+    fragments: list[str] = []
+    remaining = line
+    while remaining:
+        low = 1
+        high = len(remaining)
+        best_length = 0
+        while low <= high:
+            mid = (low + high) // 2
+            if estimate(remaining[:mid]) <= segment_budget_tokens:
+                best_length = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        if best_length == 0:
+            best_length = 1
+        fragments.append(remaining[:best_length])
+        remaining = remaining[best_length:]
+    return fragments

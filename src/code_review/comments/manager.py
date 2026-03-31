@@ -41,6 +41,8 @@ def _should_skip_finding_for_dedup(
     """Return True if this finding should be skipped (duplicate or resolved)."""
     if fp and (path, fp) in resolved_fp_set:
         return True
+    if (path, body_hash) in resolved_body_set:
+        return True
     if (path, body_hash) in ignore_set and (path, body_hash) not in resolved_body_set:
         return True
     if fp and (path, fp) in ignore_set and (path, fp) not in resolved_fp_set:

@@ -35,7 +35,7 @@ def _quality_gate_fetch_unresolved_items(
     owner: str,
     repo: str,
     pr_number: int,
-) -> list[Any]:
+) -> list[Any] | None:
     try:
         items = provider.get_unresolved_review_items_for_quality_gate(owner, repo, pr_number)
     except Exception as e:
@@ -45,8 +45,9 @@ def _quality_gate_fetch_unresolved_items(
             repo,
             pr_number,
             e,
+            exc_info=logger.isEnabledFor(logging.DEBUG),
         )
-        return []
+        return None
     return items if isinstance(items, list) else []
 
 
@@ -75,9 +76,11 @@ def _quality_gate_high_medium_counts(
     to_post: list[tuple[FindingV1, str]],
     *,
     excluded_stable_ids: frozenset[str] | None = None,
-) -> tuple[int, int]:
+) -> tuple[int, int] | None:
     """Count distinct open high/medium signals: existing unresolved items plus net-new findings."""
     items = _quality_gate_fetch_unresolved_items(provider, owner, repo, pr_number)
+    if items is None:
+        return None
     skip_ids = excluded_stable_ids or frozenset()
     seen_keys: set[str] = set()
     high_count = 0
@@ -143,9 +146,9 @@ def _compute_quality_gate_review_outcome(
     cfg,
     *,
     excluded_gate_stable_ids: frozenset[str] | None = None,
-) -> QualityGateOutcome:
+) -> QualityGateOutcome | None:
     """Combine provider unresolved items with planned posts; apply thresholds; build reason text."""
-    high_count, medium_count = _quality_gate_high_medium_counts(
+    counts = _quality_gate_high_medium_counts(
         provider,
         owner,
         repo,
@@ -153,6 +156,9 @@ def _compute_quality_gate_review_outcome(
         to_post,
         excluded_stable_ids=excluded_gate_stable_ids,
     )
+    if counts is None:
+        return None
+    high_count, medium_count = counts
     high_threshold = int(getattr(cfg, "review_decision_high_threshold", 1))
     medium_threshold = int(getattr(cfg, "review_decision_medium_threshold", 3))
     decision = _compute_review_decision_from_counts(
@@ -188,7 +194,7 @@ class QualityGate:
         self,
         to_post: list[tuple[FindingV1, str]],
         excluded_gate_stable_ids: frozenset[str] | None = None,
-    ) -> QualityGateOutcome:
+    ) -> QualityGateOutcome | None:
         """Compute quality gate outcome from existing unresolved items and new findings."""
         return _compute_quality_gate_review_outcome(
             self.provider,

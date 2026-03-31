@@ -126,6 +126,23 @@ def test_split_file_diff_into_segments_splits_oversized_single_hunk():
     assert all("@@ " in segment.diff_text for segment in segments)
 
 
+def test_split_file_diff_into_segments_splits_oversized_single_hunk_line():
+    long_line = "x" * 240
+    diff_text = _file_diff("big.py", f"+{long_line}", header="@@ -1,0 +1,1 @@")
+    segment_budget = estimate_tokens(diff_text) // 3
+
+    segments = split_file_diff_into_segments(
+        "big.py",
+        diff_text,
+        segment_budget_tokens=segment_budget,
+    )
+
+    assert len(segments) > 1
+    assert all(segment.split_strategy == "intra_hunk" for segment in segments)
+    assert all(segment.estimated_tokens <= segment_budget for segment in segments)
+    assert all("@@ -1,0 +1,1 @@" in segment.diff_text for segment in segments)
+
+
 def test_split_file_diff_into_segments_falls_back_when_no_hunks_exist():
     diff_text = dedent(
         """\
@@ -142,3 +159,24 @@ def test_split_file_diff_into_segments_falls_back_when_no_hunks_exist():
 
     assert len(segments) >= 1
     assert all(segment.split_strategy == "line_fallback" for segment in segments)
+
+
+def test_split_file_diff_into_segments_splits_oversized_plain_text_line():
+    long_metadata = "Binary files differ: " + ("x" * 240)
+    diff_text = dedent(
+        f"""\
+        diff --git a/binary.dat b/binary.dat
+        {long_metadata}
+        """
+    ).strip()
+    segment_budget = estimate_tokens(long_metadata) // 3
+
+    segments = split_file_diff_into_segments(
+        "binary.dat",
+        diff_text,
+        segment_budget_tokens=segment_budget,
+    )
+
+    assert len(segments) > 1
+    assert all(segment.split_strategy == "line_fallback" for segment in segments)
+    assert all(segment.estimated_tokens <= segment_budget for segment in segments)

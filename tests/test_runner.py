@@ -1224,6 +1224,20 @@ def test_compute_quality_gate_review_outcome_matches_thresholds():
     assert "REQUEST_CHANGES" in out.submission_reason
 
 
+def test_compute_quality_gate_review_outcome_returns_none_when_unresolved_lookup_fails():
+    from code_review.quality.gate import _compute_quality_gate_review_outcome
+
+    provider = MagicMock()
+    provider.get_unresolved_review_items_for_quality_gate = MagicMock(
+        side_effect=RuntimeError("lookup failed")
+    )
+    cfg = _review_decision_scm_config()
+
+    out = _compute_quality_gate_review_outcome(provider, "o", "r", 1, [], cfg)
+
+    assert out is None
+
+
 def test_compute_quality_gate_review_outcome_excludes_stable_ids():
     from code_review.quality.gate import _compute_quality_gate_review_outcome
 
@@ -1709,6 +1723,38 @@ def test_run_review_decision_only_skips_entire_run_when_actor_is_bot(
     provider.get_review_thread_dismissal_context.assert_not_called()
     provider.submit_review_decision.assert_not_called()
     mock_record_rd.assert_any_call("skipped_bot_author")
+
+
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
+def test_run_review_skips_review_decision_when_quality_gate_lookup_fails(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    """Unresolved-item lookup failures must not be treated as an APPROVE-able empty gate."""
+    from code_review.runner import run_review
+
+    provider = _provider_with_review_decisions()
+    provider.get_unresolved_review_items_for_quality_gate.side_effect = RuntimeError("boom")
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    findings_json = (
+        '{"findings":[{"path":"foo.py","line":1,"severity":"high","code":"x",'
+        '"message":"Must fix."}]}'
+    )
+
+    with _patch_adk_runner(_adk_runner_single_event(findings_json)):
+        posted = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
+
+    assert len(posted) == 1
+    provider.post_review_comments.assert_called_once()
+    provider.submit_review_decision.assert_not_called()
 
 
 def test_reply_added_event_authored_by_bot_matches_login_and_id():

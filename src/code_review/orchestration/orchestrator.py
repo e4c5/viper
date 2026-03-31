@@ -398,7 +398,13 @@ class ReviewOrchestrator:
         gate_outcome = QualityGate(provider, self.owner, self.repo, self.pr_number, cfg).evaluate(
             to_post
         )
-        runner_mod._log_quality_gate_review_outcome("Full-review", gate_outcome)
+        if gate_outcome is not None:
+            runner_mod._log_quality_gate_review_outcome("Full-review", gate_outcome)
+        else:
+            runner_mod.logger.warning(
+                "Full-review: skipping PR-level quality gate summary/decision because "
+                "unresolved review-item lookup failed."
+            )
         count = 0
         if to_post:
             if not self.head_sha:
@@ -418,7 +424,11 @@ class ReviewOrchestrator:
                 llm_cfg,
                 full_diff=full_diff,
             )
-        if self.head_sha and provider.capabilities().omit_fingerprint_marker_in_body:
+        if (
+            gate_outcome is not None
+            and self.head_sha
+            and provider.capabilities().omit_fingerprint_marker_in_body
+        ):
             planned = len(to_post)
             include_marker = planned == 0 or count == planned
             runner_mod._post_omit_marker_pr_summary_comment(
@@ -1125,7 +1135,13 @@ class ReviewOrchestrator:
             [],
             excluded_gate_stable_ids=excluded_gate if excluded_gate else None,
         )
-        runner_mod._log_quality_gate_review_outcome("Review-decision-only", gate_outcome)
+        if gate_outcome is not None:
+            runner_mod._log_quality_gate_review_outcome("Review-decision-only", gate_outcome)
+        else:
+            runner_mod.logger.warning(
+                "Review-decision-only: skipping PR review decision because unresolved "
+                "review-item lookup failed."
+            )
         runner_mod._maybe_submit_review_decision(
             provider,
             self.owner,
@@ -1185,7 +1201,13 @@ class ReviewOrchestrator:
             gate_outcome = QualityGate(
                 provider, self.owner, self.repo, self.pr_number, cfg
             ).evaluate([])
-            runner_mod._log_quality_gate_review_outcome("Empty-scope refresh", gate_outcome)
+            if gate_outcome is not None:
+                runner_mod._log_quality_gate_review_outcome("Empty-scope refresh", gate_outcome)
+            else:
+                runner_mod.logger.warning(
+                    "Empty-scope refresh: skipping PR review decision because unresolved "
+                    "review-item lookup failed."
+                )
             submission_head_sha = self._resolve_empty_scope_submission_head_sha(
                 provider, head_sha, pr_info_for_metadata
             )
