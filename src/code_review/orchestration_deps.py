@@ -885,7 +885,7 @@ async def _collect_response_async(runner, session_id: str, content: types.Conten
 
 
 def _run_agent_and_collect_response(
-    runner, session_service, session_id: str, content: types.Content
+    runner, session_id: str, content: types.Content
 ) -> str:
     """Run agent once and return concatenated final response text (uses async API)."""
     return asyncio.run(_collect_response_async(runner, session_id, content))
@@ -914,7 +914,7 @@ async def _collect_final_response_texts_async(
 
 
 def _run_agent_and_collect_responses(
-    runner, session_service, session_id: str, content: types.Content
+    runner, session_id: str, content: types.Content
 ) -> list[tuple[str, str]]:
     """Run agent once and return text-bearing final responses from all participating agents."""
     return asyncio.run(
@@ -1187,7 +1187,7 @@ def _run_reply_dismissal_llm(user_message: str) -> str:
             user_message,
         )
     content = types.Content(role="user", parts=[types.Part(text=user_message)])
-    return _run_agent_and_collect_response(runner, session_service, session_id, content)
+    return _run_agent_and_collect_response(runner, session_id, content)
 
 
 __all__ = [

@@ -138,7 +138,7 @@ def _run_sequential_batch_review_mode(
     )
     try:
         responses = runner_mod._run_agent_and_collect_responses(
-            runner, session_service, session_id, content
+            runner, session_id, content
         )
     except runner_mod.PartialResponseCollectionError as exc:
         if isinstance(exc.cause, runner_mod.RateLimitError):
@@ -256,7 +256,7 @@ def _recover_rate_limited_batches(
         )
         try:
             responses = runner_mod._run_agent_and_collect_responses(
-                runner, session_service, session_id, content
+                runner, session_id, content
             )
         except runner_mod.PartialResponseCollectionError as exc:
             if isinstance(exc.cause, runner_mod.RateLimitError):
