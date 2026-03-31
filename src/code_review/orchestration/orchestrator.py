@@ -3,6 +3,7 @@ from __future__ import annotations
 from code_review import orchestration_deps as runner_mod
 from code_review.batching import ReviewBatch, build_review_batch_budget
 from code_review.comments.manager import CommentManager
+from code_review.models import PRContext
 from code_review.orchestration import execution as execution_mod
 from code_review.orchestration.filter import ReviewFilter
 from code_review.quality.gate import QualityGate
@@ -29,10 +30,7 @@ class ReviewOrchestrator:
         review_decision_only: bool = False,
         event_context: runner_mod.ReviewDecisionEventContext | None = None,
     ):
-        self.owner = owner
-        self.repo = repo
-        self.pr_number = pr_number
-        self.head_sha = head_sha
+        self.pr_ctx = PRContext(owner, repo, pr_number, head_sha)
         self.dry_run = dry_run
         self.print_findings = print_findings
         self._review_decision_enabled_override = review_decision_enabled
@@ -40,6 +38,22 @@ class ReviewOrchestrator:
         self._review_decision_medium_threshold_override = review_decision_medium_threshold
         self._review_decision_only = review_decision_only
         self._event_context = event_context
+
+    @property
+    def owner(self) -> str:
+        return self.pr_ctx.owner
+
+    @property
+    def repo(self) -> str:
+        return self.pr_ctx.repo
+
+    @property
+    def pr_number(self) -> int:
+        return self.pr_ctx.pr_number
+
+    @property
+    def head_sha(self) -> str:
+        return self.pr_ctx.head_sha
 
     def _load_config_and_provider(self):
         """Load SCM/LLM config and create the provider instance.
@@ -122,15 +136,7 @@ class ReviewOrchestrator:
         incremental_base_sha = incremental_base_sha or self._incremental_base_sha(
             cfg, self.head_sha
         )
-        run_id = runner_mod._build_idempotency_key(
-            cfg,
-            llm_cfg,
-            self.owner,
-            self.repo,
-            self.pr_number,
-            self.head_sha,
-            incremental_base_sha,
-        )
+        run_id = self.pr_ctx.idempotency_key(cfg, llm_cfg, incremental_base_sha)
         if not runner_mod._idempotency_key_seen_in_comments(existing_dicts, run_id):
             return None
         _duration_ms = (runner_mod.time.perf_counter() - start_time) * 1000
@@ -203,10 +209,7 @@ class ReviewOrchestrator:
         Returns (session_id, session_service, runner).
         """
         return execution_mod.create_agent_and_runner(
-            self.owner,
-            self.repo,
-            self.pr_number,
-            self.head_sha,
+            self.pr_ctx,
             provider,
             review_standards,
             batches,
@@ -229,10 +232,7 @@ class ReviewOrchestrator:
         Returns all_findings (unfiltered).
         """
         return execution_mod.run_agent_and_collect_findings(
-            self.owner,
-            self.repo,
-            self.pr_number,
-            self.head_sha,
+            self.pr_ctx,
             provider,
             review_standards,
             runner,
@@ -256,10 +256,7 @@ class ReviewOrchestrator:
     ) -> list[runner_mod.FindingV1]:
         """Run the SequentialAgent batch workflow and preserve successful batches on rate limit."""
         return execution_mod._run_sequential_batch_review_mode(
-            self.owner,
-            self.repo,
-            self.pr_number,
-            self.head_sha,
+            self.pr_ctx,
             provider,
             review_standards,
             runner,
@@ -278,10 +275,7 @@ class ReviewOrchestrator:
     ):
         """Build the user message used to execute a prepared batch-review workflow."""
         return execution_mod.build_batch_review_content(
-            owner=self.owner,
-            repo=self.repo,
-            pr_number=self.pr_number,
-            head_sha=self.head_sha,
+            pr_ctx=self.pr_ctx,
             batch_count=batch_count,
             prompt_suffix=prompt_suffix,
         )
@@ -311,10 +305,7 @@ class ReviewOrchestrator:
     ) -> list[runner_mod.FindingV1]:
         """Keep successful batch responses and isolate the remaining batches one-by-one."""
         return execution_mod._recover_rate_limited_batches(
-            self.owner,
-            self.repo,
-            self.pr_number,
-            self.head_sha,
+            self.pr_ctx,
             provider,
             review_standards,
             batches,
@@ -381,12 +372,9 @@ class ReviewOrchestrator:
         """
         runner_mod._resolve_stale_comments_if_supported(
             provider,
-            self.owner,
-            self.repo,
-            self.pr_number,
+            self.pr_ctx,
             existing,
             to_post,
-            self.head_sha,
             self.dry_run,
         )
         if self.dry_run:
@@ -410,10 +398,7 @@ class ReviewOrchestrator:
                 )
             count = runner_mod._post_inline_comments(
                 provider,
-                self.owner,
-                self.repo,
-                self.pr_number,
-                self.head_sha,
+                self.pr_ctx,
                 incremental_base_sha,
                 to_post,
                 cfg,
@@ -429,12 +414,9 @@ class ReviewOrchestrator:
             include_marker = planned == 0 or count == planned
             runner_mod._post_omit_marker_pr_summary_comment(
                 provider,
-                self.owner,
-                self.repo,
-                self.pr_number,
+                self.pr_ctx,
                 cfg,
                 llm_cfg,
-                self.head_sha,
                 incremental_base_sha,
                 findings_planned=planned,
                 successful_inline_posts=count,
@@ -574,20 +556,6 @@ class ReviewOrchestrator:
         path_filtered = self._filter_findings_to_pr_paths(findings, paths)
         pipeline_results = FindingRefinementPipeline().run(path_filtered, full_diff)
         return self._filter_findings_to_visible_diff_lines(pipeline_results, full_diff)
-
-    def _build_pr_url(self, cfg) -> str:
-        base_url = cfg.url.rstrip("/")
-        if cfg.provider == "github":
-            return f"{base_url}/{self.owner}/{self.repo}/pull/{self.pr_number}"
-        if cfg.provider == "gitlab":
-            return f"{base_url}/{self.owner}/{self.repo}/-/merge_requests/{self.pr_number}"
-        if cfg.provider == "bitbucket":
-            return f"https://bitbucket.org/{self.owner}/{self.repo}/pull-requests/{self.pr_number}"
-        if cfg.provider == "bitbucket_server":
-            return (
-                f"{base_url}/projects/{self.owner}/repos/{self.repo}/pull-requests/{self.pr_number}"
-            )
-        return f"{base_url}/{self.owner}/{self.repo}/pulls/{self.pr_number}"
 
     def _load_commit_messages(self, provider, need_commits: bool) -> list[str]:
         raw = (
@@ -1088,7 +1056,7 @@ class ReviewOrchestrator:
         self, trace_id: str, start_time: float, run_handle, cfg, provider
     ) -> list[runner_mod.FindingV1]:
         """Recompute quality-gate counts from SCM state and submit review decision only."""
-        pr_url = self._build_pr_url(cfg)
+        pr_url = self.pr_ctx.pr_url(cfg)
         runner_mod.logger.info(
             "Review-decision-only run for %s/%s PR %s (provider=%s) URL: %s",
             self.owner,
@@ -1243,7 +1211,7 @@ class ReviewOrchestrator:
         app_cfg,
     ) -> list[runner_mod.FindingV1]:
         """Execute the full non-decision-only review path."""
-        pr_url = self._build_pr_url(cfg)
+        pr_url = self.pr_ctx.pr_url(cfg)
         runner_mod.logger.info(
             "Reviewing %s/%s PR %s (provider=%s) URL: %s",
             self.owner,
@@ -1296,7 +1264,7 @@ class ReviewOrchestrator:
             return empty_scope_result
         if not self.dry_run:
             runner_mod._maybe_post_started_review_comment(
-                provider, self.owner, self.repo, self.pr_number, pr_info_for_metadata, paths
+                provider, self.pr_ctx, pr_info_for_metadata, paths
             )
         _, review_standards = self._detect_languages_for_files(paths)
         context_window = runner_mod.get_context_window()

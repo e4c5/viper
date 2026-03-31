@@ -1265,6 +1265,7 @@ def test_fallback_preserves_line_type_for_bitbucket_server():
     The fix is to call post_review_comments([c]) which passes the full InlineComment.
     """
     from code_review.orchestration_deps import _post_comments_one_by_one
+    from code_review.models import PRContext
 
     provider = MagicMock()
     provider.post_review_comments = MagicMock()
@@ -1272,7 +1273,7 @@ def test_fallback_preserves_line_type_for_bitbucket_server():
     context_comment = InlineComment(path="foo.java", line=8, body="Issue", line_type="CONTEXT")
     added_comment = InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")
 
-    _post_comments_one_by_one(provider, "PROJ", "repo", 1, "sha1", [context_comment, added_comment])
+    _post_comments_one_by_one(provider, PRContext("PROJ", "repo", 1, "sha1"), [context_comment, added_comment])
 
     # Must use post_review_comments (not post_review_comment) so line_type is preserved
     assert provider.post_review_comments.call_count == 2
@@ -1295,13 +1296,14 @@ def test_fallback_no_pr_summary_when_inline_fails():
     This mirrors the current tool-based inline-posting behaviour.
     """
     from code_review.orchestration_deps import _post_comments_one_by_one
+    from code_review.models import PRContext
 
     provider = MagicMock()
     provider.post_review_comments.side_effect = RuntimeError("409 Conflict")
     provider.post_pr_summary_comment = MagicMock()
 
     comment = InlineComment(path="foo.java", line=8, body="Issue", line_type="CONTEXT")
-    count = _post_comments_one_by_one(provider, "PROJ", "repo", 1, "sha1", [comment])
+    count = _post_comments_one_by_one(provider, PRContext("PROJ", "repo", 1, "sha1"), [comment])
 
     # Nothing posted successfully
     assert count == 0

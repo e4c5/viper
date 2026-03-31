@@ -7,6 +7,7 @@ from google.genai import types
 
 from code_review import orchestration_deps as runner_mod
 from code_review.batching import ReviewBatch, build_review_batches
+from code_review.models import PRContext
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +45,7 @@ def run_agent_and_collect_response(
 
 
 def create_agent_and_runner(
-    owner: str,
-    repo: str,
-    pr_number: int,
-    head_sha: str,
+    pr_ctx: PRContext,
     provider,
     review_standards: str,
     batches: list[ReviewBatch],
@@ -64,10 +62,10 @@ def create_agent_and_runner(
         provider,
         review_standards,
         batches,
-        head_sha=head_sha,
+        head_sha=pr_ctx.head_sha,
         context_brief_attached=context_brief_attached,
     )
-    session_id = f"{owner}/{repo}/pr-{pr_number}/{runner_mod.uuid.uuid4().hex[:12]}"
+    session_id = f"{pr_ctx.owner}/{pr_ctx.repo}/pr-{pr_ctx.pr_number}/{runner_mod.uuid.uuid4().hex[:12]}"
     session_service = InMemorySessionService()
     runner = Runner(
         agent=agent,
@@ -80,10 +78,7 @@ def create_agent_and_runner(
 
 
 def run_agent_and_collect_findings(
-    owner: str,
-    repo: str,
-    pr_number: int,
-    head_sha: str,
+    pr_ctx: PRContext,
     provider,
     review_standards: str,
     runner,
@@ -97,10 +92,7 @@ def run_agent_and_collect_findings(
     if not batches:
         return []
     return _run_sequential_batch_review_mode(
-        owner,
-        repo,
-        pr_number,
-        head_sha,
+        pr_ctx,
         provider,
         review_standards,
         runner,
@@ -113,10 +105,7 @@ def run_agent_and_collect_findings(
 
 
 def _run_sequential_batch_review_mode(
-    owner: str,
-    repo: str,
-    pr_number: int,
-    head_sha: str,
+    pr_ctx: PRContext,
     provider,
     review_standards: str,
     runner,
@@ -129,10 +118,7 @@ def _run_sequential_batch_review_mode(
 ) -> list[runner_mod.FindingV1]:
     """Run the SequentialAgent batch workflow and preserve successful batches on rate limit."""
     content = build_batch_review_content(
-        owner=owner,
-        repo=repo,
-        pr_number=pr_number,
-        head_sha=head_sha,
+        pr_ctx=pr_ctx,
         batch_count=batch_count,
         prompt_suffix=prompt_suffix,
     )
@@ -148,10 +134,7 @@ def _run_sequential_batch_review_mode(
     except runner_mod.PartialResponseCollectionError as exc:
         if isinstance(exc.cause, runner_mod.RateLimitError):
             return _recover_rate_limited_batches(
-                owner,
-                repo,
-                pr_number,
-                head_sha,
+                pr_ctx,
                 provider,
                 review_standards,
                 batches,
@@ -171,18 +154,15 @@ def _run_sequential_batch_review_mode(
 
 def build_batch_review_content(
     *,
-    owner: str,
-    repo: str,
-    pr_number: int,
-    head_sha: str,
+    pr_ctx: PRContext,
     batch_count: int,
     prompt_suffix: str = "",
 ):
     """Build the user message used to execute a prepared batch-review workflow."""
     msg = (
         "Review the prepared PR batches sequentially. "
-        f"owner={owner}, repo={repo}, pr_number={pr_number}."
-        + (f" head_sha={head_sha}." if head_sha else "")
+        f"owner={pr_ctx.owner}, repo={pr_ctx.repo}, pr_number={pr_ctx.pr_number}."
+        + (f" head_sha={pr_ctx.head_sha}." if pr_ctx.head_sha else "")
         + f" Prepared batch count: {batch_count}."
     )
     if prompt_suffix:
@@ -216,10 +196,7 @@ def batch_index_from_author(author: str) -> int | None:
 
 
 def _recover_rate_limited_batches(
-    owner: str,
-    repo: str,
-    pr_number: int,
-    head_sha: str,
+    pr_ctx: PRContext,
     provider,
     review_standards: str,
     batches: list[ReviewBatch],
@@ -247,20 +224,14 @@ def _recover_rate_limited_batches(
         if batch_index in completed_batch_indexes:
             continue
         session_id, _, runner = create_agent_and_runner(
-            owner,
-            repo,
-            pr_number,
-            head_sha,
+            pr_ctx,
             provider,
             review_standards,
             [batch],
             context_brief_attached=context_brief_attached,
         )
         content = build_batch_review_content(
-            owner=owner,
-            repo=repo,
-            pr_number=pr_number,
-            head_sha=head_sha,
+            pr_ctx=pr_ctx,
             batch_count=1,
             prompt_suffix=prompt_suffix,
         )

@@ -1,5 +1,6 @@
 """Model factory and model metadata helpers."""
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -40,6 +41,50 @@ class ModelMetadata:
     source: str
     source_url: str
     verified_on: str
+
+
+@dataclass(frozen=True)
+class PRContext:
+    """Identifies a pull request uniquely. Value object — no I/O ever belongs here."""
+
+    owner: str
+    repo: str
+    pr_number: int
+    head_sha: str = ""
+
+    @property
+    def log_label(self) -> str:
+        """Short string for log messages, e.g. 'acme/api#42'."""
+        return f"{self.owner}/{self.repo}#{self.pr_number}"
+
+    def pr_url(self, cfg) -> str:
+        """Construct the web URL for this PR given an SCM config."""
+        base_url = cfg.url.rstrip("/")
+        match cfg.provider:
+            case "github":
+                return f"{base_url}/{self.owner}/{self.repo}/pull/{self.pr_number}"
+            case "gitlab":
+                return f"{base_url}/{self.owner}/{self.repo}/-/merge_requests/{self.pr_number}"
+            case "bitbucket":
+                return f"https://bitbucket.org/{self.owner}/{self.repo}/pull-requests/{self.pr_number}"
+            case "bitbucket_server":
+                return f"{base_url}/projects/{self.owner}/repos/{self.repo}/pull-requests/{self.pr_number}"
+            case _:
+                return f"{base_url}/{self.owner}/{self.repo}/pulls/{self.pr_number}"
+
+    def idempotency_key(self, scm_cfg, llm_cfg, base_sha: str = "") -> str:
+        """Stable run fingerprint. Same key means this exact PR/range/config was already reviewed."""
+        import code_review as _pkg
+
+        agent_version = getattr(_pkg, "__version__", "0.1.0")
+        config_hash = hashlib.sha256(
+            f"{scm_cfg.provider}:{scm_cfg.url}:{llm_cfg.provider}:{llm_cfg.model}".encode()
+        ).hexdigest()[:16]
+        return (
+            f"{scm_cfg.provider}/{self.owner}/{self.repo}/pr/{self.pr_number}"
+            f"/head/{(self.head_sha or '').strip()}/base/{(base_sha or '').strip()}"
+            f"/agent/{agent_version}/config/{config_hash}"
+        )
 
 
 def _model_metadata_resource_text() -> str:

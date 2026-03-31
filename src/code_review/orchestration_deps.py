@@ -55,6 +55,7 @@ from code_review.diff.position import get_diff_hunk_for_line
 from code_review.formatters.comment import finding_to_comment_body, infer_severity_from_comment_body
 from code_review.json_utils import iter_json_candidates
 from code_review.models import (
+    PRContext,
     get_context_window,  # noqa: F401
     get_max_output_tokens,  # noqa: F401
 )
@@ -309,9 +310,7 @@ def _generate_auto_pr_description(title: str, paths: list[str], max_files: int =
 
 def _maybe_post_started_review_comment(
     provider,
-    owner: str,
-    repo: str,
-    pr_number: int,
+    pr_ctx: PRContext,
     pr_info,
     paths: list[str],
 ) -> None:
@@ -333,16 +332,16 @@ def _maybe_post_started_review_comment(
     # 1) Update the PR description when the SCM API allows it.
     description_updated = False
     try:
-        provider.update_pr_description(owner, repo, pr_number, generated)
+        provider.update_pr_description(pr_ctx.owner, pr_ctx.repo, pr_ctx.pr_number, generated)
         description_updated = True
     except NotImplementedError:
         pass
     except Exception as e:  # pragma: no cover - defensive
         logger.warning(
             "update_pr_description failed owner=%s repo=%s pr_number=%s: %s",
-            owner,
-            repo,
-            pr_number,
+            pr_ctx.owner,
+            pr_ctx.repo,
+            pr_ctx.pr_number,
             e,
         )
     # 2) Post general notes about the PR and the review.
@@ -359,29 +358,26 @@ def _maybe_post_started_review_comment(
             f"{generated}"
         )
     try:
-        provider.post_pr_summary_comment(owner, repo, pr_number, notes)
+        provider.post_pr_summary_comment(pr_ctx.owner, pr_ctx.repo, pr_ctx.pr_number, notes)
     except Exception as e:  # pragma: no cover - defensive; providers should implement this
         logger.warning(
             "post_pr_summary_comment (started review) failed owner=%s repo=%s pr_number=%s: %s",
-            owner,
-            repo,
-            pr_number,
+            pr_ctx.owner,
+            pr_ctx.repo,
+            pr_ctx.pr_number,
             e,
         )
 
 
 def _resolve_stale_comments_if_supported(
     provider,
-    owner: str,
-    repo: str,
-    pr_number: int,
+    pr_ctx: PRContext,
     existing: list,
     to_post: list[tuple[FindingV1, str]],
-    head_sha: str,
     dry_run: bool,
 ) -> None:
     """If provider supports it, resolve comments whose fingerprint is no longer in to_post."""
-    if not (provider.capabilities().resolvable_comments and head_sha and not dry_run):
+    if not (provider.capabilities().resolvable_comments and pr_ctx.head_sha and not dry_run):
         return
     new_fps = {fp for _, fp in to_post if fp}
     for c in existing:
@@ -391,13 +387,13 @@ def _resolve_stale_comments_if_supported(
         if not fp_old or fp_old in new_fps:
             continue
         try:
-            provider.resolve_comment(owner, repo, c.id)
+            provider.resolve_comment(pr_ctx.owner, pr_ctx.repo, c.id)
         except Exception as e:
             logger.warning(
                 "resolve_comment failed owner=%s repo=%s pr_number=%s comment_id=%s: %s",
-                owner,
-                repo,
-                pr_number,
+                pr_ctx.owner,
+                pr_ctx.repo,
+                pr_ctx.pr_number,
                 getattr(c, "id", ""),
                 e,
             )
@@ -405,10 +401,7 @@ def _resolve_stale_comments_if_supported(
 
 def _post_inline_comments(
     provider,
-    owner: str,
-    repo: str,
-    pr_number: int,
-    head_sha: str,
+    pr_ctx: PRContext,
     incremental_base_sha: str,
     to_post: list[tuple[FindingV1, str]],
     cfg,
@@ -417,9 +410,7 @@ def _post_inline_comments(
 ) -> int:
     """Build inline comments and post each one individually. Returns successful post count."""
     caps = provider.capabilities()
-    run_id = _build_idempotency_key(
-        cfg, llm_cfg, owner, repo, pr_number, head_sha, incremental_base_sha
-    )
+    run_id = pr_ctx.idempotency_key(cfg, llm_cfg, incremental_base_sha)
     added_set = _added_lines_in_diff(full_diff) if full_diff else set()
     comments: list[InlineComment] = []
     for f, fp in to_post:
@@ -446,15 +437,12 @@ def _post_inline_comments(
                 line_type=line_type,
             )
         )
-    return _post_comments_one_by_one(provider, owner, repo, pr_number, head_sha, comments)
+    return _post_comments_one_by_one(provider, pr_ctx, comments)
 
 
 def _post_comments_one_by_one(
     provider,
-    owner: str,
-    repo: str,
-    pr_number: int,
-    head_sha: str,
+    pr_ctx: PRContext,
     comments: list[InlineComment],
 ) -> int:
     """Post each comment individually; skip (warn) on failure. Returns successful count.
@@ -472,19 +460,19 @@ def _post_comments_one_by_one(
             # these fields, causing Bitbucket Server to default to lineType="ADDED" for
             # every line — which results in HTTP 409 for context (unchanged) lines.
             provider.post_review_comments(
-                owner,
-                repo,
-                pr_number,
+                pr_ctx.owner,
+                pr_ctx.repo,
+                pr_ctx.pr_number,
                 [c],
-                head_sha=head_sha,
+                head_sha=pr_ctx.head_sha,
             )
             count += 1
         except Exception as e:
             logger.warning(
                 "post_review_comment failed owner=%s repo=%s pr_number=%s path=%s line=%s: %s",
-                owner,
-                repo,
-                pr_number,
+                pr_ctx.owner,
+                pr_ctx.repo,
+                pr_ctx.pr_number,
                 c.path,
                 c.line,
                 e,
@@ -567,12 +555,9 @@ def _optional_quality_gate_summary_suffix(
 
 def _post_omit_marker_pr_summary_comment(
     provider,
-    owner: str,
-    repo: str,
-    pr_number: int,
+    pr_ctx: PRContext,
     cfg,
     llm_cfg,
-    head_sha: str,
     incremental_base_sha: str = "",
     *,
     findings_planned: int,
@@ -598,9 +583,7 @@ def _post_omit_marker_pr_summary_comment(
         gate_outcome=gate_outcome,
     )
     if include_run_marker:
-        run_id = _build_idempotency_key(
-            cfg, llm_cfg, owner, repo, pr_number, head_sha, incremental_base_sha
-        )
+        run_id = pr_ctx.idempotency_key(cfg, llm_cfg, incremental_base_sha)
         use_linkref = getattr(caps, "embed_agent_marker_as_commonmark_linkref", None) is True
         body = format_comment_body_with_marker(
             visible,
@@ -613,13 +596,13 @@ def _post_omit_marker_pr_summary_comment(
     else:
         body = visible
     try:
-        provider.post_pr_summary_comment(owner, repo, pr_number, body)
+        provider.post_pr_summary_comment(pr_ctx.owner, pr_ctx.repo, pr_ctx.pr_number, body)
     except Exception as e:
         logger.warning(
             "_post_omit_marker_pr_summary_comment failed owner=%s repo=%s pr_number=%s: %s",
-            owner,
-            repo,
-            pr_number,
+            pr_ctx.owner,
+            pr_ctx.repo,
+            pr_ctx.pr_number,
             e,
         )
 

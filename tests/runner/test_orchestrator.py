@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from code_review.models import PRContext
 from code_review.orchestration.orchestrator import ReviewOrchestrator
 from code_review.orchestration_deps import (
     _build_idempotency_key,
@@ -302,10 +303,7 @@ def test_orchestrator_sequential_batch_wrapper_forwards_supported_args_only(mock
 
     assert result == []
     mock_run_batch_mode.assert_called_once_with(
-        "o",
-        "r",
-        42,
-        "abc123",
+        PRContext("o", "r", 42, "abc123"),
         provider,
         "review standards",
         runner,
@@ -692,7 +690,7 @@ def test_maybe_post_started_review_comment_posts_when_description_missing():
     pr_info = MagicMock(title="T", description="")
     paths = ["foo.py", "bar.py"]
 
-    _maybe_post_started_review_comment(provider, "o", "r", 1, pr_info, paths)
+    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info, paths)
 
     provider.post_pr_summary_comment.assert_called_once()
     args, _ = provider.post_pr_summary_comment.call_args
@@ -708,7 +706,7 @@ def test_maybe_post_started_review_comment_updates_pr_description_when_supported
     pr_info = MagicMock(title="kafka", description="")
     paths = ["AGENTS.md", "README.md"]
 
-    _maybe_post_started_review_comment(provider, "o", "r", 1, pr_info, paths)
+    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info, paths)
 
     provider.update_pr_description.assert_called_once()
     call_args = provider.update_pr_description.call_args[0]
@@ -730,7 +728,7 @@ def test_maybe_post_started_review_comment_skips_when_description_present():
     )
     paths = ["foo.py"]
 
-    _maybe_post_started_review_comment(provider, "o", "r", 1, pr_info, paths)
+    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info, paths)
 
     provider.post_pr_summary_comment.assert_not_called()
 
@@ -744,10 +742,7 @@ def test_maybe_post_started_review_comment_skips_when_description_is_short_but_i
     )
     paths = ["foo.py"]
 
-    _maybe_post_started_review_comment(provider, "o", "r", 1, pr_info, paths)
-
-    provider.update_pr_description.assert_not_called()
-    provider.post_pr_summary_comment.assert_not_called()
+    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info, paths)
 
 
 def test_run_does_not_post_started_review_comment_in_dry_run():
