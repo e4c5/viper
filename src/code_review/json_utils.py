@@ -43,11 +43,13 @@ def _extract_first_jsonish_fence(text: str) -> str | None:
         while cursor < len(text) and text[cursor] in " \t\r\n":
             cursor += 1
 
-        if language in ("", "json"):
-            end = text.find("```", cursor)
-            if end != -1:
-                return text[cursor:end].strip()
+        end = text.find("```", cursor)
+        if end == -1:
+            return None
 
-        start = text.find("```", start + 3)
+        if language in ("", "json"):
+            return text[cursor:end].strip()
+
+        start = text.find("```", end + 3)
 
     return None

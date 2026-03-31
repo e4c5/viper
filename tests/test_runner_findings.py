@@ -1,8 +1,15 @@
 """Tests for runner findings parsing and ignore set."""
 
+import pytest
+
 from code_review.comments.manager import _build_ignore_set
 from code_review.formatters.comment import finding_to_comment_body
-from code_review.orchestration_deps import _findings_from_response, _parse_findings_json
+from code_review.orchestration.execution import findings_from_batch_responses
+from code_review.orchestration_deps import (
+    _build_commit_messages_block,
+    _findings_from_response,
+    _parse_findings_json,
+)
 from code_review.schemas.findings import FindingV1
 
 
@@ -56,11 +63,46 @@ def test_findings_from_response_invalid_skipped():
     assert len(findings) == 0
 
 
-def test_findings_from_response_malformed_json_returns_empty():
-    """Malformed JSON from agent should not raise; runner parses it as no findings."""
+def test_findings_from_response_malformed_json_raises_value_error():
+    """Malformed JSON from agent must raise so the orchestrator does not treat it as clean."""
     text = '{"path": "missing array wrapper"'  # invalid JSON
-    findings = _findings_from_response(text)
-    assert findings == []
+    with pytest.raises(ValueError, match="Failed to parse structured findings JSON"):
+        _findings_from_response(text)
+
+
+def test_findings_from_batch_responses_propagates_parse_failure():
+    """Batch parsing must surface malformed responses instead of returning zero findings."""
+    responses = [("batch_review_0", '{"path": "missing array wrapper"')]
+    with pytest.raises(ValueError, match="Failed to parse structured findings JSON"):
+        findings_from_batch_responses(responses)
+
+
+def test_build_commit_messages_block_respects_remaining_char_budget():
+    """A nearly-full prompt budget must not be exceeded by the next commit-message bullet."""
+    header = "### PR commit messages (subject / first line)\n"
+    max_chars = 60
+    already_used_chars = max_chars - len(header) - 7
+
+    block = _build_commit_messages_block(
+        commit_messages=["A very long commit subject that should be truncated aggressively"],
+        max_chars=max_chars,
+        already_used_chars=already_used_chars,
+    )
+
+    assert block == header + "- A ve"
+    assert already_used_chars + len(block) <= max_chars
+
+
+def test_build_commit_messages_block_keeps_full_subject_when_unbounded():
+    """Without a max_chars budget, reserve bullet/newline space before capping the subject."""
+    subject = "x" * 600
+    block = _build_commit_messages_block(
+        commit_messages=[subject],
+        max_chars=None,
+        already_used_chars=0,
+    )
+
+    assert block.endswith("- " + ("x" * 497))
 
 
 def test_finding_to_comment_body():

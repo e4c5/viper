@@ -95,6 +95,8 @@ class CommentManager:
         self,
         findings: list[FindingV1],
         fingerprint_fn,
+        *,
+        use_collapsible_prompt: bool = True,
     ) -> list[tuple[FindingV1, str]]:
         """Attach fingerprints and filter duplicates/resolved findings.
 
@@ -106,7 +108,10 @@ class CommentManager:
 
         to_post: list[tuple[FindingV1, str]] = []
         for f in findings:
-            body = finding_to_comment_body(f)
+            body = finding_to_comment_body(
+                f,
+                use_collapsible_prompt=use_collapsible_prompt,
+            )
             body_hash = hashlib.sha256(body.encode()).hexdigest()
             fp = fingerprint_fn(f)
             if _should_skip_finding_for_dedup(

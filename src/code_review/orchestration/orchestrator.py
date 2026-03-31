@@ -1357,7 +1357,11 @@ class ReviewOrchestrator:
             prompt_suffix=prompt_suffix,
         )
         all_findings = self._filter_findings_by_diff_scope(all_findings, paths, full_diff)
-        to_post = comment_mgr.filter_duplicates(all_findings, self._make_fingerprint_fn(provider))
+        to_post = comment_mgr.filter_duplicates(
+            all_findings,
+            self._make_fingerprint_fn(provider),
+            use_collapsible_prompt=provider.capabilities().markup_supports_collapsible,
+        )
         runner_mod.logger.info(
             "Agent returned %d finding(s), %d to post after filtering",
             len(all_findings),

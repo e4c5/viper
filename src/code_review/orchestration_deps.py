@@ -171,7 +171,8 @@ def _build_commit_messages_block(
         if remaining_for_line is not None and remaining_for_line <= 6:
             break
         subject = (msg.splitlines()[0] if msg else "").strip()
-        subject_cap = min(500, max(40, (remaining_for_line or 500) - 4))
+        available = (remaining_for_line or 500) - 3
+        subject_cap = min(500, max(0, available))
         line = f"- {subject[:subject_cap]}"
         lines.append(line)
         local_used += len(line) + 1
@@ -782,12 +783,25 @@ def _fingerprint_for_finding(
 
 def _parse_findings_json(text: str) -> object:
     """Parse a structured findings object from raw text or a fenced JSON block."""
+    last_error: json.JSONDecodeError | None = None
     for raw in iter_json_candidates(text):
         try:
             return json.loads(raw)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            last_error = exc
             continue
-    return {}
+    snippet = text.strip()
+    if len(snippet) > 300:
+        snippet = snippet[:300] + "..."
+    if last_error is not None:
+        raise ValueError(
+            "Failed to parse structured findings JSON from agent response. "
+            f"Last JSON error: {last_error}. Response snippet: {snippet!r}"
+        ) from last_error
+    raise ValueError(
+        "Failed to parse structured findings JSON from agent response: "
+        f"no JSON candidate found. Response snippet: {snippet!r}"
+    )
 
 
 def _findings_from_response(response_text: str) -> list[FindingV1]:

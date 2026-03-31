@@ -403,6 +403,34 @@ def test_comment_manager_filter_duplicates_skips_resolved_body_hash():
     assert to_post == []
 
 
+def test_comment_manager_filter_duplicates_uses_posting_body_format_for_dedup():
+    """Dedup hashing must honor non-collapsible prompt formatting used during posting."""
+    from code_review.comments.manager import CommentManager
+    from code_review.formatters.comment import finding_to_comment_body
+    from code_review.schemas.findings import FindingV1
+
+    mgr = CommentManager()
+    finding = FindingV1(
+        path="foo.py",
+        line=1,
+        severity="low",
+        code="X",
+        message="msg",
+        agent_fix_prompt="Verify src://foo.py and apply the fix.",
+    )
+    posted_body = finding_to_comment_body(finding, use_collapsible_prompt=False)
+    posted_body_hash = hashlib.sha256(posted_body.encode()).hexdigest()
+    mgr.ignore_set.add((finding.path, posted_body_hash))
+
+    to_post = mgr.filter_duplicates(
+        [finding],
+        lambda _finding: "",
+        use_collapsible_prompt=False,
+    )
+
+    assert to_post == []
+
+
 def test_compute_idempotency_and_maybe_short_circuit_returns_none_when_no_head_sha():
     """When head_sha is empty, _compute_idempotency_and_maybe_short_circuit returns None."""
     o = ReviewOrchestrator("o", "r", 1, head_sha="")
