@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 from code_review.agent.agent import create_review_agent
 from code_review.batching import ReviewBatch
 from code_review.diff.parser import annotate_diff_with_line_numbers
 from code_review.providers.base import ProviderInterface
+
+logger = logging.getLogger(__name__)
 
 
 def _batch_instruction_suffix(batch: ReviewBatch, head_sha: str) -> str:
@@ -26,6 +30,10 @@ def _batch_instruction_suffix(batch: ReviewBatch, head_sha: str) -> str:
             f"```diff\n{annotated}\n```"
         )
 
+    # IMPORTANT: Do NOT use bare {…} in this string — ADK's instruction template engine
+    # matches the regex {+[^{}]*}+ and tries to substitute every such pattern from session
+    # state.  Using bare braces (e.g. <L{n}> or {"findings": []}) causes a KeyError before
+    # the LLM is ever called.  Use prose descriptions instead.
     return (
         "For this run, ignore any generic wording about reviewing a complete PR diff "
         "in the user message. "
@@ -33,11 +41,12 @@ def _batch_instruction_suffix(batch: ReviewBatch, head_sha: str) -> str:
         + head_sha_clause
         + f" This batch covers these file paths: {', '.join(batch.paths)}."
         + " Only report findings for code that appears in the batch segments below."
-        + " Use the <L{n}> annotation value as the line field in each finding."
+        + " Use the ``<Ln>`` annotation value as the line field in each finding"
+        " (e.g. ``<L42>`` means line 42)."
         + " If a file appears in multiple segments, treat them as partial views "
         "of the same file and still use the true file path."
-        + ' Output a JSON object of the form {"findings": [...]} for this batch only.'
-        + ' If there are no issues in this batch, output exactly {"findings": []}.'
+        + " Output a JSON findings object for this batch only (same schema as the main instruction)."
+        + " If there are no issues in this batch, output a findings object with an empty array."
         + "\n\nPrepared batch segments:\n"
         + "\n\n".join(segment_blocks)
     )
@@ -66,6 +75,20 @@ def create_sequential_batch_review_agent(
         agent.name = f"batch_review_{index}"
         agent.instruction = agent.instruction.rstrip() + "\n\n" + _batch_instruction_suffix(
             batch, head_sha
+        )
+        # Prevent AutoFlow from adding the transfer_to_agent tool: each batch
+        # sub-agent must return findings directly and must NOT transfer control
+        # to peer or parent agents. Without these flags, ADK uses AutoFlow which
+        # injects the transfer_to_agent function into the LLM call; the model
+        # may invoke it instead of returning a JSON findings response, causing
+        # base_llm_flow.run_async's while-True loop to spin indefinitely.
+        agent.disallow_transfer_to_parent = True
+        agent.disallow_transfer_to_peers = True
+        logger.debug(
+            "[batch] Registering sub-agent %s paths=%s segments=%d",
+            agent.name,
+            list(batch.paths),
+            len(batch.segments),
         )
         sub_agents.append(agent)
 

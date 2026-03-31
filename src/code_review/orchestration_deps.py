@@ -911,19 +911,75 @@ async def _collect_final_response_texts_async(
     """Run agent once and collect text-bearing final responses per participating agent."""
     asyncio.get_running_loop().set_exception_handler(_suppress_ssl_teardown_errors)
 
+    logger.debug(
+        "[batch] _collect_final_response_texts_async starting session=%s",
+        session_id,
+    )
     responses: list[tuple[str, str]] = []
+    event_count = 0
     try:
         async for event in runner.run_async(
             user_id=USER_ID,
             session_id=session_id,
             new_message=content,
         ):
-            if event.is_final_response() and event.content and event.content.parts:
+            event_count += 1
+            author = getattr(event, "author", "<unknown>")
+            is_final = event.is_final_response()
+            has_content = bool(event.content and event.content.parts)
+            # Determine a compact type label for what kind of parts this event carries.
+            part_types: list[str] = []
+            if event.content and event.content.parts:
+                for p in event.content.parts:
+                    if getattr(p, "text", None):
+                        part_types.append("text")
+                    elif getattr(p, "function_call", None):
+                        fc = p.function_call
+                        part_types.append(f"fn_call:{getattr(fc, 'name', '?')}")
+                    elif getattr(p, "function_response", None):
+                        fr = p.function_response
+                        part_types.append(f"fn_resp:{getattr(fr, 'name', '?')}")
+                    else:
+                        part_types.append("other")
+            logger.debug(
+                "[batch] event #%d author=%r is_final=%s has_content=%s parts=%s",
+                event_count,
+                author,
+                is_final,
+                has_content,
+                part_types or "[]",
+            )
+            if is_final and has_content:
                 texts = [part.text for part in event.content.parts if getattr(part, "text", None)]
                 if texts:
-                    responses.append((getattr(event, "author", ""), "\n".join(texts)))
+                    logger.debug(
+                        "[batch] collected final response from author=%r text_len=%d",
+                        author,
+                        sum(len(t) for t in texts),
+                    )
+                    responses.append((author, "\n".join(texts)))
     except Exception as exc:
-        raise PartialResponseCollectionError(responses=responses, cause=exc) from exc
+        logger.debug(
+            "[batch] _collect_final_response_texts_async raised after %d event(s): %s",
+            event_count,
+            exc,
+        )
+        # Wrap in PartialResponseCollectionError only when the exception is one the
+        # caller knows how to recover from (RateLimitError), or when it occurred
+        # mid-stream (after at least one event), meaning a partial result may have
+        # been collected.  Pre-LLM setup errors (e.g. ADK template KeyError, auth
+        # failures) that fire before any events are re-raised directly so callers see
+        # the true exception type rather than a misleading "partial run" wrapper.
+        if isinstance(exc, RateLimitError) or event_count > 0:
+            raise PartialResponseCollectionError(responses=responses, cause=exc) from exc
+        raise
+    logger.debug(
+        "[batch] _collect_final_response_texts_async done: %d event(s) received, "
+        "%d final response(s) collected session=%s",
+        event_count,
+        len(responses),
+        session_id,
+    )
     return responses
 
 

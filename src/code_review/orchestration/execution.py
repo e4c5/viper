@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from google.genai import types
 
 from code_review import orchestration_deps as runner_mod
 from code_review.batching import ReviewBatch, build_review_batches
+
+logger = logging.getLogger(__name__)
 
 
 async def _collect_response_async(
@@ -133,6 +136,11 @@ def _run_sequential_batch_review_mode(
         batch_count=batch_count,
         prompt_suffix=prompt_suffix,
     )
+    logger.info(
+        "[batch] Invoking SequentialAgent runner: session=%s batch_count=%d",
+        session_id,
+        batch_count,
+    )
     try:
         responses = runner_mod._run_agent_and_collect_responses(
             runner, session_id, content
@@ -153,6 +161,11 @@ def _run_sequential_batch_review_mode(
                 error=exc.cause,
             )
         raise exc.cause from exc
+    logger.info(
+        "[batch] SequentialAgent runner returned: session=%s responses=%d",
+        session_id,
+        len(responses),
+    )
     return findings_from_batch_responses(responses)
 
 

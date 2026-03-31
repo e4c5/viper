@@ -147,8 +147,8 @@ def test_get_model_metadata_refreshed_gemini_limits():
     metadata = get_model_metadata("gemini", "gemini-3.1")
 
     assert metadata is not None
-    assert metadata.context_window_tokens == 1_000_000
-    assert metadata.max_output_tokens_default == 64_000
+    assert metadata.context_window_tokens == 1_048_576
+    assert metadata.max_output_tokens_default == 65_536
 
 
 @patch("code_review.models.get_llm_config")
