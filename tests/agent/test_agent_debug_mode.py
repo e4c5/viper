@@ -375,7 +375,7 @@ def test_before_model_callback_adds_runtime_guardrails(
 ) -> None:
     llm_request = _FakeLlmRequest(tools_dict)
 
-    _run(_before_model_callback(SimpleNamespace(agent_name="code_review_agent"), llm_request))
+    _before_model_callback(SimpleNamespace(agent_name="code_review_agent"), llm_request)
 
     assert len(llm_request.added_instructions) == 1
     rendered = "\n".join(llm_request.added_instructions[0])

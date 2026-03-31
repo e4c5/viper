@@ -84,7 +84,6 @@ def run_agent_and_collect_findings(
     provider,
     review_standards: str,
     runner,
-    session_service,
     session_id: str,
     batches: list[ReviewBatch],
     *,
@@ -102,7 +101,6 @@ def run_agent_and_collect_findings(
         provider,
         review_standards,
         runner,
-        session_service,
         session_id,
         batches=batches,
         batch_count=len(batches),
@@ -119,7 +117,6 @@ def _run_sequential_batch_review_mode(
     provider,
     review_standards: str,
     runner,
-    session_service,
     session_id: str,
     *,
     batches: list[ReviewBatch],
@@ -236,7 +233,7 @@ def _recover_rate_limited_batches(
     for batch_index, batch in enumerate(batches):
         if batch_index in completed_batch_indexes:
             continue
-        session_id, session_service, runner = create_agent_and_runner(
+        session_id, _, runner = create_agent_and_runner(
             owner,
             repo,
             pr_number,

@@ -301,7 +301,6 @@ def test_run_agent_and_collect_findings_parses_sequential_workflow_responses(
         MagicMock(),
         "review standards",
         runner,
-        MagicMock(),
         "session-1",
         [MagicMock(), MagicMock()],
     )
