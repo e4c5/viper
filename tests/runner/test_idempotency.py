@@ -15,10 +15,65 @@ from code_review.runner import run_review
 from tests.conftest import sample_unified_diff
 
 
+def _build_existing_run_comment(run_id: str) -> str:
+    return f"<!-- code-review-agent:fingerprint=x;version=0.1.0;run={run_id} -->\n\nOld."
+
+
+def _configure_idempotency_mocks(
+    mock_get_scm_config,
+    mock_get_llm_config,
+    mock_get_context_window=None,
+) -> str:
+    mock_get_scm_config.return_value = MagicMock(
+        provider="gitea", url="https://x.com", token="x"
+    )
+    mock_get_llm_config.return_value = MagicMock(
+        provider="gemini", model="gemini-2.5-flash"
+    )
+    if mock_get_context_window is not None:
+        mock_get_context_window.return_value = 1_000_000
+    return _build_idempotency_key(
+        mock_get_scm_config.return_value,
+        mock_get_llm_config.return_value,
+        "o",
+        "r",
+        1,
+        "abc123",
+    )
+
+
+def _mock_provider_with_existing_comment(
+    body: str,
+    *,
+    path: str = "foo.py",
+    capabilities: ProviderCapabilities | None = None,
+) -> MagicMock:
+    provider = MagicMock()
+    if capabilities is not None:
+        provider.capabilities.return_value = capabilities
+    provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
+    provider.get_pr_diff.return_value = sample_unified_diff("foo.py")
+    provider.get_file_content.return_value = "x"
+    provider.get_existing_review_comments.return_value = [
+        MagicMock(
+            path=path,
+            body=body,
+            model_dump=lambda: {"path": path, "body": body},
+        )
+    ]
+    return provider
+
+
+def _mock_provider_with_existing_run_comment(run_id: str) -> MagicMock:
+    return _mock_provider_with_existing_comment(_build_existing_run_comment(run_id))
+
+
 @patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_build_idempotency_key_format(mock_scm, mock_llm):
-    mock_scm.return_value = MagicMock(provider="gitea", url="https://gitea.example.com", token="x")
+    mock_scm.return_value = MagicMock(
+        provider="gitea", url="https://gitea.example.com", token="x"
+    )
     mock_llm.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
     key = _build_idempotency_key(
         mock_scm.return_value, mock_llm.return_value, "o", "r", 1, "abc123"
@@ -32,7 +87,9 @@ def test_build_idempotency_key_format(mock_scm, mock_llm):
 @patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_build_idempotency_key_includes_incremental_base(mock_scm, mock_llm):
-    mock_scm.return_value = MagicMock(provider="gitea", url="https://gitea.example.com", token="x")
+    mock_scm.return_value = MagicMock(
+        provider="gitea", url="https://gitea.example.com", token="x"
+    )
     mock_llm.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
 
     key = _build_idempotency_key(
@@ -62,32 +119,11 @@ def test_run_review_skips_when_idempotency_key_seen(
     When existing comment contains run=<current_key>, run_review returns []
     without running the agent.
     """
-    from code_review.providers.base import FileInfo
-
-    mock_get_scm_config.return_value = MagicMock(provider="gitea", url="https://x.com", token="x")
-    mock_get_llm_config.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
-    provider = MagicMock()
-    provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    provider.get_pr_diff.return_value = sample_unified_diff("foo.py")
-    provider.get_file_content.return_value = "x"
-    run_id = _build_idempotency_key(
-        mock_get_scm_config.return_value,
-        mock_get_llm_config.return_value,
-        "o",
-        "r",
-        1,
-        "abc123",
+    run_id = _configure_idempotency_mocks(
+        mock_get_scm_config, mock_get_llm_config, mock_get_context_window
     )
-    body_with_run = f"<!-- code-review-agent:fingerprint=x;version=0.1.0;run={run_id} -->\n\nOld."
-    provider.get_existing_review_comments.return_value = [
-        MagicMock(
-            path="foo.py",
-            body=body_with_run,
-            model_dump=lambda: {"path": "foo.py", "body": body_with_run},
-        )
-    ]
+    provider = _mock_provider_with_existing_run_comment(run_id)
     mock_get_provider.return_value = provider
-    mock_get_context_window.return_value = 1_000_000
 
     to_post = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
 
@@ -103,25 +139,14 @@ def test_run_review_skips_when_omit_marker_pr_summary_contains_run_id(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
     """Bitbucket-style providers store run id on PR summary comments (marker at end)."""
-    mock_get_scm_config.return_value = MagicMock(provider="gitea", url="https://x.com", token="x")
-    mock_get_llm_config.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
-    provider = MagicMock()
-    provider.capabilities.return_value = ProviderCapabilities(
+    run_id = _configure_idempotency_mocks(
+        mock_get_scm_config, mock_get_llm_config, mock_get_context_window
+    )
+    capabilities = ProviderCapabilities(
         resolvable_comments=False,
         supports_suggestions=False,
         omit_fingerprint_marker_in_body=True,
         embed_agent_marker_as_commonmark_linkref=True,
-    )
-    provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    provider.get_pr_diff.return_value = sample_unified_diff("foo.py")
-    provider.get_file_content.return_value = "x"
-    run_id = _build_idempotency_key(
-        mock_get_scm_config.return_value,
-        mock_get_llm_config.return_value,
-        "o",
-        "r",
-        1,
-        "abc123",
     )
     body = format_comment_body_with_marker(
         "**Viper** finished.\n\nSummary.",
@@ -131,15 +156,12 @@ def test_run_review_skips_when_omit_marker_pr_summary_contains_run_id(
         marker_at_end=True,
         use_commonmark_linkref=True,
     )
-    provider.get_existing_review_comments.return_value = [
-        MagicMock(
-            path="",
-            body=body,
-            model_dump=lambda: {"path": "", "body": body},
-        )
-    ]
+    provider = _mock_provider_with_existing_comment(
+        body,
+        path="",
+        capabilities=capabilities,
+    )
     mock_get_provider.return_value = provider
-    mock_get_context_window.return_value = 1_000_000
 
     to_post = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
 
@@ -161,32 +183,13 @@ def test_run_review_disable_idempotency_env_bypasses_short_circuit(
     mock_get_llm_config,
     mock_get_context_window,
 ):
-    mock_get_scm_config.return_value = MagicMock(provider="gitea", url="https://x.com", token="x")
-    mock_get_llm_config.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
+    run_id = _configure_idempotency_mocks(
+        mock_get_scm_config, mock_get_llm_config, mock_get_context_window
+    )
     mock_create_agent_and_runner.return_value = ("session-1", MagicMock(), MagicMock())
     mock_run_agent_and_collect_findings.return_value = []
-    provider = MagicMock()
-    provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    provider.get_pr_diff.return_value = sample_unified_diff("foo.py")
-    provider.get_file_content.return_value = "x"
-    run_id = _build_idempotency_key(
-        mock_get_scm_config.return_value,
-        mock_get_llm_config.return_value,
-        "o",
-        "r",
-        1,
-        "abc123",
-    )
-    body_with_run = f"<!-- code-review-agent:fingerprint=x;version=0.1.0;run={run_id} -->\n\nOld."
-    provider.get_existing_review_comments.return_value = [
-        MagicMock(
-            path="foo.py",
-            body=body_with_run,
-            model_dump=lambda: {"path": "foo.py", "body": body_with_run},
-        )
-    ]
+    provider = _mock_provider_with_existing_run_comment(run_id)
     mock_get_provider.return_value = provider
-    mock_get_context_window.return_value = 1_000_000
 
     with patch.dict(os.environ, {"CODE_REVIEW_DISABLE_IDEMPOTENCY": "true"}, clear=False):
         reset_config_cache()

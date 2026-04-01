@@ -21,15 +21,23 @@ def _final_event(author: str, text: str) -> MagicMock:
     return event
 
 
+def _run_async_with(*events: MagicMock, exc: Exception | None = None):
+    async def _run_async(**_kwargs):
+        for event in events:
+            yield event
+        if exc is not None:
+            raise exc
+
+    return _run_async
+
+
 @pytest.mark.asyncio
 async def test_collect_final_response_texts_async_wraps_partial_rate_limit_error():
     runner = SimpleNamespace(agent=MagicMock())
-
-    async def _run_async(**_kwargs):
-        yield _final_event("batch_review_0", '{"findings":[]}')
-        raise RateLimitError("HTTP 429 Too Many Requests")
-
-    runner.run_async = _run_async
+    runner.run_async = _run_async_with(
+        _final_event("batch_review_0", '{"findings":[]}'),
+        exc=RateLimitError("HTTP 429 Too Many Requests"),
+    )
 
     with pytest.raises(PartialResponseCollectionError) as exc_info:
         await _collect_final_response_texts_async(runner, "session-1", MagicMock())
@@ -39,14 +47,9 @@ async def test_collect_final_response_texts_async_wraps_partial_rate_limit_error
 
 
 @pytest.mark.asyncio
-async def test_collect_final_response_texts_async_propagates_pre_event_runtime_error():
+async def test_collect_final_response_texts_async_does_not_wrap_runtime_error_before_any_events():
     runner = SimpleNamespace(agent=MagicMock())
-
-    async def _run_async(**_kwargs):
-        raise RuntimeError("unexpected LLM error")
-        yield  # pragma: no cover
-
-    runner.run_async = _run_async
+    runner.run_async = _run_async_with(exc=RuntimeError("unexpected LLM error"))
 
     with pytest.raises(RuntimeError, match="unexpected LLM error"):
         await _collect_final_response_texts_async(runner, "session-1", MagicMock())
@@ -55,12 +58,10 @@ async def test_collect_final_response_texts_async_propagates_pre_event_runtime_e
 @pytest.mark.asyncio
 async def test_collect_final_response_texts_async_wraps_post_event_runtime_error():
     runner = SimpleNamespace(agent=MagicMock())
-
-    async def _run_async(**_kwargs):
-        yield _final_event("batch_review_0", '{"findings":[]}')
-        raise RuntimeError("unexpected LLM error")
-
-    runner.run_async = _run_async
+    runner.run_async = _run_async_with(
+        _final_event("batch_review_0", '{"findings":[]}'),
+        exc=RuntimeError("unexpected LLM error"),
+    )
 
     with pytest.raises(PartialResponseCollectionError) as exc_info:
         await _collect_final_response_texts_async(runner, "session-1", MagicMock())
