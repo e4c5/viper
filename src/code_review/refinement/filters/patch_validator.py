@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from code_review.diff.analyzer import DiffAnalyzer
 from code_review.diff.line_index import build_diff_line_index
+from code_review.diff.utils import normalize_path
 from code_review.refinement.filters.contradiction import _patch_tokens
 from code_review.schemas.findings import FindingV1
 
@@ -38,7 +38,7 @@ def validate_suggested_patches(
             result.append(f)
             continue
 
-        norm_path = DiffAnalyzer.normalize_path(f.path)
+        norm_path = normalize_path(f.path)
         actual_content = line_index.get((norm_path, f.line))
         if actual_content is None:
             result.append(f)

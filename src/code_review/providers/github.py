@@ -12,6 +12,7 @@ from code_review.formatters.comment import (
     max_inferred_severity,
     render_suggestion_block,
 )
+from code_review.diff.utils import normalize_path
 from code_review.providers.base import (
     BotAttributionIdentity,
     BotBlockingState,
@@ -27,7 +28,6 @@ from code_review.providers.base import (
     _log_pr_info_warning,
     commit_messages_from_commit_list,
     file_infos_from_pull_file_list,
-    normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
 from code_review.providers.bot_blocking_common import (
@@ -515,8 +515,11 @@ class GitHubProvider(ProviderInterface):
 
     @staticmethod
     def _github_pr_file_matches_path(item: dict[str, Any], wanted_path: str) -> bool:
-        filename = normalize_diff_anchor_path(str(item.get("filename") or ""))
-        previous = normalize_diff_anchor_path(str(item.get("previous_filename") or ""))
+        filename = normalize_path(str(item.get("filename") or ""), strip_git_prefixes=False)
+        previous = normalize_path(
+            str(item.get("previous_filename") or ""),
+            strip_git_prefixes=False,
+        )
         return wanted_path in {filename, previous}
 
     @staticmethod
@@ -547,7 +550,7 @@ class GitHubProvider(ProviderInterface):
 
     def get_pr_diff_for_file(self, owner: str, repo: str, pr_number: int, path: str) -> str:
         """Return a single-file diff using GitHub's per-file ``patch`` payload when available."""
-        wanted_path = normalize_diff_anchor_path(path)
+        wanted_path = normalize_path(path, strip_git_prefixes=False)
         if not wanted_path:
             return ""
         api_path = f"/repos/{owner}/{repo}/pulls/{pr_number}/files"

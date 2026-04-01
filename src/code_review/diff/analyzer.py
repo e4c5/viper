@@ -1,27 +1,7 @@
-"""Diff analysis utilities: path normalization."""
+"""Diff analysis utilities."""
 
 from __future__ import annotations
 
+from code_review.diff.utils import normalize_path
 
-class DiffAnalyzer:
-    @staticmethod
-    def normalize_path(file_path: str) -> str:
-        """Normalize path like Bitbucket provider for diff line matching.
-
-        Strips ``dst://``, ``src://``, ``a/``, and ``b/`` prefixes.
-        """
-        p = (file_path or "").strip()
-        for prefix in ("dst://", "src://"):
-            if p.lower().startswith(prefix):
-                p = p[len(prefix) :].lstrip("/")
-                break
-        p = p.lstrip("/")
-        for prefix in ("a/", "b/"):
-            if p.startswith(prefix):
-                p = p[len(prefix) :]
-                break
-        return p.lstrip("/") or file_path or ""
-
-
-def normalize_path_for_anchor(file_path: str) -> str:
-    return DiffAnalyzer.normalize_path(file_path)
+__all__ = ["normalize_path"]

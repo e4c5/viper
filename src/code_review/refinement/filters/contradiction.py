@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 import re
 
-from code_review.diff.analyzer import DiffAnalyzer
 from code_review.diff.line_index import build_diff_line_index, build_per_file_line_index
+from code_review.diff.utils import normalize_path
 from code_review.schemas.findings import FindingV1
 
 logger = logging.getLogger(__name__)
@@ -218,7 +218,7 @@ def filter_obviously_contradicted_findings(
     kept: list[FindingV1] = []
 
     for f in findings:
-        norm_path = DiffAnalyzer.normalize_path(f.path)
+        norm_path = normalize_path(f.path)
         actual_content = line_index.get((norm_path, f.line))
         lines_map = file_lines.get(norm_path, {})
         if actual_content is None:

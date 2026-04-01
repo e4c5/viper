@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from code_review.diff.analyzer import DiffAnalyzer
 from code_review.diff.parser import parse_unified_diff
+from code_review.diff.utils import normalize_path
 
 
 def build_diff_line_index(diff_text: str) -> dict[tuple[str, int], str]:
@@ -15,7 +15,7 @@ def build_diff_line_index(diff_text: str) -> dict[tuple[str, int], str]:
     """
     index: dict[tuple[str, int], str] = {}
     for hunk in parse_unified_diff(diff_text):
-        norm_path = DiffAnalyzer.normalize_path(hunk.path)
+        norm_path = normalize_path(hunk.path)
         for content, _old_ln, new_ln in hunk.lines:
             if new_ln is not None:
                 index[(norm_path, new_ln)] = content.strip()
@@ -31,7 +31,7 @@ def build_per_file_line_index(
     """
     file_lines: dict[str, dict[int, str]] = {}
     for hunk in parse_unified_diff(diff_text):
-        norm_path = DiffAnalyzer.normalize_path(hunk.path)
+        norm_path = normalize_path(hunk.path)
         bucket = file_lines.setdefault(norm_path, {})
         for content, _old_ln, new_ln in hunk.lines:
             if new_ln is not None:

@@ -9,6 +9,8 @@ import logging
 from dataclasses import dataclass
 
 from code_review.diff.fingerprint import format_comment_body_with_marker, parse_marker_from_comment_body
+from code_review.diff.parser import iter_new_lines
+from code_review.diff.utils import normalize_path as _normalize_path_for_anchor
 from code_review.formatters.comment import finding_to_comment_body
 from code_review.models import PRContext
 from code_review.providers.base import InlineComment
@@ -17,20 +19,12 @@ from code_review.schemas.findings import FindingV1
 
 logger = logging.getLogger(__name__)
 
-# Imported here so orchestrator.py can reference it from this module.
-from code_review.diff.analyzer import DiffAnalyzer as _DiffAnalyzer  # noqa: E402
-from code_review.diff.parser import iter_new_lines  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Module-level helpers (no shared state — not methods)
 # ---------------------------------------------------------------------------
 
 AGENT_VERSION: str  # set at bottom to avoid circular import bootstrap issues
-
-
-def _normalize_path_for_anchor(file_path: str) -> str:
-    return _DiffAnalyzer.normalize_path(file_path)
 
 
 def _added_lines_in_diff(diff_text: str) -> set[tuple[str, int]]:

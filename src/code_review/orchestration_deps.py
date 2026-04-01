@@ -52,6 +52,7 @@ from code_review.diff.parser import (
 )
 from code_review.diff.position import get_diff_hunk_for_line
 from code_review.diff.utils import estimate_tokens as _estimate_tokens  # noqa: F401
+from code_review.diff.utils import normalize_path as _normalize_path_for_anchor  # noqa: F401
 from code_review.formatters.comment import finding_to_comment_body, infer_severity_from_comment_body
 from code_review.json_utils import iter_json_candidates
 from code_review.models import (
@@ -127,7 +128,6 @@ from code_review.orchestration.posting import (  # noqa: E402
     CommentPoster,
     _added_lines_in_diff,
     _generate_auto_pr_description,
-    _normalize_path_for_anchor,
     _omit_marker_pr_summary_visible_text,
     _optional_quality_gate_summary_suffix,
 )

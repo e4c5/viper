@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from code_review.diff.utils import normalize_path
 from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.base import (
     BotAttributionIdentity,
@@ -18,7 +19,6 @@ from code_review.providers.base import (
     UnresolvedReviewItem,
     _log_pr_info_warning,
     default_unresolved_review_items_from_comments,
-    normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
 from code_review.providers.http_shortcuts import (
@@ -203,7 +203,7 @@ class BitbucketProvider(ProviderInterface):
 
     def _anchor_path_for_diff(self, file_path: str) -> str:
         """Normalize path so it matches the PR diff (enables inline comments on the diff view)."""
-        return normalize_diff_anchor_path(file_path)
+        return normalize_path(file_path, strip_git_prefixes=False)
 
     def post_review_comments(
         self,

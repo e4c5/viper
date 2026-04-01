@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from code_review.diff.analyzer import DiffAnalyzer
 from code_review.diff.line_index import build_per_file_line_index
+from code_review.diff.utils import normalize_path
 from code_review.schemas.findings import FindingV1
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ def _maybe_relocate_finding(
     if not anchor_text:
         return f
 
-    norm_path = DiffAnalyzer.normalize_path(f.path)
+    norm_path = normalize_path(f.path)
     lines_map = file_lines.get(norm_path)
     if not lines_map:
         return f

@@ -7,6 +7,7 @@ from urllib.parse import quote
 import httpx
 
 from code_review.diff.parser import parse_unified_diff
+from code_review.diff.utils import normalize_path
 from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.base import (
     BotAttributionIdentity,
@@ -24,7 +25,6 @@ from code_review.providers.base import (
     commit_messages_from_commit_list,
     default_unresolved_review_items_from_comments,
     head_sha_from_pr_api_dict,
-    normalize_diff_anchor_path,
 )
 from code_review.providers.safety import truncate_repo_content
 from code_review.reply_dismissal_state import is_reply_dismissal_accepted_reply
@@ -514,7 +514,7 @@ class BitbucketServerProvider(ProviderInterface):
 
     def _anchor_path_for_diff(self, file_path: str) -> str:
         """Normalize path so it matches the PR diff (enables inline comments on the diff view)."""
-        return normalize_diff_anchor_path(file_path)
+        return normalize_path(file_path, strip_git_prefixes=False)
 
     def _get_pr_diff_refs(
         self, owner: str, repo: str, pr_number: int
