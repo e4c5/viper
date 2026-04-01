@@ -3,34 +3,25 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from typing import Any
 
 from code_review import observability
 from code_review import orchestration_deps as runner_mod
-from code_review.batching import ReviewBatch, build_review_batch_budget
-from code_review.comments.manager import CommentManager
 from code_review.models import PRContext
 from code_review.orchestration.context_enricher import ContextEnricher
-from code_review.orchestration import execution as execution_mod
 from code_review.orchestration.filter import ReviewFilter
 from code_review.orchestration.idempotency import _idempotency_key_seen_in_comments
-from code_review.orchestration.posting import CommentPoster
 from code_review.orchestration.reply_dismissal import ReplyDismissalHandler
 from code_review.orchestration.review_decision import ReviewDecisionHandler
 from code_review.orchestration.runner_utils import _log_run_complete, _run_reply_dismissal_llm
-from code_review.providers.base import RateLimitError
-from code_review.quality.gate import QualityGate
-from code_review.refinement.pipeline import FindingRefinementPipeline
+from code_review.orchestration.standard_review import StandardReviewHandler
 from code_review.schemas.findings import FindingV1
 from code_review.schemas.review_decision_event import ReviewDecisionEventContext
 
 logger = logging.getLogger(__name__)
 
-_CONTEXT_TAG = "<context>"
-
 
 class ReviewOrchestrator:
-    """Orchestrates a single code review run (findings-only mode)."""
+    """Thin coordinator for a single code review run."""
 
     def __init__(
         self,
@@ -72,35 +63,8 @@ class ReviewOrchestrator:
     def head_sha(self) -> str:
         return self.pr_ctx.head_sha
 
-    @property
-    def _context_enricher(self) -> ContextEnricher:
-        return ContextEnricher(self.pr_ctx)
-
-    @property
-    def _reply_dismissal_handler(self) -> ReplyDismissalHandler:
-        return ReplyDismissalHandler(
-            self.pr_ctx,
-            dry_run=self.dry_run,
-            event_context=self._event_context,
-            run_reply_dismissal_llm=_run_reply_dismissal_llm,
-        )
-
-    @property
-    def _review_decision_handler(self) -> ReviewDecisionHandler:
-        return ReviewDecisionHandler(
-            self.pr_ctx,
-            dry_run=self.dry_run,
-            event_context=self._event_context,
-            reply_dismissal_handler=self._reply_dismissal_handler,
-            result_builder=self._record_observability_and_build_result,
-            skip_if_needed=self._skip_if_needed,
-        )
-
     def _load_config_and_provider(self):
-        """Load SCM/LLM config and create the provider instance.
-
-        Returns (cfg, llm_cfg, provider).
-        """
+        """Load SCM/LLM config and create the provider instance."""
         cfg = runner_mod.get_scm_config()
         overrides: dict[str, bool | int] = {}
         if self._review_decision_enabled_override is not None:
@@ -135,17 +99,15 @@ class ReviewOrchestrator:
         start_time: float,
         run_handle,
     ) -> list[FindingV1] | None:
-        """Delegate to ReviewFilter; emit observability and return [] if skip, else None."""
+        """Emit observability and return [] if skip config matches, else None."""
         if not cfg.skip_label and not cfg.skip_title_pattern:
             return None
         pr_info = provider.get_pr_info(self.owner, self.repo, self.pr_number)
         skip_reason = ReviewFilter().should_skip(pr_info, cfg)
         if skip_reason is None:
             return None
-        _duration_ms = (time.perf_counter() - start_time) * 1000
-        _log_run_complete(
-            trace_id, self.owner, self.repo, self.pr_number, 0, 0, 0, _duration_ms
-        )
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        _log_run_complete(trace_id, self.owner, self.repo, self.pr_number, 0, 0, 0, duration_ms)
         observability.finish_run(
             run_handle,
             self.owner,
@@ -154,7 +116,7 @@ class ReviewOrchestrator:
             0,
             0,
             0,
-            _duration_ms / 1000.0,
+            duration_ms / 1000.0,
         )
         return []
 
@@ -168,10 +130,7 @@ class ReviewOrchestrator:
         run_handle,
         incremental_base_sha: str = "",
     ) -> list[FindingV1] | None:
-        """
-        If we already ran for this PR/range/config (run id in comment marker),
-        emit observability and return []. Otherwise return None (caller continues).
-        """
+        """Short-circuit when this PR/range/config was already reviewed."""
         if not self.head_sha:
             return None
         incremental_base_sha = incremental_base_sha or self._incremental_base_sha(
@@ -180,10 +139,8 @@ class ReviewOrchestrator:
         run_id = self.pr_ctx.idempotency_key(cfg, llm_cfg, incremental_base_sha)
         if not _idempotency_key_seen_in_comments(existing_dicts, run_id):
             return None
-        _duration_ms = (time.perf_counter() - start_time) * 1000
-        _log_run_complete(
-            trace_id, self.owner, self.repo, self.pr_number, 0, 0, 0, _duration_ms
-        )
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        _log_run_complete(trace_id, self.owner, self.repo, self.pr_number, 0, 0, 0, duration_ms)
         observability.finish_run(
             run_handle,
             self.owner,
@@ -192,7 +149,7 @@ class ReviewOrchestrator:
             0,
             0,
             0,
-            _duration_ms / 1000.0,
+            duration_ms / 1000.0,
         )
         return []
 
@@ -207,266 +164,6 @@ class ReviewOrchestrator:
             return ""
         return base_sha
 
-    def _fetch_review_files_and_diffs(
-        self, provider, cfg
-    ) -> tuple[list[object], list[str], str, str]:
-        """Fetch the file list and diff for the active review scope.
-
-        Returns ``(files, paths, full_diff, incremental_base_sha)`` where
-        ``incremental_base_sha`` is non-empty only when the review was scoped to
-        ``SCM_BASE_SHA..SCM_HEAD_SHA``.
-        """
-        base_sha = self._incremental_base_sha(cfg, self.head_sha)
-        if base_sha:
-            files = provider.get_incremental_pr_files(
-                self.owner, self.repo, self.pr_number, base_sha, self.head_sha
-            )
-            paths = [f.path for f in files]
-            full_diff = provider.get_incremental_pr_diff(
-                self.owner, self.repo, self.pr_number, base_sha, self.head_sha
-            )
-            return (files, paths, full_diff, base_sha)
-        files = provider.get_pr_files(self.owner, self.repo, self.pr_number)
-        paths = [f.path for f in files]
-        full_diff = provider.get_pr_diff(self.owner, self.repo, self.pr_number)
-        return (files, paths, full_diff, "")
-
-    def _detect_languages_for_files(self, paths: list[str]):
-        """Run language detection on paths and return (detected, review_standards)."""
-        detected = runner_mod.detect_from_paths(paths)
-        review_standards = runner_mod.get_review_standards(detected.language, detected.framework)
-        return (detected, review_standards)
-
-    def _create_agent_and_runner(
-        self,
-        provider,
-        review_standards: str,
-        batches: list[ReviewBatch],
-        *,
-        context_brief_attached: bool = False,
-    ):
-        """
-        Build the batch-review SequentialAgent, session service, and ADK Runner.
-        Returns (session_id, session_service, runner).
-        """
-        return execution_mod.create_agent_and_runner(
-            self.pr_ctx,
-            provider,
-            review_standards,
-            batches,
-            context_brief_attached=context_brief_attached,
-        )
-
-    def _run_agent_and_collect_findings(
-        self,
-        provider,
-        review_standards: str,
-        runner,
-        session_id: str,
-        batches: list[ReviewBatch],
-        *,
-        context_brief_attached: bool = False,
-        prompt_suffix: str = "",
-    ) -> list[FindingV1]:
-        """
-        Run the batch-review agent and parse responses into FindingV1 list.
-        Returns all_findings (unfiltered).
-        """
-        return execution_mod.run_agent_and_collect_findings(
-            self.pr_ctx,
-            provider,
-            review_standards,
-            runner,
-            session_id,
-            batches,
-            context_brief_attached=context_brief_attached,
-            prompt_suffix=prompt_suffix,
-        )
-
-    def _run_sequential_batch_review_mode(
-        self,
-        provider,
-        review_standards: str,
-        runner,
-        session_id: str,
-        *,
-        batches: list[ReviewBatch],
-        batch_count: int,
-        context_brief_attached: bool = False,
-        prompt_suffix: str = "",
-    ) -> list[FindingV1]:
-        """Run the SequentialAgent batch workflow and preserve successful batches on rate limit."""
-        return execution_mod._run_sequential_batch_review_mode(
-            self.pr_ctx,
-            provider,
-            review_standards,
-            runner,
-            session_id,
-            batches=batches,
-            batch_count=batch_count,
-            context_brief_attached=context_brief_attached,
-            prompt_suffix=prompt_suffix,
-        )
-
-    def _build_batch_review_content(
-        self,
-        *,
-        batch_count: int,
-        prompt_suffix: str = "",
-    ):
-        """Build the user message used to execute a prepared batch-review workflow."""
-        return execution_mod.build_batch_review_content(
-            pr_ctx=self.pr_ctx,
-            batch_count=batch_count,
-            prompt_suffix=prompt_suffix,
-        )
-
-    @staticmethod
-    def _findings_from_batch_responses(
-        responses: list[tuple[str, str]],
-    ) -> list[FindingV1]:
-        """Parse structured findings from a list of batch response texts."""
-        return execution_mod.findings_from_batch_responses(responses)
-
-    @staticmethod
-    def _batch_index_from_author(author: str) -> int | None:
-        """Extract the original batch index from a workflow response author name."""
-        return execution_mod.batch_index_from_author(author)
-
-    def _recover_rate_limited_batches(
-        self,
-        provider,
-        review_standards: str,
-        batches: list[ReviewBatch],
-        *,
-        completed_responses: list[tuple[str, str]],
-        context_brief_attached: bool,
-        prompt_suffix: str,
-        error: RateLimitError,
-    ) -> list[FindingV1]:
-        """Keep successful batch responses and isolate the remaining batches one-by-one."""
-        return execution_mod._recover_rate_limited_batches(
-            self.pr_ctx,
-            provider,
-            review_standards,
-            batches,
-            completed_responses=completed_responses,
-            context_brief_attached=context_brief_attached,
-            prompt_suffix=prompt_suffix,
-            error=error,
-        )
-
-    @staticmethod
-    def _build_review_batches(
-        files: list[object], paths: list[str], full_diff: str, diff_budget: int
-    ) -> list[ReviewBatch]:
-        """Slice the scoped diff by file and pack the resulting segments into ordered batches."""
-        return execution_mod.build_review_batches_for_scope(files, paths, full_diff, diff_budget)
-
-    @staticmethod
-    def _log_review_batch_plan(
-        batches: list[ReviewBatch], paths: list[str], incremental_base_sha: str
-    ) -> None:
-        """Emit a concise log line describing the prepared review batches."""
-        execution_mod.log_review_batch_plan(batches, paths, incremental_base_sha)
-
-    def _make_fingerprint_fn(self, provider):
-        """Return a fingerprint function (FindingV1 -> str) backed by live file content."""
-        _cache: dict[str, list[str]] = {}
-
-        def _fingerprint_fn(finding: FindingV1) -> str:
-            if not self.head_sha:
-                return ""
-            if finding.path not in _cache:
-                file_lines_by_path = runner_mod._get_file_lines_by_path(
-                    provider,
-                    self.owner,
-                    self.repo,
-                    self.head_sha,
-                    [finding.path],
-                )
-                _cache[finding.path] = file_lines_by_path.get(finding.path, [])
-            file_lines_by_path = {finding.path: _cache[finding.path]}
-            return (
-                runner_mod._fingerprint_for_finding(finding, file_lines_by_path)
-                if file_lines_by_path
-                else ""
-            )
-
-        return _fingerprint_fn
-
-    def _post_findings_and_summary(
-        self,
-        provider,
-        incremental_base_sha: str,
-        to_post: list[tuple[FindingV1, str]],
-        cfg,
-        llm_cfg,
-        existing: list,
-        full_diff: str = "",
-    ) -> int:
-        """
-        Auto-resolve stale comments (if supported), then post inline comments.
-        Returns successful_post_count.
-        full_diff: used to set line_type (ADDED vs CONTEXT) so Bitbucket
-        Server anchors comments correctly.
-        """
-        poster = CommentPoster(provider, self.pr_ctx)
-        poster.resolve_stale(existing, to_post, self.dry_run)
-        if self.dry_run:
-            return 0
-        gate_outcome = QualityGate(provider, self.owner, self.repo, self.pr_number, cfg).evaluate(
-            to_post
-        )
-        if gate_outcome is not None:
-            runner_mod._log_quality_gate_review_outcome("Full-review", gate_outcome)
-        else:
-            logger.warning(
-                "Full-review: skipping PR-level quality gate summary/decision because "
-                "unresolved review-item lookup failed."
-            )
-        count = 0
-        if to_post:
-            if not self.head_sha:
-                raise ValueError(
-                    "head_sha is required when posting comments (dry_run=False). "
-                    "Provide head_sha or use --dry-run to skip posting."
-                )
-            count = poster.post_inline(
-                incremental_base_sha,
-                to_post,
-                cfg,
-                llm_cfg,
-                full_diff=full_diff,
-            )
-        if (
-            gate_outcome is not None
-            and self.head_sha
-            and provider.capabilities().omit_fingerprint_marker_in_body
-        ):
-            planned = len(to_post)
-            include_marker = planned == 0 or count == planned
-            poster.post_omit_marker_summary(
-                cfg,
-                llm_cfg,
-                incremental_base_sha,
-                findings_planned=planned,
-                successful_inline_posts=count,
-                gate_outcome=gate_outcome,
-                include_run_marker=include_marker,
-            )
-        runner_mod._maybe_submit_review_decision(
-            provider,
-            self.owner,
-            self.repo,
-            self.pr_number,
-            self.head_sha,
-            self.dry_run,
-            cfg,
-            gate_outcome=gate_outcome,
-        )
-        return count
-
     def _record_observability_and_build_result(
         self,
         trace_id: str,
@@ -478,10 +175,8 @@ class ReviewOrchestrator:
         to_post: list[tuple[FindingV1, str]],
         context_brief_attached: bool = False,
     ) -> list[FindingV1]:
-        """
-        Emit run_complete log and observability.finish_run, then return the list of findings posted.
-        """
-        _duration_ms = (time.perf_counter() - start_time) * 1000
+        """Emit run_complete log + observability.finish_run, then return posted findings."""
+        duration_ms = (time.perf_counter() - start_time) * 1000
         _log_run_complete(
             trace_id,
             self.owner,
@@ -490,7 +185,7 @@ class ReviewOrchestrator:
             files_count=len(paths),
             findings_count=len(all_findings),
             posts_count=successful_post_count,
-            duration_ms=_duration_ms,
+            duration_ms=duration_ms,
         )
         observability.finish_run(
             run_handle,
@@ -500,486 +195,61 @@ class ReviewOrchestrator:
             files_count=len(paths),
             findings_count=len(all_findings),
             posts_count=successful_post_count,
-            duration_seconds=_duration_ms / 1000.0,
+            duration_seconds=duration_ms / 1000.0,
             context_brief_attached=context_brief_attached,
         )
         return [f for f, _ in to_post]
 
-    @staticmethod
-    def _print_findings_summary(
-        print_findings: bool, to_post: list[tuple[FindingV1, str]]
-    ) -> None:
-        if not print_findings:
-            return
-        if to_post:
-            print("\n" + "=" * 60)
-            print(f"Code Review Findings ({len(to_post)} total)")
-            print("=" * 60)
-            for f, _ in to_post:
-                line_info = (
-                    f"{f.line}"
-                    if not f.end_line or f.end_line == f.line
-                    else f"{f.line}-{f.end_line}"
-                )
-                print(f"[{f.severity.upper()}] {f.path}:{line_info}")
-                print(f"Message: {f.get_body()}")
-                if f.suggested_patch:
-                    print("-" * 40)
-                    print("Suggested Patch:")
-                    print(f.suggested_patch)
-                print("=" * 60)
-            print()
-        else:
-            print("No findings to post.")
-
-    @staticmethod
-    def _log_post_counts(dry_run: bool, planned_count: int, successful_post_count: int) -> None:
-        if dry_run:
-            logger.info("Dry run: would post %d comment(s)", planned_count)
-        else:
-            logger.info("Posted %d comment(s)", successful_post_count)
-
-    @staticmethod
-    def _filter_findings_to_pr_paths(
-        findings: list[FindingV1], paths: list[str]
-    ) -> list[FindingV1]:
-        if not paths:
-            return findings
-        allowed_normalized = {runner_mod._normalize_path_for_anchor(p) for p in paths}
-        filtered_findings: list[FindingV1] = []
-        for finding in findings:
-            norm_path = runner_mod._normalize_path_for_anchor(finding.path or "")
-            if norm_path in allowed_normalized:
-                filtered_findings.append(finding)
-            elif logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "Dropping finding for path not in diff: %s (normalized=%s, allowed=%s)",
-                    finding.path,
-                    norm_path,
-                    sorted(allowed_normalized),
-                )
-        return filtered_findings
-
-    @staticmethod
-    def _filter_findings_to_visible_diff_lines(
-        findings: list[FindingV1], full_diff: str
-    ) -> list[FindingV1]:
-        if not full_diff:
-            return findings
-        visible_lines = runner_mod._diff_visible_new_lines(full_diff)
-        if not visible_lines:
-            return findings
-        line_filtered: list[FindingV1] = []
-        for finding in findings:
-            norm_path = runner_mod._normalize_path_for_anchor(finding.path or "")
-            if (norm_path, finding.line) in visible_lines:
-                line_filtered.append(finding)
-            else:
-                logger.debug(
-                    "Dropping finding for line not visible in diff: %s:%d",
-                    finding.path,
-                    finding.line,
-                )
-        return line_filtered
-
-    def _filter_findings_by_diff_scope(
-        self, findings: list[FindingV1], paths: list[str], full_diff: str
-    ) -> list[FindingV1]:
-        path_filtered = self._filter_findings_to_pr_paths(findings, paths)
-        pipeline_results = FindingRefinementPipeline().run(path_filtered, full_diff)
-        return self._filter_findings_to_visible_diff_lines(pipeline_results, full_diff)
-
-    def _load_commit_messages(self, provider, need_commits: bool) -> list[str]:
-        return self._context_enricher.load_commit_messages(provider, need_commits)
-
-    def _build_prompt_suffix(
-        self,
-        provider,
-        cfg,
-        ctx_cfg,
-        app_cfg,
-        pr_info_for_metadata,
-        full_diff: str,
-        remaining_tokens: int,
-    ) -> tuple[list[object], str | None, str]:
-        try:
-            return self._context_enricher.build_prompt_suffix(
-                provider,
-                cfg,
-                ctx_cfg,
-                app_cfg,
-                pr_info_for_metadata,
-                full_diff,
-                remaining_tokens,
-            )
-        except runner_mod.ContextAwareFatalError:
-            logger.exception("Context-aware fetch or distillation failed")
-            raise
-
-    def _decision_only_try_skip_when_bot_not_blocking(
-        self,
-        provider,
-        app_cfg,
-        trace_id: str,
-        start_time: float,
-        run_handle,
-    ) -> list[FindingV1] | None:
-        return self._review_decision_handler.try_skip_when_bot_not_blocking(
-            provider,
-            app_cfg,
-            trace_id,
-            start_time,
-            run_handle,
+    def _build_handlers(self) -> tuple[ReviewDecisionHandler, StandardReviewHandler]:
+        context_enricher = ContextEnricher(self.pr_ctx)
+        reply_dismissal_handler = ReplyDismissalHandler(
+            self.pr_ctx,
+            dry_run=self.dry_run,
+            event_context=self._event_context,
+            run_reply_dismissal_llm=_run_reply_dismissal_llm,
         )
-
-    def _decision_only_try_skip_when_event_actor_is_bot(
-        self,
-        provider,
-        trace_id: str,
-        start_time: float,
-        run_handle,
-    ) -> list[FindingV1] | None:
-        return self._review_decision_handler.try_skip_when_event_actor_is_bot(
-            provider,
-            trace_id,
-            start_time,
-            run_handle,
+        review_decision_handler = ReviewDecisionHandler(
+            self.pr_ctx,
+            dry_run=self.dry_run,
+            event_context=self._event_context,
+            reply_dismissal_handler=reply_dismissal_handler,
+            result_builder=self._record_observability_and_build_result,
+            skip_if_needed=self._skip_if_needed,
         )
-
-    def _validate_context_sources_or_raise(
-        self,
-        ctx_cfg,
-        cfg,
-        run_handle,
-        start_time: float,
-    ) -> None:
-        """Validate context-aware sources when enabled and finish observability on fatal config."""
-        try:
-            self._context_enricher.validate_context_sources_or_raise(ctx_cfg, cfg)
-        except runner_mod.ContextAwareFatalError as e:
-            logger.error("Context-aware review configuration error: %s", e)
-            observability.finish_run(
-                run_handle,
-                self.owner,
-                self.repo,
-                self.pr_number,
-                files_count=0,
-                findings_count=0,
-                posts_count=0,
-                duration_seconds=time.perf_counter() - start_time,
-            )
-            raise
-
-    @staticmethod
-    def _log_review_scope_fetch(incremental_base_sha: str, head_sha: str, paths: list[str]) -> None:
-        """Emit a concise log line describing the fetched review scope."""
-        if incremental_base_sha:
-            logger.info(
-                "Fetched incremental diff base=%s head=%s, %d file(s) to review",
-                incremental_base_sha[:12],
-                (head_sha or "")[:12],
-                len(paths),
-            )
-            return
-        logger.info("Fetched diff, %d file(s) to review", len(paths))
-
-    def _decision_only_maybe_post_disagreed_thread_reply(
-        self,
-        provider,
-        caps_rd,
-        comment_id: str,
-        verdict,
-    ) -> None:
-        self._reply_dismissal_handler.maybe_post_disagreed_thread_reply(
-            provider, caps_rd, comment_id, verdict
+        standard_review_handler = StandardReviewHandler(
+            self.pr_ctx,
+            dry_run=self.dry_run,
+            print_findings=self.print_findings,
+            context_enricher=context_enricher,
+            review_decision_handler=review_decision_handler,
+            result_builder=self._record_observability_and_build_result,
         )
-
-    def _decision_only_maybe_post_agreed_thread_reply(
-        self,
-        provider,
-        caps_rd,
-        comment_id: str,
-    ) -> bool:
-        return self._reply_dismissal_handler.maybe_post_agreed_thread_reply(
-            provider, caps_rd, comment_id
-        )
-
-    def _decision_only_maybe_resolve_agreed_thread(
-        self,
-        provider,
-        caps_rd,
-        comment_id: str,
-        dctx,
-    ) -> bool:
-        return self._reply_dismissal_handler.maybe_resolve_agreed_thread(
-            provider, caps_rd, comment_id, dctx
-        )
-
-    def _reply_dismissal_comment_id_or_none(self, app_cfg) -> str | None:
-        return self._reply_dismissal_handler.comment_id_or_none(app_cfg)
-
-    def _reply_dismissal_precheck(
-        self, provider, comment_id: str
-    ) -> tuple[object, object] | None:
-        return self._reply_dismissal_handler.precheck(provider, comment_id)
-
-    @staticmethod
-    def _reply_dismissal_parse_verdict(raw_verdict: str):
-        return ReplyDismissalHandler.parse_verdict(raw_verdict)
-
-    def _reply_dismissal_diff_context(
-        self,
-        provider,
-        dctx,
-    ) -> str:
-        return self._reply_dismissal_handler.diff_context(provider, dctx)
-
-    def _reply_dismissal_run_llm_and_parse(self, user_msg: str):
-        return self._reply_dismissal_handler.run_llm_and_parse(user_msg)
-
-    def _reply_dismissal_excluded_gate_ids_from_verdict(
-        self,
-        provider,
-        comment_id: str,
-        dctx,
-        verdict,
-    ) -> frozenset[str]:
-        return self._reply_dismissal_handler.excluded_gate_ids_from_verdict(
-            provider, comment_id, dctx, verdict
-        )
-
-    def _decision_only_reply_dismissal_excluded_gate_ids(
-        self,
-        provider,
-        app_cfg,
-        trace_id: str,
-    ) -> frozenset[str]:
-        return self._reply_dismissal_handler.excluded_gate_ids(provider, app_cfg, trace_id)
-
-    def _run_review_decision_only(
-        self, trace_id: str, start_time: float, run_handle, cfg, provider
-    ) -> list[FindingV1]:
-        return self._review_decision_handler.run_review_decision_only(
-            trace_id,
-            start_time,
-            run_handle,
-            cfg,
-            provider,
-        )
-
-    def _resolve_empty_scope_submission_head_sha(
-        self,
-        provider,
-        head_sha: str,
-        pr_info_for_metadata: Any,
-    ) -> str:
-        return self._review_decision_handler.resolve_empty_scope_submission_head_sha(
-            provider,
-            head_sha,
-            pr_info_for_metadata,
-        )
-
-    def _maybe_finish_empty_scope_review(
-        self,
-        provider,
-        cfg,
-        head_sha: str,
-        trace_id: str,
-        start_time: float,
-        run_handle,
-        paths: list[str],
-        pr_info_for_metadata: Any,
-    ) -> list[FindingV1] | None:
-        return self._review_decision_handler.maybe_finish_empty_scope_review(
-            provider,
-            cfg,
-            head_sha,
-            trace_id,
-            start_time,
-            run_handle,
-            paths,
-            pr_info_for_metadata,
-        )
-
-    def _log_context_aware_prompt_inputs(
-        self, refs: list[Any], context_brief: str
-    ) -> None:
-        """Log context-aware prompt supplements only when present."""
-        if refs:
-            logger.info(
-                "context_aware: extracted %d reference(s) from PR text", len(refs)
-            )
-        if context_brief:
-            logger.info("context_aware: distilled context attached to review prompt")
-
-    def _run_standard_review(
-        self,
-        trace_id: str,
-        start_time: float,
-        run_handle,
-        cfg,
-        llm_cfg,
-        provider,
-        app_cfg,
-    ) -> list[FindingV1]:
-        """Execute the full non-decision-only review path."""
-        pr_url = self.pr_ctx.pr_url(cfg)
-        logger.info(
-            "Reviewing %s/%s PR %s (provider=%s) URL: %s",
-            self.owner,
-            self.repo,
-            self.pr_number,
-            cfg.provider,
-            pr_url,
-        )
-        print(f"Starting review for PR: {pr_url}")
-        skip_result = self._skip_if_needed(provider, cfg, trace_id, start_time, run_handle)
-        if skip_result is not None:
-            return skip_result
-        comment_mgr = CommentManager()
-        comment_mgr.load_existing_comments(provider, self.owner, self.repo, self.pr_number)
-        existing = comment_mgr.existing_comments
-        existing_dicts = [c.model_dump() for c in existing]
-        incremental_base_sha = self._incremental_base_sha(cfg, self.head_sha)
-        idempotency_result = self._compute_idempotency_and_maybe_short_circuit(
-            cfg,
-            llm_cfg,
-            existing_dicts,
-            trace_id,
-            start_time,
-            run_handle,
-            incremental_base_sha=incremental_base_sha,
-        )
-        if idempotency_result is not None:
-            logger.info(
-                "Skipping run (idempotent: same review range/config already reviewed)"
-            )
-            return idempotency_result
-        ctx_cfg = runner_mod.get_context_aware_config()
-        self._validate_context_sources_or_raise(ctx_cfg, cfg, run_handle, start_time)
-        pr_info_for_metadata = provider.get_pr_info(self.owner, self.repo, self.pr_number)
-        files, paths, full_diff, incremental_base_sha = self._fetch_review_files_and_diffs(
-            provider, cfg
-        )
-        self._log_review_scope_fetch(incremental_base_sha, self.head_sha, paths)
-        empty_scope_result = self._maybe_finish_empty_scope_review(
-            provider,
-            cfg,
-            self.head_sha,
-            trace_id,
-            start_time,
-            run_handle,
-            paths,
-            pr_info_for_metadata,
-        )
-        if empty_scope_result is not None:
-            return empty_scope_result
-        if not self.dry_run:
-            CommentPoster(provider, self.pr_ctx).post_started_review_comment(
-                pr_info_for_metadata, paths
-            )
-        _, review_standards = self._detect_languages_for_files(paths)
-        context_window = runner_mod.get_context_window()
-        batch_budget = build_review_batch_budget(
-            context_window_tokens=context_window,
-            max_output_tokens=runner_mod.get_max_output_tokens(),
-            diff_budget_ratio=runner_mod.DIFF_TOKEN_BUDGET_RATIO,
-        )
-        diff_budget = batch_budget.effective_diff_budget_tokens
-        remaining_prompt_tokens = batch_budget.prompt_budget_tokens
-        refs, context_brief, prompt_suffix = self._build_prompt_suffix(
-            provider,
-            cfg,
-            ctx_cfg,
-            app_cfg,
-            pr_info_for_metadata,
-            full_diff,
-            remaining_prompt_tokens,
-        )
-        self._log_context_aware_prompt_inputs(refs, context_brief)
-        batches = self._build_review_batches(
-            files,
-            paths,
-            full_diff,
-            diff_budget,
-        )
-        context_brief_attached = bool(context_brief and _CONTEXT_TAG in prompt_suffix)
-        self._log_review_batch_plan(batches, paths, incremental_base_sha)
-        if not batches:
-            logger.info(
-                "Prepared zero review batches from the scoped diff; skipping LLM run"
-            )
-            return self._record_observability_and_build_result(
-                trace_id,
-                start_time,
-                run_handle,
-                paths,
-                [],
-                0,
-                [],
-                context_brief_attached=context_brief_attached,
-            )
-        session_id, session_service, runner = self._create_agent_and_runner(
-            provider,
-            review_standards,
-            batches,
-            context_brief_attached=context_brief_attached,
-        )
-        all_findings = self._run_agent_and_collect_findings(
-            provider,
-            review_standards,
-            runner,
-            session_id,
-            batches,
-            context_brief_attached=context_brief_attached,
-            prompt_suffix=prompt_suffix,
-        )
-        all_findings = self._filter_findings_by_diff_scope(all_findings, paths, full_diff)
-        to_post = comment_mgr.filter_duplicates(
-            all_findings,
-            self._make_fingerprint_fn(provider),
-            use_collapsible_prompt=provider.capabilities().markup_supports_collapsible,
-        )
-        logger.info(
-            "Agent returned %d finding(s), %d to post after filtering",
-            len(all_findings),
-            len(to_post),
-        )
-        self._print_findings_summary(self.print_findings, to_post)
-        successful_post_count = self._post_findings_and_summary(
-            provider,
-            incremental_base_sha,
-            to_post,
-            cfg,
-            llm_cfg,
-            existing,
-            full_diff=full_diff,
-        )
-        self._log_post_counts(self.dry_run, len(to_post), successful_post_count)
-        return self._record_observability_and_build_result(
-            trace_id,
-            start_time,
-            run_handle,
-            paths,
-            all_findings,
-            successful_post_count,
-            to_post,
-            context_brief_attached=context_brief_attached,
-        )
+        return review_decision_handler, standard_review_handler
 
     def run(self) -> list[FindingV1]:
-        """
-        Execute the full review flow. Returns list of findings that were posted
-        (or would be posted if dry_run).
-        """
+        """Execute the full review flow and return the findings that were posted."""
         trace_id = str(uuid.uuid4())
         start_time = time.perf_counter()
         run_handle = observability.start_run(trace_id)
         cfg, llm_cfg, provider = self._load_config_and_provider()
         app_cfg = runner_mod.get_code_review_app_config()
+        review_decision_handler, standard_review_handler = self._build_handlers()
         decision_only = bool(self._review_decision_only) or bool(app_cfg.review_decision_only)
         if decision_only:
-            return self._run_review_decision_only(trace_id, start_time, run_handle, cfg, provider)
-        return self._run_standard_review(
-            trace_id, start_time, run_handle, cfg, llm_cfg, provider, app_cfg
+            return review_decision_handler.run_review_decision_only(
+                trace_id, start_time, run_handle, cfg, provider
+            )
+        return standard_review_handler.run(
+            trace_id,
+            start_time,
+            run_handle,
+            cfg,
+            llm_cfg,
+            provider,
+            app_cfg,
+            skip_if_needed=self._skip_if_needed,
+            compute_idempotency_and_maybe_short_circuit=(
+                self._compute_idempotency_and_maybe_short_circuit
+            ),
+            incremental_base_sha_fn=self._incremental_base_sha,
         )

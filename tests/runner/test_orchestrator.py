@@ -255,16 +255,18 @@ def test_review_orchestrator_run_returns_list_of_findings():
 def test_create_agent_and_runner_uses_sequential_batch_workflow(
     mock_create_sequential, mock_runner_cls, mock_session_service_cls
 ):
+    from code_review.orchestration.execution import create_agent_and_runner
+
     provider = MagicMock()
     sequential_agent = MagicMock()
     mock_create_sequential.return_value = sequential_agent
     runner_instance = MagicMock()
     mock_runner_cls.return_value = runner_instance
     mock_session_service_cls.return_value = MagicMock()
-    orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="sha1")
     batches = [MagicMock()]
 
-    _, _, runner = orchestrator._create_agent_and_runner(
+    _, _, runner = create_agent_and_runner(
+        PRContext("o", "r", 1, "sha1"),
         provider,
         "review standards",
         batches,
@@ -281,22 +283,23 @@ def test_create_agent_and_runner_uses_sequential_batch_workflow(
     assert runner._uses_sequential_batch_review is True
 
 
-@patch("code_review.orchestration.orchestrator.execution_mod._run_sequential_batch_review_mode")
-def test_orchestrator_sequential_batch_wrapper_forwards_supported_args_only(mock_run_batch_mode):
-    """Wrapper should match the execution helper signature and not pass session_service."""
+@patch("code_review.orchestration.execution._run_sequential_batch_review_mode")
+def test_execution_sequential_batch_mode_forwards_supported_args_only(mock_run_batch_mode):
+    """Execution helper should receive the supported batch-review arguments only."""
+    from code_review.orchestration.execution import run_agent_and_collect_findings
+
     provider = MagicMock()
-    orchestrator = ReviewOrchestrator("o", "r", 42, head_sha="abc123")
     runner = MagicMock()
     batches = [MagicMock()]
     mock_run_batch_mode.return_value = []
 
-    result = orchestrator._run_sequential_batch_review_mode(
+    result = run_agent_and_collect_findings(
+        PRContext("o", "r", 42, "abc123"),
         provider,
         "review standards",
         runner,
         "session-1",
-        batches=batches,
-        batch_count=1,
+        batches,
         context_brief_attached=True,
         prompt_suffix="extra context",
     )
@@ -319,6 +322,8 @@ def test_orchestrator_sequential_batch_wrapper_forwards_supported_args_only(mock
 def test_run_agent_and_collect_findings_parses_sequential_workflow_responses(
     mock_collect_responses,
 ):
+    from code_review.orchestration.execution import run_agent_and_collect_findings
+
     mock_collect_responses.return_value = [
         (
             "batch_review_0",
@@ -329,10 +334,10 @@ def test_run_agent_and_collect_findings_parses_sequential_workflow_responses(
             '{"findings":[{"path":"b.py","line":2,"severity":"medium","code":"c2","message":"m2"}]}',
         ),
     ]
-    orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="sha1")
     runner = SimpleNamespace(_uses_sequential_batch_review=True)
 
-    findings = orchestrator._run_agent_and_collect_findings(
+    findings = run_agent_and_collect_findings(
+        PRContext("o", "r", 1, "sha1"),
         MagicMock(),
         "review standards",
         runner,
@@ -534,7 +539,11 @@ def test_incremental_base_sha_uses_cfg_head_sha_when_parameter_missing():
 
 
 def test_fetch_review_files_and_diffs_returns_files_paths_and_full_diff():
-    """_fetch_review_files_and_diffs returns (files, paths, full_diff, base_sha)."""
+    """StandardReviewHandler.fetch_review_files_and_diffs returns the active review scope."""
+    from code_review.orchestration.context_enricher import ContextEnricher
+    from code_review.orchestration.review_decision import ReviewDecisionHandler
+    from code_review.orchestration.reply_dismissal import ReplyDismissalHandler
+    from code_review.orchestration.standard_review import StandardReviewHandler
     from code_review.providers.base import FileInfo
 
     provider = MagicMock()
@@ -544,9 +553,31 @@ def test_fetch_review_files_and_diffs_returns_files_paths_and_full_diff():
     ]
     provider.get_pr_diff.return_value = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py"
 
-    o = ReviewOrchestrator("o", "r", 1)
-    files, paths, full_diff, incremental_base_sha = o._fetch_review_files_and_diffs(
-        provider, MagicMock(base_sha="", head_sha="")
+    pr_ctx = PRContext("o", "r", 1)
+    reply_handler = ReplyDismissalHandler(
+        pr_ctx, dry_run=True, event_context=None, run_reply_dismissal_llm=lambda _: ""
+    )
+    decision_handler = ReviewDecisionHandler(
+        pr_ctx,
+        dry_run=True,
+        event_context=None,
+        reply_dismissal_handler=reply_handler,
+        result_builder=MagicMock(),
+        skip_if_needed=MagicMock(),
+    )
+    handler = StandardReviewHandler(
+        pr_ctx,
+        dry_run=True,
+        print_findings=False,
+        context_enricher=ContextEnricher(pr_ctx),
+        review_decision_handler=decision_handler,
+        result_builder=MagicMock(),
+    )
+
+    files, paths, full_diff, incremental_base_sha = handler.fetch_review_files_and_diffs(
+        provider,
+        MagicMock(base_sha="", head_sha=""),
+        incremental_base_sha_fn=ReviewOrchestrator._incremental_base_sha,
     )
 
     assert len(files) == 2
@@ -558,10 +589,11 @@ def test_fetch_review_files_and_diffs_returns_files_paths_and_full_diff():
 
 
 def test_detect_languages_for_files_returns_detected_and_review_standards():
-    """_detect_languages_for_files returns (detected, review_standards) from detect_from_paths."""
-    o = ReviewOrchestrator("o", "r", 1)
+    """StandardReviewHandler.detect_languages_for_files returns detector output plus standards."""
+    from code_review.orchestration.standard_review import StandardReviewHandler
+
     paths = ["src/main.py", "tests/test_foo.py"]
-    detected, review_standards = o._detect_languages_for_files(paths)
+    detected, review_standards = StandardReviewHandler.detect_languages_for_files(paths)
 
     assert hasattr(detected, "language")
     assert hasattr(detected, "framework")
@@ -574,16 +606,17 @@ def test_detect_languages_for_files_returns_detected_and_review_standards():
 
 
 def test_create_agent_and_runner_returns_session_id_service_runner():
-    """_create_agent_and_runner returns (session_id, session_service, runner).
+    """create_agent_and_runner returns (session_id, session_service, runner).
 
     Batch mode always constructs a SequentialAgent workflow over prepared batches.
     """
+    from code_review.orchestration.execution import create_agent_and_runner
+
     provider = MagicMock()
     review_standards = "### Python"
     batch_agent = MagicMock()
     batches = [MagicMock()]
 
-    o = ReviewOrchestrator("o", "r", 42)
     with (
         patch("google.adk.runners.Runner") as MockRunner,
         patch("google.adk.sessions.InMemorySessionService") as MockSessionService,
@@ -597,8 +630,11 @@ def test_create_agent_and_runner_returns_session_id_service_runner():
         MockRunner.return_value = mock_runner
         mock_create_batch.return_value = batch_agent
 
-        session_id, session_service, runner = o._create_agent_and_runner(
-            provider, review_standards, batches
+        session_id, session_service, runner = create_agent_and_runner(
+            PRContext("o", "r", 42),
+            provider,
+            review_standards,
+            batches,
         )
 
         mock_create_batch.assert_called_once_with(
@@ -637,11 +673,35 @@ def test_comment_manager_filter_duplicates_via_orchestrator_run():
 
 
 def test_post_findings_and_summary_returns_zero_when_dry_run():
-    """_post_findings_and_summary returns 0 when dry_run=True (no posts)."""
-    o = ReviewOrchestrator("o", "r", 1, head_sha="abc", dry_run=True)
+    """StandardReviewHandler.post_findings_and_summary returns 0 when dry_run=True."""
+    from code_review.orchestration.context_enricher import ContextEnricher
+    from code_review.orchestration.reply_dismissal import ReplyDismissalHandler
+    from code_review.orchestration.review_decision import ReviewDecisionHandler
+    from code_review.orchestration.standard_review import StandardReviewHandler
+
+    pr_ctx = PRContext("o", "r", 1, "abc")
+    reply_handler = ReplyDismissalHandler(
+        pr_ctx, dry_run=True, event_context=None, run_reply_dismissal_llm=lambda _: ""
+    )
+    decision_handler = ReviewDecisionHandler(
+        pr_ctx,
+        dry_run=True,
+        event_context=None,
+        reply_dismissal_handler=reply_handler,
+        result_builder=MagicMock(),
+        skip_if_needed=MagicMock(),
+    )
+    handler = StandardReviewHandler(
+        pr_ctx,
+        dry_run=True,
+        print_findings=False,
+        context_enricher=ContextEnricher(pr_ctx),
+        review_decision_handler=decision_handler,
+        result_builder=MagicMock(),
+    )
     provider = MagicMock()
     to_post = []
-    count = o._post_findings_and_summary(
+    count = handler.post_findings_and_summary(
         provider, "", to_post, MagicMock(), MagicMock(), []
     )
     assert count == 0
@@ -844,6 +904,7 @@ def test_run_batch_mode_message_includes_head_sha_and_batch_count():
 
 def test_build_review_batches_preserves_annotations_for_segment_diffs():
     """Prepared batches must preserve explicit <L{n}> annotations in embedded diff segments."""
+    from code_review.orchestration.execution import build_review_batches_for_scope
     from code_review.providers.base import FileInfo
 
     diff_with_deletion = (
@@ -857,7 +918,7 @@ def test_build_review_batches_preserves_annotations_for_segment_diffs():
         " ctx_12\n"
     )
 
-    batches = ReviewOrchestrator._build_review_batches(
+    batches = build_review_batches_for_scope(
         [FileInfo(path="foo.py", status="modified")],
         ["foo.py"],
         diff_with_deletion,
