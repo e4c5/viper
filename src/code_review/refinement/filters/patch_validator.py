@@ -61,11 +61,15 @@ def validate_suggested_patches(
         if not is_plausible:
             logger.warning(
                 "Stripping misplaced suggested_patch from finding %s:%d: "
-                "patch first line %r has no token overlap with actual diff line %r",
+                "no token overlap between patch and diff line "
+                "(patch_len=%d actual_len=%d patch_tokens=%d actual_tokens=%d overlap_tokens=%d)",
                 f.path,
                 f.line,
-                patch_first_line,
-                actual_content,
+                len(patch_first_line),
+                len(actual_content),
+                len(patch_tokens),
+                len(actual_tokens),
+                len(overlap),
             )
             f = f.model_copy(update={"suggested_patch": None})
 

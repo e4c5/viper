@@ -115,6 +115,86 @@ def _run_agent_and_collect_response(
 # Multi-response async runner (batch workflow)
 # ---------------------------------------------------------------------------
 
+
+def _describe_event_parts(event) -> list[str]:
+    """Return a compact description of the event part types for debug logging."""
+    content = getattr(event, "content", None)
+    parts = getattr(content, "parts", None) or []
+    part_types: list[str] = []
+    for part in parts:
+        if getattr(part, "text", None):
+            part_types.append("text")
+            continue
+        if getattr(part, "function_call", None):
+            fc = part.function_call
+            part_types.append(f"fn_call:{getattr(fc, 'name', '?')}")
+            continue
+        if getattr(part, "function_response", None):
+            fr = part.function_response
+            part_types.append(f"fn_resp:{getattr(fr, 'name', '?')}")
+            continue
+        part_types.append("other")
+    return part_types
+
+
+def _log_batch_event(event_count: int, event) -> None:
+    """Emit per-event debug logging for batch workflow runs."""
+    content = getattr(event, "content", None)
+    parts = getattr(content, "parts", None) or []
+    logger.debug(
+        "[batch] event #%d author=%r is_final=%s has_content=%s parts=%s",
+        event_count,
+        getattr(event, "author", "<unknown>"),
+        event.is_final_response(),
+        bool(parts),
+        _describe_event_parts(event) or "[]",
+    )
+
+
+def _collect_text_parts(event) -> list[str]:
+    """Return all text parts from an event, preserving order."""
+    content = getattr(event, "content", None)
+    parts = getattr(content, "parts", None) or []
+    return [part.text for part in parts if getattr(part, "text", None)]
+
+
+def _append_final_response_text(event, responses: list[tuple[str, str]]) -> None:
+    """Collect one event's final response text when present."""
+    if not event.is_final_response():
+        return
+    texts = _collect_text_parts(event)
+    if not texts:
+        return
+    author = getattr(event, "author", "<unknown>")
+    logger.debug(
+        "[batch] collected final response from author=%r text_len=%d",
+        author,
+        sum(len(text) for text in texts),
+    )
+    responses.append((author, "\n".join(texts)))
+
+
+def _should_wrap_partial_response_error(exc: Exception, event_count: int) -> bool:
+    """Return True when the caller should preserve partial responses with the error."""
+    return isinstance(exc, RateLimitError) or event_count > 0
+
+
+def _raise_collection_error(
+    exc: Exception,
+    *,
+    responses: list[tuple[str, str]],
+    event_count: int,
+) -> None:
+    """Raise the appropriate error type for a failed batch workflow collection."""
+    logger.debug(
+        "[batch] _collect_final_response_texts_async raised after %d event(s): %s",
+        event_count,
+        exc,
+    )
+    if _should_wrap_partial_response_error(exc, event_count):
+        raise PartialResponseCollectionError(responses=responses, cause=exc) from exc
+    raise exc
+
 async def _collect_final_response_texts_async(
     runner, session_id: str, content: types.Content
 ) -> list[tuple[str, str]]:
@@ -136,48 +216,10 @@ async def _collect_final_response_texts_async(
             new_message=content,
         ):
             event_count += 1
-            author = getattr(event, "author", "<unknown>")
-            is_final = event.is_final_response()
-            has_content = bool(event.content and event.content.parts)
-            part_types: list[str] = []
-            if event.content and event.content.parts:
-                for p in event.content.parts:
-                    if getattr(p, "text", None):
-                        part_types.append("text")
-                    elif getattr(p, "function_call", None):
-                        fc = p.function_call
-                        part_types.append(f"fn_call:{getattr(fc, 'name', '?')}")
-                    elif getattr(p, "function_response", None):
-                        fr = p.function_response
-                        part_types.append(f"fn_resp:{getattr(fr, 'name', '?')}")
-                    else:
-                        part_types.append("other")
-            logger.debug(
-                "[batch] event #%d author=%r is_final=%s has_content=%s parts=%s",
-                event_count,
-                author,
-                is_final,
-                has_content,
-                part_types or "[]",
-            )
-            if is_final and has_content:
-                texts = [part.text for part in event.content.parts if getattr(part, "text", None)]
-                if texts:
-                    logger.debug(
-                        "[batch] collected final response from author=%r text_len=%d",
-                        author,
-                        sum(len(t) for t in texts),
-                    )
-                    responses.append((author, "\n".join(texts)))
+            _log_batch_event(event_count, event)
+            _append_final_response_text(event, responses)
     except Exception as exc:
-        logger.debug(
-            "[batch] _collect_final_response_texts_async raised after %d event(s): %s",
-            event_count,
-            exc,
-        )
-        if isinstance(exc, RateLimitError) or event_count > 0:
-            raise PartialResponseCollectionError(responses=responses, cause=exc) from exc
-        raise
+        _raise_collection_error(exc, responses=responses, event_count=event_count)
     logger.debug(
         "[batch] _collect_final_response_texts_async done: %d event(s) received, "
         "%d final response(s) collected session=%s",
