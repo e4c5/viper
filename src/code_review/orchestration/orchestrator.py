@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
 import uuid
 
 from code_review import observability
@@ -12,7 +11,11 @@ from code_review.orchestration.filter import ReviewFilter
 from code_review.orchestration.idempotency import _idempotency_key_seen_in_comments
 from code_review.orchestration.reply_dismissal import ReplyDismissalHandler
 from code_review.orchestration.review_decision import ReviewDecisionHandler
-from code_review.orchestration.runner_utils import _log_run_complete, _run_reply_dismissal_llm
+from code_review.orchestration.runner_utils import (
+    ReviewRunObservability,
+    _log_run_complete,
+    _run_reply_dismissal_llm,
+)
 from code_review.orchestration.standard_review import StandardReviewHandler
 from code_review.schemas.findings import FindingV1
 from code_review.schemas.review_decision_event import ReviewDecisionEventContext
@@ -95,9 +98,7 @@ class ReviewOrchestrator:
         self,
         provider,
         cfg,
-        trace_id: str,
-        start_time: float,
-        run_handle,
+        run_observability: ReviewRunObservability,
     ) -> list[FindingV1] | None:
         """Emit observability and return [] if skip config matches, else None."""
         if not cfg.skip_label and not cfg.skip_title_pattern:
@@ -106,18 +107,7 @@ class ReviewOrchestrator:
         skip_reason = ReviewFilter().should_skip(pr_info, cfg)
         if skip_reason is None:
             return None
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        _log_run_complete(trace_id, self.owner, self.repo, self.pr_number, 0, 0, 0, duration_ms)
-        observability.finish_run(
-            run_handle,
-            self.owner,
-            self.repo,
-            self.pr_number,
-            0,
-            0,
-            0,
-            duration_ms / 1000.0,
-        )
+        run_observability.finish(self.pr_ctx, [], [], [])
         return []
 
     def _compute_idempotency_and_maybe_short_circuit(
@@ -125,9 +115,7 @@ class ReviewOrchestrator:
         cfg,
         llm_cfg,
         existing_dicts: list,
-        trace_id: str,
-        start_time: float,
-        run_handle,
+        run_observability: ReviewRunObservability,
         incremental_base_sha: str = "",
     ) -> list[FindingV1] | None:
         """Short-circuit when this PR/range/config was already reviewed."""
@@ -139,18 +127,7 @@ class ReviewOrchestrator:
         run_id = self.pr_ctx.idempotency_key(cfg, llm_cfg, incremental_base_sha)
         if not _idempotency_key_seen_in_comments(existing_dicts, run_id):
             return None
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        _log_run_complete(trace_id, self.owner, self.repo, self.pr_number, 0, 0, 0, duration_ms)
-        observability.finish_run(
-            run_handle,
-            self.owner,
-            self.repo,
-            self.pr_number,
-            0,
-            0,
-            0,
-            duration_ms / 1000.0,
-        )
+        run_observability.finish(self.pr_ctx, [], [], [])
         return []
 
     @staticmethod
@@ -166,9 +143,7 @@ class ReviewOrchestrator:
 
     def _record_observability_and_build_result(
         self,
-        trace_id: str,
-        start_time: float,
-        run_handle,
+        run_observability: ReviewRunObservability,
         paths: list,
         all_findings: list[FindingV1],
         successful_post_count: int,
@@ -176,26 +151,11 @@ class ReviewOrchestrator:
         context_brief_attached: bool = False,
     ) -> list[FindingV1]:
         """Emit run_complete log + observability.finish_run, then return posted findings."""
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        _log_run_complete(
-            trace_id,
-            self.owner,
-            self.repo,
-            self.pr_number,
-            files_count=len(paths),
-            findings_count=len(all_findings),
-            posts_count=successful_post_count,
-            duration_ms=duration_ms,
-        )
-        observability.finish_run(
-            run_handle,
-            self.owner,
-            self.repo,
-            self.pr_number,
-            files_count=len(paths),
-            findings_count=len(all_findings),
-            posts_count=successful_post_count,
-            duration_seconds=duration_ms / 1000.0,
+        run_observability.finish(
+            self.pr_ctx,
+            paths,
+            all_findings,
+            successful_post_count,
             context_brief_attached=context_brief_attached,
         )
         return [f for f, _ in to_post]
@@ -229,20 +189,23 @@ class ReviewOrchestrator:
     def run(self) -> list[FindingV1]:
         """Execute the full review flow and return the findings that were posted."""
         trace_id = str(uuid.uuid4())
-        start_time = time.perf_counter()
         run_handle = observability.start_run(trace_id)
+        run_observability = ReviewRunObservability(
+            trace_id,
+            run_handle,
+            log_run_complete=_log_run_complete,
+            finish_run=observability.finish_run,
+        )
         cfg, llm_cfg, provider = self._load_config_and_provider()
         app_cfg = runner_mod.get_code_review_app_config()
         review_decision_handler, standard_review_handler = self._build_handlers()
         decision_only = bool(self._review_decision_only) or bool(app_cfg.review_decision_only)
         if decision_only:
             return review_decision_handler.run_review_decision_only(
-                trace_id, start_time, run_handle, cfg, provider
+                run_observability, cfg, provider
             )
         return standard_review_handler.run(
-            trace_id,
-            start_time,
-            run_handle,
+            run_observability,
             cfg,
             llm_cfg,
             provider,

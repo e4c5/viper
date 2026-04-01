@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import code_review
@@ -15,7 +16,9 @@ from google.genai import types
 if TYPE_CHECKING:
     from google.adk.agents.callback_context import ReadonlyContext
 
+from code_review import observability
 from code_review.json_utils import iter_json_candidates
+from code_review.models import PRContext
 from code_review.providers.base import RateLimitError
 from code_review.schemas.findings import FindingsBatchV1, FindingV1
 
@@ -266,6 +269,60 @@ def _log_run_complete(
             "duration_ms": round(duration_ms, 2),
         },
     )
+
+
+@dataclass
+class ReviewRunObservability:
+    """Owns run teardown timing and emits the paired log + observability finish calls."""
+
+    trace_id: str
+    run_handle: Any
+    log_run_complete: Any | None = None
+    finish_run: Any | None = None
+    start_time: float = field(default_factory=time.perf_counter)
+
+    @staticmethod
+    def _count(value: Any) -> int:
+        if isinstance(value, int):
+            return value
+        return len(value)
+
+    def finish(
+        self,
+        pr_ctx: PRContext,
+        paths,
+        findings,
+        posts,
+        *,
+        context_brief_attached: bool = False,
+    ) -> None:
+        duration_ms = (time.perf_counter() - self.start_time) * 1000
+        files_count = self._count(paths)
+        findings_count = self._count(findings)
+        posts_count = self._count(posts)
+        log_run_complete = self.log_run_complete or _log_run_complete
+        finish_run = self.finish_run or observability.finish_run
+        log_run_complete(
+            self.trace_id,
+            pr_ctx.owner,
+            pr_ctx.repo,
+            pr_ctx.pr_number,
+            files_count=files_count,
+            findings_count=findings_count,
+            posts_count=posts_count,
+            duration_ms=duration_ms,
+        )
+        finish_run(
+            self.run_handle,
+            pr_ctx.owner,
+            pr_ctx.repo,
+            pr_ctx.pr_number,
+            files_count=files_count,
+            findings_count=findings_count,
+            posts_count=posts_count,
+            duration_seconds=duration_ms / 1000.0,
+            context_brief_attached=context_brief_attached,
+        )
 
 
 # ---------------------------------------------------------------------------

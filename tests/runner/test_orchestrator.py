@@ -473,40 +473,50 @@ def test_comment_manager_filter_duplicates_uses_posting_body_format_for_dedup():
 
 def test_compute_idempotency_and_maybe_short_circuit_returns_none_when_no_head_sha():
     """When head_sha is empty, _compute_idempotency_and_maybe_short_circuit returns None."""
+    from code_review.orchestration.runner_utils import ReviewRunObservability
+
     o = ReviewOrchestrator("o", "r", 1, head_sha="")
     result = o._compute_idempotency_and_maybe_short_circuit(
-        MagicMock(), MagicMock(), [], "trace", 0.0, MagicMock()
+        MagicMock(),
+        MagicMock(),
+        [],
+        ReviewRunObservability("trace", MagicMock(), start_time=0.0),
     )
     assert result is None
 
 
 def test_compute_idempotency_and_maybe_short_circuit_returns_none_when_key_not_seen():
     """When idempotency key not in comments, returns None."""
+    from code_review.orchestration.runner_utils import ReviewRunObservability
+
     o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
     result = o._compute_idempotency_and_maybe_short_circuit(
         MagicMock(),
         MagicMock(),
         [{"path": "x", "body": "no marker"}],
-        "trace",
-        0.0,
-        MagicMock(),
+        ReviewRunObservability("trace", MagicMock(), start_time=0.0),
     )
     assert result is None
 
 
 def test_compute_idempotency_and_maybe_short_circuit_returns_empty_list_when_key_seen():
     """When idempotency key is seen in comments, returns [] and emits observability."""
+    from code_review.orchestration.runner_utils import ReviewRunObservability
+
     cfg = MagicMock(provider="gitea", url="https://x.com", token="x")
     llm_cfg = MagicMock(provider="gemini", model="m")
     run_id = _build_idempotency_key(cfg, llm_cfg, "o", "r", 1, "abc")
     existing_dicts = [{"path": "a.py", "body": f"<!-- code-review-agent:run={run_id} -->\nDone."}]
     o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
     with (
-        patch("code_review.orchestration.orchestrator._log_run_complete"),
-        patch("code_review.orchestration.orchestrator.observability") as mock_obs,
+        patch("code_review.orchestration.runner_utils._log_run_complete"),
+        patch("code_review.orchestration.runner_utils.observability") as mock_obs,
     ):
         result = o._compute_idempotency_and_maybe_short_circuit(
-            cfg, llm_cfg, existing_dicts, "trace", 0.0, MagicMock()
+            cfg,
+            llm_cfg,
+            existing_dicts,
+            ReviewRunObservability("trace", MagicMock(), start_time=0.0),
         )
     assert result == []
     mock_obs.finish_run.assert_called_once()
@@ -514,6 +524,8 @@ def test_compute_idempotency_and_maybe_short_circuit_returns_empty_list_when_key
 
 def test_compute_idempotency_and_maybe_short_circuit_uses_incremental_base_in_key():
     """A different incremental base_sha must not short-circuit as the same run."""
+    from code_review.orchestration.runner_utils import ReviewRunObservability
+
     cfg = MagicMock(provider="gitea", url="https://x.com", token="x", base_sha="base-new")
     llm_cfg = MagicMock(provider="gemini", model="m")
     run_id = _build_idempotency_key(cfg, llm_cfg, "o", "r", 1, "abc", "base-old")
@@ -521,7 +533,10 @@ def test_compute_idempotency_and_maybe_short_circuit_uses_incremental_base_in_ke
     o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
 
     result = o._compute_idempotency_and_maybe_short_circuit(
-        cfg, llm_cfg, existing_dicts, "trace", 0.0, MagicMock()
+        cfg,
+        llm_cfg,
+        existing_dicts,
+        ReviewRunObservability("trace", MagicMock(), start_time=0.0),
     )
 
     assert result is None
@@ -716,17 +731,22 @@ def test_record_observability_and_build_result_returns_findings_and_emits_log():
 
     Returns findings list.
     """
+    from code_review.orchestration.runner_utils import ReviewRunObservability
     from code_review.schemas.findings import FindingV1
 
     o = ReviewOrchestrator("o", "r", 1)
     finding = FindingV1(path="a.py", line=1, severity="low", code="X", message="m")
     to_post = [(finding, "fp1")]
     with (
-        patch("code_review.orchestration.orchestrator._log_run_complete") as mock_log,
-        patch("code_review.orchestration.orchestrator.observability") as mock_obs,
+        patch("code_review.orchestration.runner_utils._log_run_complete") as mock_log,
+        patch("code_review.orchestration.runner_utils.observability") as mock_obs,
     ):
         result = o._record_observability_and_build_result(
-            "trace-1", 0.0, MagicMock(), ["a.py"], [finding], 1, to_post
+            ReviewRunObservability("trace-1", MagicMock(), start_time=0.0),
+            ["a.py"],
+            [finding],
+            1,
+            to_post,
         )
     assert result == [finding]
     mock_log.assert_called_once()

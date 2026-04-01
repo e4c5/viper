@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import Callable
 from typing import Any
 
-from code_review import observability
 from code_review import orchestration_deps as runner_mod
 from code_review.batching import ReviewBatch, build_review_batch_budget
 from code_review.comments.manager import CommentManager
@@ -14,6 +12,7 @@ from code_review.orchestration import execution as execution_mod
 from code_review.orchestration.context_enricher import ContextEnricher
 from code_review.orchestration.posting import CommentPoster
 from code_review.orchestration.review_decision import ReviewDecisionHandler
+from code_review.orchestration.runner_utils import ReviewRunObservability
 from code_review.providers.base import RateLimitError
 from code_review.quality.gate import QualityGate
 from code_review.refinement.pipeline import FindingRefinementPipeline
@@ -273,24 +272,14 @@ class StandardReviewHandler:
         self,
         ctx_cfg,
         cfg,
-        run_handle,
-        start_time: float,
+        run_observability: ReviewRunObservability,
     ) -> None:
         """Validate context-aware sources when enabled and finish observability on fatal config."""
         try:
             self.context_enricher.validate_context_sources_or_raise(ctx_cfg, cfg)
         except runner_mod.ContextAwareFatalError as e:
             logger.error("Context-aware review configuration error: %s", e)
-            observability.finish_run(
-                run_handle,
-                self.owner,
-                self.repo,
-                self.pr_number,
-                files_count=0,
-                findings_count=0,
-                posts_count=0,
-                duration_seconds=time.perf_counter() - start_time,
-            )
+            run_observability.finish(self.pr_ctx, [], [], [])
             raise
 
     @staticmethod
@@ -316,9 +305,7 @@ class StandardReviewHandler:
 
     def run(
         self,
-        trace_id: str,
-        start_time: float,
-        run_handle,
+        run_observability: ReviewRunObservability,
         cfg,
         llm_cfg,
         provider,
@@ -339,7 +326,7 @@ class StandardReviewHandler:
             pr_url,
         )
         print(f"Starting review for PR: {pr_url}")
-        skip_result = skip_if_needed(provider, cfg, trace_id, start_time, run_handle)
+        skip_result = skip_if_needed(provider, cfg, run_observability)
         if skip_result is not None:
             return skip_result
         comment_mgr = CommentManager()
@@ -351,16 +338,14 @@ class StandardReviewHandler:
             cfg,
             llm_cfg,
             existing_dicts,
-            trace_id,
-            start_time,
-            run_handle,
+            run_observability,
             incremental_base_sha=incremental_base_sha,
         )
         if idempotency_result is not None:
             logger.info("Skipping run (idempotent: same review range/config already reviewed)")
             return idempotency_result
         ctx_cfg = runner_mod.get_context_aware_config()
-        self.validate_context_sources_or_raise(ctx_cfg, cfg, run_handle, start_time)
+        self.validate_context_sources_or_raise(ctx_cfg, cfg, run_observability)
         pr_info_for_metadata = provider.get_pr_info(self.owner, self.repo, self.pr_number)
         files, paths, full_diff, incremental_base_sha = self.fetch_review_files_and_diffs(
             provider,
@@ -372,9 +357,7 @@ class StandardReviewHandler:
             provider,
             cfg,
             self.head_sha,
-            trace_id,
-            start_time,
-            run_handle,
+            run_observability,
             paths,
             pr_info_for_metadata,
         )
@@ -409,9 +392,7 @@ class StandardReviewHandler:
         if not batches:
             logger.info("Prepared zero review batches from the scoped diff; skipping LLM run")
             return self._result_builder(
-                trace_id,
-                start_time,
-                run_handle,
+                run_observability,
                 paths,
                 [],
                 0,
@@ -458,9 +439,7 @@ class StandardReviewHandler:
         )
         self.log_post_counts(self.dry_run, len(to_post), successful_post_count)
         return self._result_builder(
-            trace_id,
-            start_time,
-            run_handle,
+            run_observability,
             paths,
             all_findings,
             successful_post_count,

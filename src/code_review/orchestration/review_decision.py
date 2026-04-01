@@ -9,6 +9,7 @@ from code_review import orchestration_deps as runner_mod
 from code_review.models import PRContext
 from code_review.orchestration.events import _reply_added_event_authored_by_bot
 from code_review.orchestration.reply_dismissal import ReplyDismissalHandler
+from code_review.orchestration.runner_utils import ReviewRunObservability
 from code_review.quality.gate import QualityGate
 from code_review.schemas.findings import FindingV1
 from code_review.schemas.review_decision_event import ReviewDecisionEventContext
@@ -56,9 +57,7 @@ class ReviewDecisionHandler:
         self,
         provider,
         app_cfg,
-        trace_id: str,
-        start_time: float,
-        run_handle,
+        run_observability: ReviewRunObservability,
     ) -> list[FindingV1] | None:
         if not (
             app_cfg.review_decision_only_skip_if_bot_not_blocking
@@ -79,9 +78,7 @@ class ReviewDecisionHandler:
             "comment_id present)."
         )
         return self._result_builder(
-            trace_id,
-            start_time,
-            run_handle,
+            run_observability,
             paths=[],
             all_findings=[],
             successful_post_count=0,
@@ -91,9 +88,7 @@ class ReviewDecisionHandler:
     def try_skip_when_event_actor_is_bot(
         self,
         provider,
-        trace_id: str,
-        start_time: float,
-        run_handle,
+        run_observability: ReviewRunObservability,
     ) -> list[FindingV1] | None:
         """Skip review-decision-only runs triggered by the bot's own comment activity."""
         ctx = self.event_context
@@ -120,9 +115,7 @@ class ReviewDecisionHandler:
             (ctx.source or "").strip(),
         )
         return self._result_builder(
-            trace_id,
-            start_time,
-            run_handle,
+            run_observability,
             paths=[],
             all_findings=[],
             successful_post_count=0,
@@ -150,9 +143,7 @@ class ReviewDecisionHandler:
         provider,
         cfg,
         head_sha: str,
-        trace_id: str,
-        start_time: float,
-        run_handle,
+        run_observability: ReviewRunObservability,
         paths: list[str],
         pr_info_for_metadata: Any,
     ) -> list[FindingV1] | None:
@@ -188,13 +179,11 @@ class ReviewDecisionHandler:
                 cfg,
                 gate_outcome=gate_outcome,
             )
-        return self._result_builder(trace_id, start_time, run_handle, paths, [], 0, [])
+        return self._result_builder(run_observability, paths, [], 0, [])
 
     def run_review_decision_only(
         self,
-        trace_id: str,
-        start_time: float,
-        run_handle,
+        run_observability: ReviewRunObservability,
         cfg,
         provider,
     ) -> list[FindingV1]:
@@ -212,17 +201,13 @@ class ReviewDecisionHandler:
         runner_mod._log_review_decision_event_if_present(self.event_context)
         app_cfg = runner_mod.get_code_review_app_config()
 
-        skip_result = self._skip_if_needed(provider, cfg, trace_id, start_time, run_handle)
+        skip_result = self._skip_if_needed(provider, cfg, run_observability)
         if skip_result is not None:
             return skip_result
-        skip_bot_event = self.try_skip_when_event_actor_is_bot(
-            provider, trace_id, start_time, run_handle
-        )
+        skip_bot_event = self.try_skip_when_event_actor_is_bot(provider, run_observability)
         if skip_bot_event is not None:
             return skip_bot_event
-        skip_early = self.try_skip_when_bot_not_blocking(
-            provider, app_cfg, trace_id, start_time, run_handle
-        )
+        skip_early = self.try_skip_when_bot_not_blocking(provider, app_cfg, run_observability)
         if skip_early is not None:
             return skip_early
         head_hint = runner_mod._head_sha_hint_for_decision_only(self.head_sha)
@@ -234,7 +219,9 @@ class ReviewDecisionHandler:
                 "Review-decision-only: head_sha missing after provider lookup; "
                 "submit_review_decision may omit commit id for some SCMs."
             )
-        excluded_gate = self.reply_dismissal_handler.excluded_gate_ids(provider, app_cfg, trace_id)
+        excluded_gate = self.reply_dismissal_handler.excluded_gate_ids(
+            provider, app_cfg, run_observability.trace_id
+        )
         gate_outcome = QualityGate(provider, self.owner, self.repo, self.pr_number, cfg).evaluate(
             [],
             excluded_gate_stable_ids=excluded_gate if excluded_gate else None,
@@ -257,9 +244,7 @@ class ReviewDecisionHandler:
             gate_outcome=gate_outcome,
         )
         return self._result_builder(
-            trace_id,
-            start_time,
-            run_handle,
+            run_observability,
             paths=[],
             all_findings=[],
             successful_post_count=0,
