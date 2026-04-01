@@ -282,6 +282,14 @@ class CodeReviewAppConfig(BaseSettings):
             "No effect when event context is empty or for non-reply events."
         ),
     )
+    disable_idempotency: bool = Field(
+        default=False,
+        validation_alias="CODE_REVIEW_DISABLE_IDEMPOTENCY",
+        description=(
+            "Test-only escape hatch: skip the normal idempotency short-circuit so the "
+            "same PR head/config can be reviewed again."
+        ),
+    )
     reply_dismissal_enabled: bool = Field(
         default=True,
         validation_alias="CODE_REVIEW_REPLY_DISMISSAL_ENABLED",

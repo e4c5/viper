@@ -204,6 +204,12 @@ def test_code_review_app_reply_dismissal_enabled_from_env():
         assert cfg.reply_dismissal_enabled is True
 
 
+def test_code_review_app_disable_idempotency_from_env():
+    with patch.dict(os.environ, {"CODE_REVIEW_DISABLE_IDEMPOTENCY": "true"}, clear=True):
+        cfg = CodeReviewAppConfig()
+        assert cfg.disable_idempotency is True
+
+
 def test_code_review_app_reply_dismissal_enabled_by_default():
     with patch.dict(os.environ, {}, clear=True):
         cfg = CodeReviewAppConfig()

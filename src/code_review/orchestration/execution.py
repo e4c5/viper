@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from google.genai import types
@@ -12,36 +11,12 @@ from code_review.models import PRContext
 logger = logging.getLogger(__name__)
 
 
-async def _collect_response_async(
-    runner, session_service, session_id: str, content: types.Content
-) -> str:
-    """Run an agent once via run_async and return the concatenated final response text."""
-    del session_service
-    runner_mod.asyncio.get_running_loop().set_exception_handler(
-        runner_mod._suppress_ssl_teardown_errors
-    )
-
-    parts: list[str] = []
-    async for event in runner.run_async(
-        user_id=runner_mod.USER_ID,
-        session_id=session_id,
-        new_message=content,
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            for part in event.content.parts:
-                if getattr(part, "text", None):
-                    parts.append(part.text)
-    text = "\n".join(parts)
-    if runner_mod.os.getenv("CODE_REVIEW_PRINT_RAW_RESPONSE", "").strip() in ("1", "true", "TRUE"):
-        print(f"RAW LLM RESPONSE (session={session_id}):\n{text}")
-    return text
-
-
 def run_agent_and_collect_response(
     runner, session_service, session_id: str, content: types.Content
 ) -> str:
     """Run an agent once and return the concatenated final response text."""
-    return asyncio.run(_collect_response_async(runner, session_service, session_id, content))
+    del session_service
+    return runner_mod._run_agent_and_collect_response(runner, session_id, content)
 
 
 def create_agent_and_runner(

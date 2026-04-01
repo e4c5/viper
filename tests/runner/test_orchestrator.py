@@ -318,6 +318,23 @@ def test_execution_sequential_batch_mode_forwards_supported_args_only(mock_run_b
     )
 
 
+@patch("code_review.orchestration.execution.runner_mod._run_agent_and_collect_response")
+def test_execution_run_agent_and_collect_response_uses_canonical_runner_helper(
+    mock_collect_response,
+):
+    from code_review.orchestration.execution import run_agent_and_collect_response
+
+    runner = MagicMock()
+    session_service = MagicMock()
+    content = MagicMock()
+    mock_collect_response.return_value = "final response"
+
+    result = run_agent_and_collect_response(runner, session_service, "session-1", content)
+
+    assert result == "final response"
+    mock_collect_response.assert_called_once_with(runner, "session-1", content)
+
+
 @patch("code_review.orchestration.execution.runner_mod._run_agent_and_collect_responses")
 def test_run_agent_and_collect_findings_parses_sequential_workflow_responses(
     mock_collect_responses,
