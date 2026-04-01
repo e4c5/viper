@@ -1,0 +1,308 @@
+"""Async agent runner utilities and structured-findings helpers."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import uuid
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+import code_review
+from google.genai import types
+
+if TYPE_CHECKING:
+    from google.adk.agents.callback_context import ReadonlyContext
+
+from code_review.json_utils import iter_json_candidates
+from code_review.providers.base import RateLimitError
+from code_review.schemas.findings import FindingsBatchV1, FindingV1
+
+import json
+
+logger = logging.getLogger(__name__)
+
+APP_NAME = "code_review"
+USER_ID = "reviewer"
+AGENT_VERSION = getattr(code_review, "__version__", "0.1.0")
+
+
+# ---------------------------------------------------------------------------
+# SSL teardown suppressor
+# ---------------------------------------------------------------------------
+
+def _suppress_ssl_teardown_errors(loop, context: dict) -> None:
+    """Asyncio exception handler that silences known SSL-transport teardown noise."""
+    exc = context.get("exception")
+    msg = context.get("message", "")
+    _teardown_msg = "SSL" in msg or "Fatal write error" in msg or "write backlog" in msg
+    _teardown_exc = (isinstance(exc, OSError) and getattr(exc, "errno", None) == 9) or (
+        isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc)
+    )
+    if _teardown_msg and _teardown_exc:
+        return
+    loop.default_exception_handler(context)
+
+
+# ---------------------------------------------------------------------------
+# PartialResponseCollectionError
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class PartialResponseCollectionError(Exception):
+    """Raised when a workflow emits some final responses before failing."""
+
+    responses: list[tuple[str, str]]
+    cause: Exception
+
+
+# ---------------------------------------------------------------------------
+# ADK templating bypass
+# ---------------------------------------------------------------------------
+
+def _bypass_adk_templating(agent: Any) -> None:
+    """Recursively wrap agent instructions in a provider that bypasses ADK templating."""
+    sub_agents = getattr(agent, "sub_agents", [])
+    for sa in sub_agents:
+        _bypass_adk_templating(sa)
+
+    instruction = getattr(agent, "instruction", None)
+    if isinstance(instruction, str):
+        instr_str = instruction
+
+        async def _instr_provider(_: ReadonlyContext) -> str:
+            return instr_str
+
+        agent.instruction = _instr_provider
+
+    global_instruction = getattr(agent, "global_instruction", None)
+    if isinstance(global_instruction, str):
+        global_str = global_instruction
+
+        async def _global_instr_provider(_: ReadonlyContext) -> str:
+            return global_str
+
+        agent.global_instruction = _global_instr_provider
+
+
+# ---------------------------------------------------------------------------
+# Single-response async runner
+# ---------------------------------------------------------------------------
+
+async def _collect_response_async(runner, session_id: str, content: types.Content) -> str:
+    """Run agent once via run_async and return concatenated final response text."""
+    asyncio.get_running_loop().set_exception_handler(_suppress_ssl_teardown_errors)
+
+    parts: list[str] = []
+    async for event in runner.run_async(
+        user_id=USER_ID,
+        session_id=session_id,
+        new_message=content,
+    ):
+        if event.is_final_response() and event.content and event.content.parts:
+            for part in event.content.parts:
+                if getattr(part, "text", None):
+                    parts.append(part.text)
+    text = "\n".join(parts)
+    if os.getenv("CODE_REVIEW_PRINT_RAW_RESPONSE", "").strip() in ("1", "true", "TRUE"):
+        print(f"RAW LLM RESPONSE (session={session_id}):\n{text}")
+    return text
+
+
+def _run_agent_and_collect_response(
+    runner, session_id: str, content: types.Content
+) -> str:
+    """Run agent once and return concatenated final response text (uses async API)."""
+    return asyncio.run(_collect_response_async(runner, session_id, content))
+
+
+# ---------------------------------------------------------------------------
+# Multi-response async runner (batch workflow)
+# ---------------------------------------------------------------------------
+
+async def _collect_final_response_texts_async(
+    runner, session_id: str, content: types.Content
+) -> list[tuple[str, str]]:
+    """Run agent once and collect text-bearing final responses per participating agent."""
+    asyncio.get_running_loop().set_exception_handler(_suppress_ssl_teardown_errors)
+
+    logger.debug(
+        "[batch] _collect_final_response_texts_async starting session=%s",
+        session_id,
+    )
+    _bypass_adk_templating(runner.agent)
+
+    responses: list[tuple[str, str]] = []
+    event_count = 0
+    try:
+        async for event in runner.run_async(
+            user_id=USER_ID,
+            session_id=session_id,
+            new_message=content,
+        ):
+            event_count += 1
+            author = getattr(event, "author", "<unknown>")
+            is_final = event.is_final_response()
+            has_content = bool(event.content and event.content.parts)
+            part_types: list[str] = []
+            if event.content and event.content.parts:
+                for p in event.content.parts:
+                    if getattr(p, "text", None):
+                        part_types.append("text")
+                    elif getattr(p, "function_call", None):
+                        fc = p.function_call
+                        part_types.append(f"fn_call:{getattr(fc, 'name', '?')}")
+                    elif getattr(p, "function_response", None):
+                        fr = p.function_response
+                        part_types.append(f"fn_resp:{getattr(fr, 'name', '?')}")
+                    else:
+                        part_types.append("other")
+            logger.debug(
+                "[batch] event #%d author=%r is_final=%s has_content=%s parts=%s",
+                event_count,
+                author,
+                is_final,
+                has_content,
+                part_types or "[]",
+            )
+            if is_final and has_content:
+                texts = [part.text for part in event.content.parts if getattr(part, "text", None)]
+                if texts:
+                    logger.debug(
+                        "[batch] collected final response from author=%r text_len=%d",
+                        author,
+                        sum(len(t) for t in texts),
+                    )
+                    responses.append((author, "\n".join(texts)))
+    except Exception as exc:
+        logger.debug(
+            "[batch] _collect_final_response_texts_async raised after %d event(s): %s",
+            event_count,
+            exc,
+        )
+        if isinstance(exc, RateLimitError) or event_count > 0:
+            raise PartialResponseCollectionError(responses=responses, cause=exc) from exc
+        raise
+    logger.debug(
+        "[batch] _collect_final_response_texts_async done: %d event(s) received, "
+        "%d final response(s) collected session=%s",
+        event_count,
+        len(responses),
+        session_id,
+    )
+    return responses
+
+
+def _run_agent_and_collect_responses(
+    runner, session_id: str, content: types.Content
+) -> list[tuple[str, str]]:
+    """Run agent once and return text-bearing final responses from all participating agents."""
+    return asyncio.run(
+        _collect_final_response_texts_async(runner, session_id, content)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Structured findings parsing
+# ---------------------------------------------------------------------------
+
+def _parse_findings_json(text: str) -> object:
+    """Parse a structured findings object from raw text or a fenced JSON block."""
+    last_error: json.JSONDecodeError | None = None
+    for raw in iter_json_candidates(text):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            continue
+    snippet = text.strip()
+    if len(snippet) > 300:
+        snippet = snippet[:300] + "..."
+    if last_error is not None:
+        raise ValueError(
+            "Failed to parse structured findings JSON from agent response. "
+            f"Last JSON error: {last_error}. Response snippet: {snippet!r}"
+        ) from last_error
+    raise ValueError(
+        "Failed to parse structured findings JSON from agent response: "
+        f"no JSON candidate found. Response snippet: {snippet!r}"
+    )
+
+
+def _findings_from_response(response_text: str) -> list[FindingV1]:
+    """Parse response text into validated findings."""
+    raw = _parse_findings_json(response_text)
+    if not isinstance(raw, dict):
+        return []
+    try:
+        return FindingsBatchV1.model_validate(raw).findings
+    except Exception as e:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Failed to parse structured findings response: %r (error: %s)",
+                raw,
+                e,
+                exc_info=True,
+            )
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
+
+def _log_run_complete(
+    trace_id: str,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    files_count: int,
+    findings_count: int,
+    posts_count: int,
+    duration_ms: float,
+) -> None:
+    """Emit structured run_complete log."""
+    logger.info(
+        "run_complete",
+        extra={
+            "trace_id": trace_id,
+            "owner": owner,
+            "repo": repo,
+            "pr_number": pr_number,
+            "files_count": files_count,
+            "findings_count": findings_count,
+            "posts_count": posts_count,
+            "duration_ms": round(duration_ms, 2),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reply-dismissal LLM runner (lives here because it instantiates a Runner)
+# ---------------------------------------------------------------------------
+
+def _run_reply_dismissal_llm(user_message: str) -> str:
+    """Run the tool-free reply-dismissal agent once; return raw model text."""
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+
+    from code_review.agent.reply_dismissal_agent import create_reply_dismissal_agent
+
+    agent = create_reply_dismissal_agent()
+    session_service = InMemorySessionService()
+    runner = Runner(
+        agent=agent,
+        app_name=APP_NAME,
+        session_service=session_service,
+        auto_create_session=True,
+    )
+    session_id = f"reply-dismissal/{uuid.uuid4().hex[:12]}"
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "LLM request (reply-dismissal) session=%s prompt=%s",
+            session_id,
+            user_message,
+        )
+    content = types.Content(role="user", parts=[types.Part(text=user_message)])
+    return _run_agent_and_collect_response(runner, session_id, content)

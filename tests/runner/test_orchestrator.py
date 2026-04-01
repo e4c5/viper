@@ -497,8 +497,8 @@ def test_compute_idempotency_and_maybe_short_circuit_returns_empty_list_when_key
     existing_dicts = [{"path": "a.py", "body": f"<!-- code-review-agent:run={run_id} -->\nDone."}]
     o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
     with (
-        patch("code_review.orchestration.orchestrator.runner_mod._log_run_complete"),
-        patch("code_review.orchestration.orchestrator.runner_mod.observability") as mock_obs,
+        patch("code_review.orchestration.orchestrator._log_run_complete"),
+        patch("code_review.orchestration.orchestrator.observability") as mock_obs,
     ):
         result = o._compute_idempotency_and_maybe_short_circuit(
             cfg, llm_cfg, existing_dicts, "trace", 0.0, MagicMock()
@@ -662,8 +662,8 @@ def test_record_observability_and_build_result_returns_findings_and_emits_log():
     finding = FindingV1(path="a.py", line=1, severity="low", code="X", message="m")
     to_post = [(finding, "fp1")]
     with (
-        patch("code_review.orchestration.orchestrator.runner_mod._log_run_complete") as mock_log,
-        patch("code_review.orchestration.orchestrator.runner_mod.observability") as mock_obs,
+        patch("code_review.orchestration.orchestrator._log_run_complete") as mock_log,
+        patch("code_review.orchestration.orchestrator.observability") as mock_obs,
     ):
         result = o._record_observability_and_build_result(
             "trace-1", 0.0, MagicMock(), ["a.py"], [finding], 1, to_post

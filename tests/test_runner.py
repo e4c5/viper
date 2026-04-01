@@ -378,7 +378,7 @@ def test_format_reply_dismissal_user_message_marks_original_and_triggering_comme
 
 
 @patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
-@patch("code_review.orchestration.orchestrator.runner_mod._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
@@ -1360,7 +1360,7 @@ def test_omit_marker_pr_summary_meets_expectations_when_review_decisions_disable
 
 
 @patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
-@patch("code_review.orchestration.orchestrator.runner_mod._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
@@ -1423,7 +1423,7 @@ def test_run_review_decision_only_reply_dismissal_skips_llm_when_scm_already_add
 
 
 @patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
-@patch("code_review.orchestration.orchestrator.runner_mod._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
@@ -1464,7 +1464,7 @@ def test_run_review_decision_only_reply_dismissal_keeps_gate_when_persistence_fa
 
 
 @patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
-@patch("code_review.orchestration.orchestrator.runner_mod._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
@@ -1498,7 +1498,7 @@ def test_run_review_decision_only_reply_dismissal_agreed_excludes_thread(
 
 
 @patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
-@patch("code_review.orchestration.orchestrator.runner_mod._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
@@ -1548,7 +1548,7 @@ def test_run_review_decision_only_reply_dismissal_agreed_posts_durable_reply_whe
 
 
 @patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
-@patch("code_review.orchestration.orchestrator.runner_mod._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
@@ -1589,7 +1589,7 @@ def test_run_review_decision_only_reply_dismissal_agreed_posts_durable_reply_whe
 
 
 @patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
-@patch("code_review.orchestration.orchestrator.runner_mod._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
@@ -1633,7 +1633,7 @@ def test_run_review_decision_only_reply_dismissal_disagreed_posts_reply(
 
 
 @patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
-@patch("code_review.orchestration.orchestrator.runner_mod._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
@@ -1687,9 +1687,9 @@ def test_run_review_decision_only_reply_dismissal_skips_when_trigger_already_has
     assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
 
 
-@patch("code_review.orchestration.orchestrator.runner_mod.observability.record_reply_dismissal_outcome")
+@patch("code_review.orchestration.orchestrator.observability.record_reply_dismissal_outcome")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
-@patch("code_review.orchestration.orchestrator.runner_mod._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")

@@ -64,7 +64,7 @@ def test_run_review_emits_trace_id_and_run_complete(
         )
 
     with patch(
-        "code_review.orchestration.orchestrator.runner_mod._log_run_complete",
+        "code_review.orchestration.orchestrator._log_run_complete",
         side_effect=capture_run_complete,
     ):
         with patch("google.adk.runners.Runner", return_value=mock_runner_instance):
@@ -135,7 +135,7 @@ def test_run_review_emits_run_complete_on_early_exit(
         )
 
     with patch(
-        "code_review.orchestration.orchestrator.runner_mod._log_run_complete",
+        "code_review.orchestration.orchestrator._log_run_complete",
         side_effect=capture_run_complete,
     ):
         result = run_review("o", "r", 1, head_sha="abc", dry_run=False)

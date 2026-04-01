@@ -112,100 +112,51 @@ try:
 except ValueError:
     DIFF_TOKEN_BUDGET_RATIO = 0.25
 
-
-def _estimate_tokens(text: str) -> int:
-    return _DiffAnalyzer.estimate_tokens(text)
-
-
-def _format_review_prompt_supplement(
-    *,
-    context_brief: str | None,
-    commit_messages: list[str],
-    include_commit_messages: bool,
-    remaining_tokens: int | None = None,
-) -> str:
-    """Extra user-message blocks: commit summaries and distilled external context."""
-    max_chars = _supplement_char_budget(remaining_tokens)
-    if max_chars == 0:
-        return ""
-
-    parts: list[str] = []
-    used_chars = 0
-    if include_commit_messages and commit_messages:
-        commit_block = _build_commit_messages_block(
-            commit_messages=commit_messages,
-            max_chars=max_chars,
-            already_used_chars=used_chars,
-        )
-        if commit_block:
-            parts.append(commit_block)
-            used_chars += len(commit_block)
-    if context_brief:
-        separator_chars = 2 if parts else 0
-        remaining_for_context = _remaining_chars(max_chars, used_chars + separator_chars)
-        trimmed_context = _trim_context_brief(context_brief, remaining_for_context)
-        if trimmed_context:
-            parts.append(trimmed_context)
-    return "\n\n".join(parts) if parts else ""
-
-
-def _supplement_char_budget(remaining_tokens: int | None) -> int | None:
-    # Keep the same rough conversion used by _estimate_tokens.
-    if remaining_tokens is None:
-        return None
-    return max(0, remaining_tokens * 4)
-
-
-def _remaining_chars(max_chars: int | None, used_chars: int) -> int | None:
-    if max_chars is None:
-        return None
-    return max_chars - used_chars
-
-
-def _build_commit_messages_block(
-    *,
-    commit_messages: list[str],
-    max_chars: int | None,
-    already_used_chars: int,
-) -> str:
-    header = "### PR commit messages (subject / first line)\n"
-    lines: list[str] = []
-    local_used = len(header)
-    for msg in commit_messages[:100]:
-        remaining_for_line = _remaining_chars(max_chars, already_used_chars + local_used)
-        if remaining_for_line is not None and remaining_for_line <= 6:
-            break
-        subject = (msg.splitlines()[0] if msg else "").strip()
-        available = (remaining_for_line or 500) - 3
-        subject_cap = min(500, max(0, available))
-        line = f"- {subject[:subject_cap]}"
-        lines.append(line)
-        local_used += len(line) + 1
-    return header + "\n".join(lines) if lines else ""
-
-
-def _trim_context_brief(context_brief: str, remaining_chars: int | None) -> str:
-    if remaining_chars is None:
-        return context_brief
-    if remaining_chars <= 0:
-        return ""
-    if len(context_brief) <= remaining_chars:
-        return context_brief
-    if remaining_chars <= 1:
-        return ""
-    return context_brief[: remaining_chars - 1] + "…"
-
-
-def _normalize_path_for_anchor(file_path: str) -> str:
-    return _DiffAnalyzer.normalize_path(file_path)
-
-
-def _added_lines_in_diff(diff_text: str) -> set[tuple[str, int]]:
-    """Set of (normalized_path, line) for each added line in the diff (for line_type ADDED)."""
-    out: set[tuple[str, int]] = set()
-    for path, new_ln, _ in iter_new_lines(diff_text):
-        out.add((_normalize_path_for_anchor(path), new_ln))
-    return out
+# ---------------------------------------------------------------------------
+# Re-exports from focused submodules (canonical implementations live there).
+# ---------------------------------------------------------------------------
+from code_review.orchestration.prompts import (  # noqa: E402
+    _build_commit_messages_block,
+    _estimate_tokens,
+    _format_review_prompt_supplement,
+    _remaining_chars,
+    _supplement_char_budget,
+    _trim_context_brief,
+)
+from code_review.orchestration.idempotency import _idempotency_key_seen_in_comments  # noqa: E402
+from code_review.orchestration.posting import (  # noqa: E402
+    CommentPoster,
+    _added_lines_in_diff,
+    _generate_auto_pr_description,
+    _normalize_path_for_anchor,
+    _omit_marker_pr_summary_visible_text,
+    _optional_quality_gate_summary_suffix,
+)
+from code_review.orchestration.events import (  # noqa: E402
+    ReplyDismissalContext,
+    _event_actor_matches_bot_id,
+    _event_actor_matches_bot_login,
+    _event_actor_matches_bot_slug,
+    _event_actor_matches_bot_uuid_fragments,
+    _normalize_scm_identity_fragment,
+    _reply_added_event_authored_by_bot,
+    _reply_dismissal_diff_context_for_thread,
+    _reply_dismissal_entry_is_bot_authored,
+    _reply_dismissal_entry_lines,
+    _reply_dismissal_entry_tags,
+    _reply_dismissal_scm_already_addressed_reason,
+)
+from code_review.orchestration.runner_utils import (  # noqa: E402
+    PartialResponseCollectionError,
+    _bypass_adk_templating,
+    _findings_from_response,
+    _log_run_complete,
+    _parse_findings_json,
+    _run_agent_and_collect_response,
+    _run_agent_and_collect_responses,
+    _run_reply_dismissal_llm,
+    _suppress_ssl_teardown_errors,
+)
 
 
 def _diff_visible_new_lines(diff_text: str) -> set[tuple[str, int]]:
@@ -251,19 +202,6 @@ def _build_idempotency_key(
     )
 
 
-def _idempotency_key_seen_in_comments(comments: list, key: str) -> bool:
-    """Return True if any comment body contains run=<key> in code-review-agent marker."""
-    for c in comments:
-        body = getattr(c, "body", None) or (c.get("body") if isinstance(c, dict) else "")
-        if body:
-            parsed = parse_marker_from_comment_body(body)
-            if parsed.get("run") == key:
-                return True
-    return False
-
-
-
-
 def _get_file_lines_by_path(
     provider, owner: str, repo: str, ref: str, paths: list[str]
 ) -> dict[str, list[str]]:
@@ -287,86 +225,14 @@ def _get_file_lines_by_path(
     return out
 
 
-def _generate_auto_pr_description(title: str, paths: list[str], max_files: int = 10) -> str:
-    """
-    Build a non-empty, deterministic PR description when the user did not add one.
-
-    Uses the title and the list of changed file paths so the PR has a useful
-    description. Guarantees a non-empty string so it is safe to set as the PR body.
-    """
-    title_str = title.strip() or "Untitled change"
-    unique_paths = list(dict.fromkeys(paths))
-    shown_paths = unique_paths[:max_files]
-    files_part = ", ".join(f"`{p}`" for p in shown_paths) if shown_paths else "no files detected"
-    more_suffix = ""
-    if len(unique_paths) > max_files:
-        more_suffix = f", and {len(unique_paths) - max_files} more file(s)"
-    out = (
-        f"**Title**: {title_str}\n\n"
-        f"This pull request updates {len(unique_paths)} file(s): {files_part}{more_suffix}."
-    )
-    return out.strip() or "Auto-generated summary."
-
-
 def _maybe_post_started_review_comment(
     provider,
     pr_ctx: PRContext,
     pr_info,
     paths: list[str],
 ) -> None:
-    """
-    When the user has not added a description to the PR: generate a non-empty
-    description, update the PR with it when the SCM API allows, then post
-    general notes about the PR and the review.
-    """
-    if not pr_info:
-        return
-    if not paths:
-        return
-    description = (getattr(pr_info, "description", "") or "").strip()
-    if description:
-        return
-    generated = _generate_auto_pr_description(getattr(pr_info, "title", "") or "", paths)
-    if not generated or not generated.strip():
-        return
-    # 1) Update the PR description when the SCM API allows it.
-    description_updated = False
-    try:
-        provider.update_pr_description(pr_ctx.owner, pr_ctx.repo, pr_ctx.pr_number, generated)
-        description_updated = True
-    except NotImplementedError:
-        pass
-    except Exception as e:  # pragma: no cover - defensive
-        logger.warning(
-            "update_pr_description failed owner=%s repo=%s pr_number=%s: %s",
-            pr_ctx.owner,
-            pr_ctx.repo,
-            pr_ctx.pr_number,
-            e,
-        )
-    # 2) Post general notes about the PR and the review.
-    if description_updated:
-        notes = (
-            "Viper has started a review of this pull request and updated the "
-            "PR description with an auto-generated summary."
-        )
-    else:
-        notes = (
-            "Viper has started a review of this pull request.\n\n"
-            "The PR had no description and this SCM does not support updating it; "
-            "below is the summary we generated for context:\n\n"
-            f"{generated}"
-        )
-    try:
-        provider.post_pr_summary_comment(pr_ctx.owner, pr_ctx.repo, pr_ctx.pr_number, notes)
-    except Exception as e:  # pragma: no cover - defensive; providers should implement this
-        logger.warning(
-            "post_pr_summary_comment (started review) failed owner=%s repo=%s pr_number=%s: %s",
-            pr_ctx.owner,
-            pr_ctx.repo,
-            pr_ctx.pr_number,
-            e,
-        )
+    """Compatibility shim — delegates to CommentPoster."""
+    CommentPoster(provider, pr_ctx).post_started_review_comment(pr_info, paths)
 
 
 def _resolve_stale_comments_if_supported(
@@ -376,27 +242,8 @@ def _resolve_stale_comments_if_supported(
     to_post: list[tuple[FindingV1, str]],
     dry_run: bool,
 ) -> None:
-    """If provider supports it, resolve comments whose fingerprint is no longer in to_post."""
-    if not (provider.capabilities().resolvable_comments and pr_ctx.head_sha and not dry_run):
-        return
-    new_fps = {fp for _, fp in to_post if fp}
-    for c in existing:
-        body = getattr(c, "body", "") or ""
-        parsed = parse_marker_from_comment_body(body)
-        fp_old = parsed.get("fingerprint")
-        if not fp_old or fp_old in new_fps:
-            continue
-        try:
-            provider.resolve_comment(pr_ctx.owner, pr_ctx.repo, c.id)
-        except Exception as e:
-            logger.warning(
-                "resolve_comment failed owner=%s repo=%s pr_number=%s comment_id=%s: %s",
-                pr_ctx.owner,
-                pr_ctx.repo,
-                pr_ctx.pr_number,
-                getattr(c, "id", ""),
-                e,
-            )
+    """Compatibility shim — delegates to CommentPoster."""
+    CommentPoster(provider, pr_ctx).resolve_stale(existing, to_post, dry_run)
 
 
 def _post_inline_comments(
@@ -408,149 +255,19 @@ def _post_inline_comments(
     llm_cfg,
     full_diff: str = "",
 ) -> int:
-    """Build inline comments and post each one individually. Returns successful post count."""
-    caps = provider.capabilities()
-    run_id = pr_ctx.idempotency_key(cfg, llm_cfg, incremental_base_sha)
-    added_set = _added_lines_in_diff(full_diff) if full_diff else set()
-    comments: list[InlineComment] = []
-    for f, fp in to_post:
-        body = finding_to_comment_body(f, use_collapsible_prompt=caps.markup_supports_collapsible)
-        if fp and not caps.omit_fingerprint_marker_in_body:
-            body = format_comment_body_with_marker(
-                body,
-                fp,
-                AGENT_VERSION,
-                run_id=run_id,
-                marker_at_end=not caps.markup_hides_html_comment,
-            )
-        line_type: str | None = None
-        if added_set:
-            norm_path = _normalize_path_for_anchor(f.path)
-            line_type = "ADDED" if (norm_path, f.line) in added_set else "CONTEXT"
-        comments.append(
-            InlineComment(
-                path=f.path,
-                line=f.line,
-                body=body,
-                end_line=f.end_line,
-                suggested_patch=f.suggested_patch,
-                line_type=line_type,
-            )
-        )
-    return _post_comments_one_by_one(provider, pr_ctx, comments)
+    """Compatibility shim — delegates to CommentPoster."""
+    return CommentPoster(provider, pr_ctx).post_inline(
+        incremental_base_sha, to_post, cfg, llm_cfg, full_diff=full_diff
+    )
 
 
 def _post_comments_one_by_one(
     provider,
     pr_ctx: PRContext,
-    comments: list[InlineComment],
+    comments: list,
 ) -> int:
-    """Post each comment individually; skip (warn) on failure. Returns successful count.
-
-    No fallback to PR summary comments: mirrors the current inline-posting behaviour
-    where a failed inline comment is simply skipped and the next one is attempted.
-    """
-    count = 0
-    for c in comments:
-        try:
-            # Use post_review_comments([c]) rather than post_review_comment() so that
-            # provider-specific fields on the InlineComment (e.g. line_type, used by
-            # Bitbucket Server for lineType="ADDED"|"CONTEXT") are preserved.
-            # post_review_comment() in the base class reconstructs InlineComment without
-            # these fields, causing Bitbucket Server to default to lineType="ADDED" for
-            # every line — which results in HTTP 409 for context (unchanged) lines.
-            provider.post_review_comments(
-                pr_ctx.owner,
-                pr_ctx.repo,
-                pr_ctx.pr_number,
-                [c],
-                head_sha=pr_ctx.head_sha,
-            )
-            count += 1
-        except Exception as e:
-            logger.warning(
-                "post_review_comment failed owner=%s repo=%s pr_number=%s path=%s line=%s: %s",
-                pr_ctx.owner,
-                pr_ctx.repo,
-                pr_ctx.pr_number,
-                c.path,
-                c.line,
-                e,
-            )
-    return count
-
-
-def _omit_marker_pr_summary_visible_text(
-    *,
-    findings_planned: int,
-    successful_inline_posts: int,
-    cfg,
-    provider,
-    gate_outcome: QualityGateReviewOutcome,
-) -> str:
-    """Human-readable PR summary for providers that omit inline HTML markers (e.g. Bitbucket)."""
-    lines: list[str] = [
-        "**Viper** (automated code review) finished for this pull request at the current revision."
-    ]
-    if findings_planned == 0:
-        lines.append(
-            "It **did not flag new issues** that require inline comments in this run "
-            "(within the reviewed diff scope and your ignore rules)."
-        )
-        gate_in_summary = bool(getattr(cfg, "review_decision_enabled", False)) and (
-            provider.capabilities().supports_review_decisions
-        )
-        if not gate_in_summary or gate_outcome.decision != "REQUEST_CHANGES":
-            lines.append(
-                "**From this automated pass, the change appears to meet expectations** "
-                "for the areas reviewed."
-            )
-    else:
-        lines.append(f"It **identified {findings_planned} issue(s)** worth addressing on the diff.")
-        if successful_inline_posts >= findings_planned:
-            lines.append(f"**Posted {successful_inline_posts} inline comment(s)** on the diff.")
-        elif successful_inline_posts > 0:
-            lines.append(
-                f"**Posted {successful_inline_posts} of {findings_planned} inline comment(s)**; "
-                "some could not be anchored (see CI logs)."
-            )
-        else:
-            lines.append(
-                "**Could not post inline comments** (e.g. anchor conflicts); see CI logs. "
-                "Re-run after updating the PR or fixing the reported problems."
-            )
-
-    extra = _optional_quality_gate_summary_suffix(provider, cfg, gate_outcome)
-    if extra:
-        lines.append(extra)
-    return "\n\n".join(lines)
-
-
-def _optional_quality_gate_summary_suffix(
-    provider,
-    cfg,
-    gate_outcome: QualityGateReviewOutcome,
-) -> str:
-    """Append threshold / merge-gate wording when review decisions are enabled.
-
-    *gate_outcome* must be the same snapshot used for :func:`_maybe_submit_review_decision`.
-    """
-    if not bool(getattr(cfg, "review_decision_enabled", False)):
-        return ""
-    if not provider.capabilities().supports_review_decisions:
-        return ""
-    high_threshold = int(getattr(cfg, "review_decision_high_threshold", 1))
-    medium_threshold = int(getattr(cfg, "review_decision_medium_threshold", 3))
-    if gate_outcome.decision == "REQUEST_CHANGES":
-        return (
-            f"Given your configured thresholds, Viper **suggests this PR needs work** before merge "
-            f"(open high={gate_outcome.high_count} vs threshold {high_threshold}, "
-            f"open medium={gate_outcome.medium_count} vs threshold {medium_threshold})."
-        )
-    return (
-        f"Given your configured thresholds, this PR **passes Viper's automated merge gate** "
-        f"(open high={gate_outcome.high_count}, open medium={gate_outcome.medium_count})."
-    )
+    """Compatibility shim — delegates to CommentPoster._post_comments_one_by_one."""
+    return CommentPoster(provider, pr_ctx)._post_comments_one_by_one(comments)
 
 
 def _post_omit_marker_pr_summary_comment(
@@ -565,50 +282,16 @@ def _post_omit_marker_pr_summary_comment(
     gate_outcome: QualityGateReviewOutcome,
     include_run_marker: bool = True,
 ) -> None:
-    """Post a PR-level summary for omit-marker providers; optionally attach the ``run=`` id marker.
-
-    The run marker must only be included when every planned inline comment was posted (or
-    there were none to post). Otherwise a later CI run would short-circuit on idempotency
-    and never retry failed inline posts.
-
-    When *include_run_marker* is False, only the visible summary is posted (still useful
-    for operators); no idempotency short-circuit until a fully successful post run.
-    """
-    caps = provider.capabilities()
-    visible = _omit_marker_pr_summary_visible_text(
+    """Compatibility shim — delegates to CommentPoster."""
+    CommentPoster(provider, pr_ctx).post_omit_marker_summary(
+        cfg,
+        llm_cfg,
+        incremental_base_sha,
         findings_planned=findings_planned,
         successful_inline_posts=successful_inline_posts,
-        cfg=cfg,
-        provider=provider,
         gate_outcome=gate_outcome,
+        include_run_marker=include_run_marker,
     )
-    if include_run_marker:
-        run_id = pr_ctx.idempotency_key(cfg, llm_cfg, incremental_base_sha)
-        use_linkref = getattr(caps, "embed_agent_marker_as_commonmark_linkref", None) is True
-        body = format_comment_body_with_marker(
-            visible,
-            "",
-            AGENT_VERSION,
-            run_id=run_id,
-            marker_at_end=not caps.markup_hides_html_comment,
-            use_commonmark_linkref=use_linkref,
-        )
-    else:
-        body = visible
-    try:
-        provider.post_pr_summary_comment(pr_ctx.owner, pr_ctx.repo, pr_ctx.pr_number, body)
-    except Exception as e:
-        logger.warning(
-            "_post_omit_marker_pr_summary_comment failed owner=%s repo=%s pr_number=%s: %s",
-            pr_ctx.owner,
-            pr_ctx.repo,
-            pr_ctx.pr_number,
-            e,
-        )
-
-
-
-
 
 
 from code_review.quality.gate import (  # noqa: E402
@@ -620,12 +303,10 @@ from code_review.quality.outcome import (  # noqa: E402
 )
 
 
-@dataclass(frozen=True)
-class PartialResponseCollectionError(Exception):
-    """Raised when a workflow emits some final responses before failing."""
-
-    responses: list[tuple[str, str]]
-    cause: Exception
+# PartialResponseCollectionError, _parse_findings_json, _findings_from_response,
+# _log_run_complete, _suppress_ssl_teardown_errors, _run_agent_and_collect_response,
+# _bypass_adk_templating, _run_agent_and_collect_responses, _run_reply_dismissal_llm
+# are all re-exported from orchestration.runner_utils above.
 
 
 def _resolve_head_sha_for_review_decision_submission(
@@ -768,524 +449,19 @@ def _fingerprint_for_finding(
     return build_fingerprint(f.path, content_hash_val, f.code, anchor or None)
 
 
-def _parse_findings_json(text: str) -> object:
-    """Parse a structured findings object from raw text or a fenced JSON block."""
-    last_error: json.JSONDecodeError | None = None
-    for raw in iter_json_candidates(text):
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as exc:
-            last_error = exc
-            continue
-    snippet = text.strip()
-    if len(snippet) > 300:
-        snippet = snippet[:300] + "..."
-    if last_error is not None:
-        raise ValueError(
-            "Failed to parse structured findings JSON from agent response. "
-            f"Last JSON error: {last_error}. Response snippet: {snippet!r}"
-        ) from last_error
-    raise ValueError(
-        "Failed to parse structured findings JSON from agent response: "
-        f"no JSON candidate found. Response snippet: {snippet!r}"
-    )
+# _normalize_scm_identity_fragment, _event_actor_matches_*, _reply_added_event_authored_by_bot,
+# _reply_dismissal_entry_*, _reply_dismissal_{original,existing,scm,diff}_*, ReplyDismissalContext
+# are all re-exported from orchestration.events above.
 
-
-def _findings_from_response(response_text: str) -> list[FindingV1]:
-    """Parse response text into validated findings."""
-    raw = _parse_findings_json(response_text)
-    if not isinstance(raw, dict):
-        return []
-    try:
-        return FindingsBatchV1.model_validate(raw).findings
-    except Exception as e:
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "Failed to parse structured findings response: %r (error: %s)",
-                raw,
-                e,
-                exc_info=True,
-            )
-        return []
-
-
-def _log_run_complete(
-    trace_id: str,
-    owner: str,
-    repo: str,
-    pr_number: int,
-    files_count: int,
-    findings_count: int,
-    posts_count: int,
-    duration_ms: float,
-) -> None:
-    """Emit structured run_complete log (Phase 4.3)."""
-    logger.info(
-        "run_complete",
-        extra={
-            "trace_id": trace_id,
-            "owner": owner,
-            "repo": repo,
-            "pr_number": pr_number,
-            "files_count": files_count,
-            "findings_count": findings_count,
-            "posts_count": posts_count,
-            "duration_ms": round(duration_ms, 2),
-        },
-    )
-
-
-def _suppress_ssl_teardown_errors(loop, context: dict) -> None:
-    """Asyncio exception handler that silences known SSL-transport teardown noise.
-
-    When asyncio.run() closes the event loop the Google GenAI SDK's HTTPS
-    connections may still be flushing their SSL write-backlog.  The underlying
-    socket file-descriptor has already been closed, so the write raises
-    ``OSError: [Errno 9] Bad file descriptor``, which asyncio turns into a
-    ``RuntimeError: Event loop is closed``.  Neither of these is actionable —
-    the review completed successfully — so we drop them here and fall through
-    to the default handler for everything else.
-    """
-    exc = context.get("exception")
-    msg = context.get("message", "")
-    _teardown_msg = "SSL" in msg or "Fatal write error" in msg or "write backlog" in msg
-    _teardown_exc = (isinstance(exc, OSError) and getattr(exc, "errno", None) == 9) or (
-        isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc)
-    )
-    if _teardown_msg and _teardown_exc:
-        return
-    loop.default_exception_handler(context)
-
-
-async def _collect_response_async(runner, session_id: str, content: types.Content) -> str:
-    """Run agent once via run_async and return concatenated final response text.
-
-    When CODE_REVIEW_LOG_LEVEL=DEBUG, log the raw final text we received from the LLM.
-    """
-    # Install the exception handler early so it covers SSL teardown that occurs
-    # when asyncio.run() calls loop.close() after this coroutine returns.
-    asyncio.get_running_loop().set_exception_handler(_suppress_ssl_teardown_errors)
-
-    parts: list[str] = []
-    async for event in runner.run_async(
-        user_id=USER_ID,
-        session_id=session_id,
-        new_message=content,
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            for part in event.content.parts:
-                # Only use text parts; skip function_call etc. to avoid SDK warning
-                if getattr(part, "text", None):
-                    parts.append(part.text)
-    text = "\n".join(parts)
-    # Optional: also echo raw response to stdout when explicitly requested.
-    # This is controlled by CODE_REVIEW_PRINT_RAW_RESPONSE=1 for ad-hoc debugging.
-    if os.getenv("CODE_REVIEW_PRINT_RAW_RESPONSE", "").strip() in ("1", "true", "TRUE"):
-        print(f"RAW LLM RESPONSE (session={session_id}):\n{text}")
-    return text
-
-
-def _run_agent_and_collect_response(
-    runner, session_id: str, content: types.Content
-) -> str:
-    """Run agent once and return concatenated final response text (uses async API)."""
-    return asyncio.run(_collect_response_async(runner, session_id, content))
-
-
-def _bypass_adk_templating(agent: Any) -> None:
-    """
-    Recursively wrap agent instructions in a provider that bypasses ADK templating.
-
-    ADK's inject_session_state (instructions_utils.py) identifies all {Identifier}
-    patterns in agent instructions and attempts to substitute them from session state,
-    crashing with KeyError if the variable is missing. This is problematic for
-    code review when instructions contain raw diffs (e.g. {HOME} in a path).
-
-    By providing a callable for the instruction field, ADK's canonical_instruction
-    (llm_agent.py) returns bypass_state_injection=True, which skips the injection pass.
-    """
-    # Recursively handle sub-agents (e.g. in a SequentialAgent)
-    sub_agents = getattr(agent, "sub_agents", [])
-    for sa in sub_agents:
-        _bypass_adk_templating(sa)
-
-    # Wrap the instruction if it exists and is a string (typically an LlmAgent)
-    instruction = getattr(agent, "instruction", None)
-    if isinstance(instruction, str):
-        instr_str = instruction
-
-        async def _instr_provider(_: ReadonlyContext) -> str:
-            return instr_str
-
-        agent.instruction = _instr_provider
-
-    # Also handle global_instruction if it exists
-    global_instruction = getattr(agent, "global_instruction", None)
-    if isinstance(global_instruction, str):
-        global_str = global_instruction
-
-        async def _global_instr_provider(_: ReadonlyContext) -> str:
-            return global_str
-
-        agent.global_instruction = _global_instr_provider
-
-
-async def _collect_final_response_texts_async(
-    runner, session_id: str, content: types.Content
-) -> list[tuple[str, str]]:
-    """Run agent once and collect text-bearing final responses per participating agent."""
-    asyncio.get_running_loop().set_exception_handler(_suppress_ssl_teardown_errors)
-
-    logger.debug(
-        "[batch] _collect_final_response_texts_async starting session=%s",
-        session_id,
-    )
-    # Bypass ADK's aggressive instruction template substitution globally.
-    _bypass_adk_templating(runner.agent)
-
-    responses: list[tuple[str, str]] = []
-    event_count = 0
-    try:
-        async for event in runner.run_async(
-            user_id=USER_ID,
-            session_id=session_id,
-            new_message=content,
-        ):
-            event_count += 1
-            author = getattr(event, "author", "<unknown>")
-            is_final = event.is_final_response()
-            has_content = bool(event.content and event.content.parts)
-            # Determine a compact type label for what kind of parts this event carries.
-            part_types: list[str] = []
-            if event.content and event.content.parts:
-                for p in event.content.parts:
-                    if getattr(p, "text", None):
-                        part_types.append("text")
-                    elif getattr(p, "function_call", None):
-                        fc = p.function_call
-                        part_types.append(f"fn_call:{getattr(fc, 'name', '?')}")
-                    elif getattr(p, "function_response", None):
-                        fr = p.function_response
-                        part_types.append(f"fn_resp:{getattr(fr, 'name', '?')}")
-                    else:
-                        part_types.append("other")
-            logger.debug(
-                "[batch] event #%d author=%r is_final=%s has_content=%s parts=%s",
-                event_count,
-                author,
-                is_final,
-                has_content,
-                part_types or "[]",
-            )
-            if is_final and has_content:
-                texts = [part.text for part in event.content.parts if getattr(part, "text", None)]
-                if texts:
-                    logger.debug(
-                        "[batch] collected final response from author=%r text_len=%d",
-                        author,
-                        sum(len(t) for t in texts),
-                    )
-                    responses.append((author, "\n".join(texts)))
-    except Exception as exc:
-        logger.debug(
-            "[batch] _collect_final_response_texts_async raised after %d event(s): %s",
-            event_count,
-            exc,
-        )
-        # Wrap in PartialResponseCollectionError only when the exception is one the
-        # caller knows how to recover from (RateLimitError), or when it occurred
-        # mid-stream (after at least one event), meaning a partial result may have
-        # been collected.  Pre-LLM setup errors (e.g. ADK template KeyError, auth
-        # failures) that fire before any events are re-raised directly so callers see
-        # the true exception type rather than a misleading "partial run" wrapper.
-        if isinstance(exc, RateLimitError) or event_count > 0:
-            raise PartialResponseCollectionError(responses=responses, cause=exc) from exc
-        raise
-    logger.debug(
-        "[batch] _collect_final_response_texts_async done: %d event(s) received, "
-        "%d final response(s) collected session=%s",
-        event_count,
-        len(responses),
-        session_id,
-    )
-    return responses
-
-
-def _run_agent_and_collect_responses(
-    runner, session_id: str, content: types.Content
-) -> list[tuple[str, str]]:
-    """Run agent once and return text-bearing final responses from all participating agents."""
-    return asyncio.run(
-        _collect_final_response_texts_async(
-            runner,
-            session_id,
-            content,
-        )
-    )
-
-
-def _normalize_scm_identity_fragment(value: str) -> str:
-    """Lowercase and strip braces/spaces for comparing SCM user/uuid strings."""
-    return (value or "").strip().lower().replace("{", "").replace("}", "")
-
-
-def _event_actor_matches_bot_login(actor_login: str, bot: BotAttributionIdentity) -> bool:
-    bot_login = (bot.login or "").strip()
-    return bool(bot_login and actor_login and actor_login.lower() == bot_login.lower())
-
-
-def _event_actor_matches_bot_id(actor_id: str, bot: BotAttributionIdentity) -> bool:
-    bot_id_str = (bot.id_str or "").strip()
-    return bool(bot_id_str and actor_id and actor_id == bot_id_str)
-
-
-def _event_actor_matches_bot_slug(actor_login: str, bot: BotAttributionIdentity) -> bool:
-    bot_slug = (bot.slug or "").strip()
-    return bool(bot_slug and actor_login and actor_login.lower() == bot_slug.lower())
-
-
-def _event_actor_matches_bot_uuid_fragments(
-    actor_id: str, actor_login: str, bot: BotAttributionIdentity
-) -> bool:
-    bot_uuid = _normalize_scm_identity_fragment(bot.uuid)
-    if not bot_uuid:
-        return False
-    actor_uuid = _normalize_scm_identity_fragment(actor_id)
-    if actor_uuid and bot_uuid == actor_uuid:
-        return True
-    actor_login_uuid = _normalize_scm_identity_fragment(actor_login)
-    return bool(actor_login_uuid and bot_uuid == actor_login_uuid)
-
-
-def _reply_added_event_authored_by_bot(
-    event: ReviewDecisionEventContext, bot: BotAttributionIdentity
-) -> bool:
-    """True when event actor fields identify the same user as the review token (bot)."""
-    if not bot.is_resolved():
-        return False
-    actor_login = (event.actor_login or "").strip()
-    actor_id = (event.actor_id or "").strip()
-    if not actor_login and not actor_id:
-        return False
-    if _event_actor_matches_bot_login(actor_login, bot):
-        return True
-    if _event_actor_matches_bot_id(actor_id, bot):
-        return True
-    if _event_actor_matches_bot_slug(actor_login, bot):
-        return True
-    return _event_actor_matches_bot_uuid_fragments(actor_id, actor_login, bot)
-
-
-def _reply_dismissal_entry_is_bot_authored(
-    author_login: str,
-    bot: BotAttributionIdentity,
-) -> bool:
-    """Best-effort match for thread entries, which usually expose only a login/slug-like field."""
-    actor_login = (author_login or "").strip()
-    if not actor_login or not bot.is_resolved():
-        return False
-    if _event_actor_matches_bot_login(actor_login, bot):
-        return True
-    if _event_actor_matches_bot_slug(actor_login, bot):
-        return True
-    return _event_actor_matches_bot_uuid_fragments("", actor_login, bot)
-
-
-def _reply_dismissal_original_comment_id(
-    ctx: ReviewThreadDismissalContext,
-    bot: BotAttributionIdentity,
-) -> str:
-    """Prefer the first bot-authored entry; otherwise fall back to the first thread entry."""
-    for ent in ctx.entries:
-        if _reply_dismissal_entry_is_bot_authored(ent.author_login, bot):
-            return (ent.comment_id or "").strip()
-    if ctx.entries:
-        return (ctx.entries[0].comment_id or "").strip()
-    return ""
-
-
-def _reply_dismissal_original_comment_severity(
-    ctx: ReviewThreadDismissalContext,
-    bot: BotAttributionIdentity,
-) -> str:
-    """Infer severity from the original automated review comment body when possible."""
-    original_comment_id = _reply_dismissal_original_comment_id(ctx, bot)
-    for ent in ctx.entries:
-        if (ent.comment_id or "").strip() == original_comment_id:
-            return infer_severity_from_comment_body(ent.body or "")
-    if ctx.entries:
-        return infer_severity_from_comment_body(ctx.entries[0].body or "")
-    return "unknown"
-
-
-def _reply_dismissal_existing_bot_reply_after_trigger(
-    ctx: ReviewThreadDismissalContext,
-    bot: BotAttributionIdentity,
-    triggering_comment_id: str,
-):
-    """Return a later bot-authored thread entry when this trigger was already handled."""
-    triggered_comment_id = (triggering_comment_id or "").strip()
-    if not triggered_comment_id:
-        return None
-    seen_trigger = False
-    for ent in ctx.entries:
-        cid = (ent.comment_id or "").strip()
-        if cid and cid == triggered_comment_id:
-            seen_trigger = True
-            continue
-        if seen_trigger and _reply_dismissal_entry_is_bot_authored(ent.author_login, bot):
-            return ent
-    return None
-
-
-def _reply_dismissal_scm_already_addressed_reason(
-    ctx: ReviewThreadDismissalContext,
-) -> str:
-    """Provider-supplied reason when SCM already indicates the concern is addressed."""
-    if not bool(getattr(ctx, "scm_already_addressed", False)):
-        return ""
-    return (getattr(ctx, "scm_already_addressed_reason", "") or "").strip() or "scm_state"
-
-
-def _reply_dismissal_diff_context_for_thread(
-    full_diff: str,
-    ctx: ReviewThreadDismissalContext,
-) -> str:
-    """Return an annotated diff snippet for the thread's anchored file/line when available."""
-    path = (ctx.path or "").strip()
-    if not full_diff or not path:
-        return ""
-    line = int(ctx.line or 0)
-    diff_text = get_diff_hunk_for_line(full_diff, path, line) if line > 0 else None
-    if not diff_text:
-        diff_text = unified_diff_for_path(full_diff, path)
-    diff_text = (diff_text or "").strip()
-    if not diff_text:
-        return ""
-    annotated = annotate_diff_with_line_numbers(diff_text)
-    if len(annotated) > 12_000:
-        annotated = annotated[:11_999] + "…"
-    lines = [
-        "",
-        "Relevant PR diff context:",
-        f"Anchored file: {path}",
-    ]
-    if line > 0:
-        lines.append(f"Anchored line: {line}")
-    lines.extend(
-        [
-            "",
-            "```diff",
-            annotated,
-            "```",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def _reply_dismissal_entry_tags(
-    ent,
-    *,
-    original_comment_id: str,
-    triggered_comment_id: str,
-    bot: BotAttributionIdentity,
-) -> list[str]:
-    tags: list[str] = []
-    cid = (ent.comment_id or "").strip()
-    if cid and cid == original_comment_id:
-        tags.append("original automated review comment")
-    if cid and cid == triggered_comment_id:
-        tags.append("triggering human reply")
-    if _reply_dismissal_entry_is_bot_authored(ent.author_login, bot):
-        tags.append("bot-authored")
-    return tags
-
-
-def _reply_dismissal_entry_lines(
-    ent,
-    index: int,
-    *,
-    original_comment_id: str,
-    triggered_comment_id: str,
-    bot: BotAttributionIdentity,
-) -> list[str]:
-    lines = [f"--- Comment {index} ---"]
-    tags = _reply_dismissal_entry_tags(
-        ent,
-        original_comment_id=original_comment_id,
-        triggered_comment_id=triggered_comment_id,
-        bot=bot,
-    )
-    cid = (ent.comment_id or "").strip()
-    if tags:
-        lines.append(f"Role: {', '.join(tags)}")
-    if cid:
-        lines.append(f"Comment id: {cid}")
-    lines.append(f"Author: {(ent.author_login or '').strip() or '(unknown)'}")
-    lines.append(ent.body or "")
-    lines.append("")
-    return lines
-
-
+# _format_reply_dismissal_user_message is aliased below for backward compatibility.
 def _format_reply_dismissal_user_message(
-    ctx: ReviewThreadDismissalContext,
-    bot: BotAttributionIdentity,
+    ctx,
+    bot,
     triggering_comment_id: str,
     diff_context: str = "",
 ) -> str:
-    """Build the user message for the reply-dismissal agent."""
-    who = (bot.login or bot.slug or bot.id_str or bot.uuid or "").strip() or "(unknown)"
-    original_comment_id = _reply_dismissal_original_comment_id(ctx, bot)
-    original_comment_severity = _reply_dismissal_original_comment_severity(ctx, bot)
-    triggered_comment_id = (triggering_comment_id or "").strip()
-    lines = [
-        "Classify this single pull-request review thread.",
-        f"Automated reviewer identity hint (token user): {who}",
-        f"Original automated review comment id: {original_comment_id or '(unknown)'}",
-        f"Original automated review comment severity: {original_comment_severity}",
-        f"Triggering human reply comment id: {triggered_comment_id or '(unknown)'}",
-        "",
-        "Thread comments in chronological order:",
-    ]
-    for i, ent in enumerate(ctx.entries, start=1):
-        lines.extend(
-            _reply_dismissal_entry_lines(
-                ent,
-                i,
-                original_comment_id=original_comment_id,
-                triggered_comment_id=triggered_comment_id,
-                bot=bot,
-            )
-        )
-    if diff_context:
-        lines.append(diff_context)
-    return "\n".join(lines)
-
-
-def _run_reply_dismissal_llm(user_message: str) -> str:
-    """Run the tool-free reply-dismissal agent once; return raw model text."""
-    from google.adk.runners import Runner
-    from google.adk.sessions import InMemorySessionService
-
-    from code_review.agent.reply_dismissal_agent import create_reply_dismissal_agent
-
-    agent = create_reply_dismissal_agent()
-    session_service = InMemorySessionService()
-    runner = Runner(
-        agent=agent,
-        app_name=APP_NAME,
-        session_service=session_service,
-        auto_create_session=True,
-    )
-    session_id = f"reply-dismissal/{uuid.uuid4().hex[:12]}"
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(
-            "LLM request (reply-dismissal) session=%s prompt=%s",
-            session_id,
-            user_message,
-        )
-    content = types.Content(role="user", parts=[types.Part(text=user_message)])
-    return _run_agent_and_collect_response(runner, session_id, content)
+    """Compatibility shim — delegates to ReplyDismissalContext.format_user_message."""
+    return ReplyDismissalContext(ctx, bot).format_user_message(triggering_comment_id, diff_context)
 
 
 __all__ = [

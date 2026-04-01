@@ -1,13 +1,35 @@
 from __future__ import annotations
 
+import logging
+import time
+import uuid
+from typing import Any
+
+from code_review import observability
 from code_review import orchestration_deps as runner_mod
 from code_review.batching import ReviewBatch, build_review_batch_budget
 from code_review.comments.manager import CommentManager
 from code_review.models import PRContext
 from code_review.orchestration import execution as execution_mod
+from code_review.orchestration.events import (
+    ReplyDismissalContext,
+    _reply_added_event_authored_by_bot,
+    _reply_dismissal_diff_context_for_thread,
+    _reply_dismissal_scm_already_addressed_reason,
+)
 from code_review.orchestration.filter import ReviewFilter
+from code_review.orchestration.idempotency import _idempotency_key_seen_in_comments
+from code_review.orchestration.posting import CommentPoster
+from code_review.orchestration.runner_utils import _log_run_complete, _run_reply_dismissal_llm
+from code_review.providers.base import BotAttributionIdentity, RateLimitError
 from code_review.quality.gate import QualityGate
 from code_review.refinement.pipeline import FindingRefinementPipeline
+from code_review.schemas.findings import FindingV1
+from code_review.schemas.reply_dismissal import ReplyDismissalVerdictV1
+from code_review.schemas.review_decision_event import ReviewDecisionEventContext
+from code_review.schemas.review_thread_dismissal import ReviewThreadDismissalContext
+
+logger = logging.getLogger(__name__)
 
 _CONTEXT_TAG = "<context>"
 
@@ -28,7 +50,7 @@ class ReviewOrchestrator:
         review_decision_high_threshold: int | None = None,
         review_decision_medium_threshold: int | None = None,
         review_decision_only: bool = False,
-        event_context: runner_mod.ReviewDecisionEventContext | None = None,
+        event_context: ReviewDecisionEventContext | None = None,
     ):
         self.pr_ctx = PRContext(owner, repo, pr_number, head_sha)
         self.dry_run = dry_run
@@ -93,7 +115,7 @@ class ReviewOrchestrator:
         trace_id: str,
         start_time: float,
         run_handle,
-    ) -> list[runner_mod.FindingV1] | None:
+    ) -> list[FindingV1] | None:
         """Delegate to ReviewFilter; emit observability and return [] if skip, else None."""
         if not cfg.skip_label and not cfg.skip_title_pattern:
             return None
@@ -101,11 +123,11 @@ class ReviewOrchestrator:
         skip_reason = ReviewFilter().should_skip(pr_info, cfg)
         if skip_reason is None:
             return None
-        _duration_ms = (runner_mod.time.perf_counter() - start_time) * 1000
-        runner_mod._log_run_complete(
+        _duration_ms = (time.perf_counter() - start_time) * 1000
+        _log_run_complete(
             trace_id, self.owner, self.repo, self.pr_number, 0, 0, 0, _duration_ms
         )
-        runner_mod.observability.finish_run(
+        observability.finish_run(
             run_handle,
             self.owner,
             self.repo,
@@ -126,7 +148,7 @@ class ReviewOrchestrator:
         start_time: float,
         run_handle,
         incremental_base_sha: str = "",
-    ) -> list[runner_mod.FindingV1] | None:
+    ) -> list[FindingV1] | None:
         """
         If we already ran for this PR/range/config (run id in comment marker),
         emit observability and return []. Otherwise return None (caller continues).
@@ -137,13 +159,13 @@ class ReviewOrchestrator:
             cfg, self.head_sha
         )
         run_id = self.pr_ctx.idempotency_key(cfg, llm_cfg, incremental_base_sha)
-        if not runner_mod._idempotency_key_seen_in_comments(existing_dicts, run_id):
+        if not _idempotency_key_seen_in_comments(existing_dicts, run_id):
             return None
-        _duration_ms = (runner_mod.time.perf_counter() - start_time) * 1000
-        runner_mod._log_run_complete(
+        _duration_ms = (time.perf_counter() - start_time) * 1000
+        _log_run_complete(
             trace_id, self.owner, self.repo, self.pr_number, 0, 0, 0, _duration_ms
         )
-        runner_mod.observability.finish_run(
+        observability.finish_run(
             run_handle,
             self.owner,
             self.repo,
@@ -226,7 +248,7 @@ class ReviewOrchestrator:
         *,
         context_brief_attached: bool = False,
         prompt_suffix: str = "",
-    ) -> list[runner_mod.FindingV1]:
+    ) -> list[FindingV1]:
         """
         Run the batch-review agent and parse responses into FindingV1 list.
         Returns all_findings (unfiltered).
@@ -253,7 +275,7 @@ class ReviewOrchestrator:
         batch_count: int,
         context_brief_attached: bool = False,
         prompt_suffix: str = "",
-    ) -> list[runner_mod.FindingV1]:
+    ) -> list[FindingV1]:
         """Run the SequentialAgent batch workflow and preserve successful batches on rate limit."""
         return execution_mod._run_sequential_batch_review_mode(
             self.pr_ctx,
@@ -283,7 +305,7 @@ class ReviewOrchestrator:
     @staticmethod
     def _findings_from_batch_responses(
         responses: list[tuple[str, str]],
-    ) -> list[runner_mod.FindingV1]:
+    ) -> list[FindingV1]:
         """Parse structured findings from a list of batch response texts."""
         return execution_mod.findings_from_batch_responses(responses)
 
@@ -301,8 +323,8 @@ class ReviewOrchestrator:
         completed_responses: list[tuple[str, str]],
         context_brief_attached: bool,
         prompt_suffix: str,
-        error: runner_mod.RateLimitError,
-    ) -> list[runner_mod.FindingV1]:
+        error: RateLimitError,
+    ) -> list[FindingV1]:
         """Keep successful batch responses and isolate the remaining batches one-by-one."""
         return execution_mod._recover_rate_limited_batches(
             self.pr_ctx,
@@ -333,7 +355,7 @@ class ReviewOrchestrator:
         """Return a fingerprint function (FindingV1 -> str) backed by live file content."""
         _cache: dict[str, list[str]] = {}
 
-        def _fingerprint_fn(finding: runner_mod.FindingV1) -> str:
+        def _fingerprint_fn(finding: FindingV1) -> str:
             if not self.head_sha:
                 return ""
             if finding.path not in _cache:
@@ -358,7 +380,7 @@ class ReviewOrchestrator:
         self,
         provider,
         incremental_base_sha: str,
-        to_post: list[tuple[runner_mod.FindingV1, str]],
+        to_post: list[tuple[FindingV1, str]],
         cfg,
         llm_cfg,
         existing: list,
@@ -370,13 +392,8 @@ class ReviewOrchestrator:
         full_diff: used to set line_type (ADDED vs CONTEXT) so Bitbucket
         Server anchors comments correctly.
         """
-        runner_mod._resolve_stale_comments_if_supported(
-            provider,
-            self.pr_ctx,
-            existing,
-            to_post,
-            self.dry_run,
-        )
+        poster = CommentPoster(provider, self.pr_ctx)
+        poster.resolve_stale(existing, to_post, self.dry_run)
         if self.dry_run:
             return 0
         gate_outcome = QualityGate(provider, self.owner, self.repo, self.pr_number, cfg).evaluate(
@@ -385,7 +402,7 @@ class ReviewOrchestrator:
         if gate_outcome is not None:
             runner_mod._log_quality_gate_review_outcome("Full-review", gate_outcome)
         else:
-            runner_mod.logger.warning(
+            logger.warning(
                 "Full-review: skipping PR-level quality gate summary/decision because "
                 "unresolved review-item lookup failed."
             )
@@ -396,9 +413,7 @@ class ReviewOrchestrator:
                     "head_sha is required when posting comments (dry_run=False). "
                     "Provide head_sha or use --dry-run to skip posting."
                 )
-            count = runner_mod._post_inline_comments(
-                provider,
-                self.pr_ctx,
+            count = poster.post_inline(
                 incremental_base_sha,
                 to_post,
                 cfg,
@@ -412,9 +427,7 @@ class ReviewOrchestrator:
         ):
             planned = len(to_post)
             include_marker = planned == 0 or count == planned
-            runner_mod._post_omit_marker_pr_summary_comment(
-                provider,
-                self.pr_ctx,
+            poster.post_omit_marker_summary(
                 cfg,
                 llm_cfg,
                 incremental_base_sha,
@@ -441,16 +454,16 @@ class ReviewOrchestrator:
         start_time: float,
         run_handle,
         paths: list,
-        all_findings: list[runner_mod.FindingV1],
+        all_findings: list[FindingV1],
         successful_post_count: int,
-        to_post: list[tuple[runner_mod.FindingV1, str]],
+        to_post: list[tuple[FindingV1, str]],
         context_brief_attached: bool = False,
-    ) -> list[runner_mod.FindingV1]:
+    ) -> list[FindingV1]:
         """
         Emit run_complete log and observability.finish_run, then return the list of findings posted.
         """
-        _duration_ms = (runner_mod.time.perf_counter() - start_time) * 1000
-        runner_mod._log_run_complete(
+        _duration_ms = (time.perf_counter() - start_time) * 1000
+        _log_run_complete(
             trace_id,
             self.owner,
             self.repo,
@@ -460,7 +473,7 @@ class ReviewOrchestrator:
             posts_count=successful_post_count,
             duration_ms=_duration_ms,
         )
-        runner_mod.observability.finish_run(
+        observability.finish_run(
             run_handle,
             self.owner,
             self.repo,
@@ -475,7 +488,7 @@ class ReviewOrchestrator:
 
     @staticmethod
     def _print_findings_summary(
-        print_findings: bool, to_post: list[tuple[runner_mod.FindingV1, str]]
+        print_findings: bool, to_post: list[tuple[FindingV1, str]]
     ) -> None:
         if not print_findings:
             return
@@ -503,24 +516,24 @@ class ReviewOrchestrator:
     @staticmethod
     def _log_post_counts(dry_run: bool, planned_count: int, successful_post_count: int) -> None:
         if dry_run:
-            runner_mod.logger.info("Dry run: would post %d comment(s)", planned_count)
+            logger.info("Dry run: would post %d comment(s)", planned_count)
         else:
-            runner_mod.logger.info("Posted %d comment(s)", successful_post_count)
+            logger.info("Posted %d comment(s)", successful_post_count)
 
     @staticmethod
     def _filter_findings_to_pr_paths(
-        findings: list[runner_mod.FindingV1], paths: list[str]
-    ) -> list[runner_mod.FindingV1]:
+        findings: list[FindingV1], paths: list[str]
+    ) -> list[FindingV1]:
         if not paths:
             return findings
         allowed_normalized = {runner_mod._normalize_path_for_anchor(p) for p in paths}
-        filtered_findings: list[runner_mod.FindingV1] = []
+        filtered_findings: list[FindingV1] = []
         for finding in findings:
             norm_path = runner_mod._normalize_path_for_anchor(finding.path or "")
             if norm_path in allowed_normalized:
                 filtered_findings.append(finding)
-            elif runner_mod.logger.isEnabledFor(runner_mod.logging.DEBUG):
-                runner_mod.logger.debug(
+            elif logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
                     "Dropping finding for path not in diff: %s (normalized=%s, allowed=%s)",
                     finding.path,
                     norm_path,
@@ -530,20 +543,20 @@ class ReviewOrchestrator:
 
     @staticmethod
     def _filter_findings_to_visible_diff_lines(
-        findings: list[runner_mod.FindingV1], full_diff: str
-    ) -> list[runner_mod.FindingV1]:
+        findings: list[FindingV1], full_diff: str
+    ) -> list[FindingV1]:
         if not full_diff:
             return findings
         visible_lines = runner_mod._diff_visible_new_lines(full_diff)
         if not visible_lines:
             return findings
-        line_filtered: list[runner_mod.FindingV1] = []
+        line_filtered: list[FindingV1] = []
         for finding in findings:
             norm_path = runner_mod._normalize_path_for_anchor(finding.path or "")
             if (norm_path, finding.line) in visible_lines:
                 line_filtered.append(finding)
             else:
-                runner_mod.logger.debug(
+                logger.debug(
                     "Dropping finding for line not visible in diff: %s:%d",
                     finding.path,
                     finding.line,
@@ -551,8 +564,8 @@ class ReviewOrchestrator:
         return line_filtered
 
     def _filter_findings_by_diff_scope(
-        self, findings: list[runner_mod.FindingV1], paths: list[str], full_diff: str
-    ) -> list[runner_mod.FindingV1]:
+        self, findings: list[FindingV1], paths: list[str], full_diff: str
+    ) -> list[FindingV1]:
         path_filtered = self._filter_findings_to_pr_paths(findings, paths)
         pipeline_results = FindingRefinementPipeline().run(path_filtered, full_diff)
         return self._filter_findings_to_visible_diff_lines(pipeline_results, full_diff)
@@ -598,7 +611,7 @@ class ReviewOrchestrator:
             try:
                 context_brief = runner_mod.build_context_brief_for_pr(ctx_cfg, cfg, refs, full_diff)
             except runner_mod.ContextAwareFatalError:
-                runner_mod.logger.exception("Context-aware fetch or distillation failed")
+                logger.exception("Context-aware fetch or distillation failed")
                 raise
         prompt_suffix = runner_mod._format_review_prompt_supplement(
             context_brief=context_brief,
@@ -615,7 +628,7 @@ class ReviewOrchestrator:
         trace_id: str,
         start_time: float,
         run_handle,
-    ) -> list[runner_mod.FindingV1] | None:
+    ) -> list[FindingV1] | None:
         if not (
             app_cfg.review_decision_only_skip_if_bot_not_blocking
             and runner_mod.event_allows_decision_only_skip_when_bot_not_blocking(
@@ -628,7 +641,7 @@ class ReviewOrchestrator:
             return None
         if provider.get_bot_blocking_state(self.owner, self.repo, self.pr_number) != "NOT_BLOCKING":
             return None
-        runner_mod.logger.info(
+        logger.info(
             "Review-decision-only: skipping quality gate "
             "(bot not blocking; "
             "CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING=1, "
@@ -650,7 +663,7 @@ class ReviewOrchestrator:
         trace_id: str,
         start_time: float,
         run_handle,
-    ) -> list[runner_mod.FindingV1] | None:
+    ) -> list[FindingV1] | None:
         """Skip review-decision-only runs triggered by the bot's own comment activity."""
         ctx = self._event_context
         if ctx is None:
@@ -663,11 +676,11 @@ class ReviewOrchestrator:
         if not caps.supports_bot_attribution_identity_query:
             return None
         bot_id = provider.get_bot_attribution_identity(self.owner, self.repo, self.pr_number)
-        if not runner_mod._reply_added_event_authored_by_bot(ctx, bot_id):
+        if not _reply_added_event_authored_by_bot(ctx, bot_id):
             return None
         if (ctx.comment_id or "").strip():
-            runner_mod.observability.record_reply_dismissal_outcome("skipped_bot_author")
-        runner_mod.logger.info(
+            observability.record_reply_dismissal_outcome("skipped_bot_author")
+        logger.info(
             "Review-decision-only: skipping bot-authored webhook event "
             "(actor_login=%r actor_id=%r comment_id=%r source=%r)",
             actor_login,
@@ -698,8 +711,8 @@ class ReviewOrchestrator:
         try:
             runner_mod.validate_context_aware_sources(ctx_cfg, cfg)
         except runner_mod.ContextAwareFatalError as e:
-            runner_mod.logger.error("Context-aware review configuration error: %s", e)
-            runner_mod.observability.finish_run(
+            logger.error("Context-aware review configuration error: %s", e)
+            observability.finish_run(
                 run_handle,
                 self.owner,
                 self.repo,
@@ -707,7 +720,7 @@ class ReviewOrchestrator:
                 files_count=0,
                 findings_count=0,
                 posts_count=0,
-                duration_seconds=runner_mod.time.perf_counter() - start_time,
+                duration_seconds=time.perf_counter() - start_time,
             )
             raise
 
@@ -715,30 +728,30 @@ class ReviewOrchestrator:
     def _log_review_scope_fetch(incremental_base_sha: str, head_sha: str, paths: list[str]) -> None:
         """Emit a concise log line describing the fetched review scope."""
         if incremental_base_sha:
-            runner_mod.logger.info(
+            logger.info(
                 "Fetched incremental diff base=%s head=%s, %d file(s) to review",
                 incremental_base_sha[:12],
                 (head_sha or "")[:12],
                 len(paths),
             )
             return
-        runner_mod.logger.info("Fetched diff, %d file(s) to review", len(paths))
+        logger.info("Fetched diff, %d file(s) to review", len(paths))
 
     def _decision_only_maybe_post_disagreed_thread_reply(
         self,
         provider,
         caps_rd,
         comment_id: str,
-        verdict: runner_mod.ReplyDismissalVerdictV1,
+        verdict: ReplyDismissalVerdictV1,
     ) -> None:
         if not caps_rd.supports_review_thread_reply:
-            runner_mod.logger.info(
+            logger.info(
                 "Reply-dismissal disagreed: provider does not support thread replies"
             )
             return
         if self.dry_run:
             truncated = (verdict.reply_text or "")[:500]
-            runner_mod.logger.info(
+            logger.info(
                 "Dry-run: would post review-thread reply (truncated): %s", truncated
             )
             return
@@ -746,12 +759,12 @@ class ReviewOrchestrator:
             provider.post_review_thread_reply(
                 self.owner, self.repo, self.pr_number, comment_id, verdict.reply_text
             )
-            runner_mod.logger.info(
+            logger.info(
                 "Reply-dismissal disagreed: posted follow-up reply to comment_id=%s",
                 comment_id,
             )
         except Exception as e:
-            runner_mod.logger.warning("post_review_thread_reply failed: %s", e)
+            logger.warning("post_review_thread_reply failed: %s", e)
 
     def _decision_only_maybe_post_agreed_thread_reply(
         self,
@@ -760,13 +773,13 @@ class ReviewOrchestrator:
         comment_id: str,
     ) -> bool:
         if not caps_rd.supports_review_thread_reply:
-            runner_mod.logger.info(
+            logger.info(
                 "Reply-dismissal agreed: provider does not support thread replies; "
                 "cannot persist accepted thread state"
             )
             return False
         if self.dry_run:
-            runner_mod.logger.info(
+            logger.info(
                 "Dry-run: would post durable accepted-thread reply: %s",
                 runner_mod.REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT,
             )
@@ -779,13 +792,13 @@ class ReviewOrchestrator:
                 comment_id,
                 runner_mod.REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT,
             )
-            runner_mod.logger.info(
+            logger.info(
                 "Reply-dismissal agreed: posted durable accepted-thread reply to comment_id=%s",
                 comment_id,
             )
             return True
         except Exception as e:
-            runner_mod.logger.warning("post agreed accepted-thread reply failed: %s", e)
+            logger.warning("post agreed accepted-thread reply failed: %s", e)
             return False
 
     def _decision_only_maybe_resolve_agreed_thread(
@@ -793,12 +806,12 @@ class ReviewOrchestrator:
         provider,
         caps_rd,
         comment_id: str,
-        dctx: runner_mod.ReviewThreadDismissalContext,
+        dctx: ReviewThreadDismissalContext,
     ) -> bool:
         if not caps_rd.supports_review_thread_resolution:
             return self._decision_only_maybe_post_agreed_thread_reply(provider, caps_rd, comment_id)
         if self.dry_run:
-            runner_mod.logger.info(
+            logger.info(
                 "Dry-run: would resolve review thread stable_id=%s thread_id=%s",
                 dctx.gate_exclusion_stable_id,
                 (dctx.thread_id or "").strip(),
@@ -808,14 +821,14 @@ class ReviewOrchestrator:
             provider.resolve_review_thread(
                 self.owner, self.repo, self.pr_number, dctx, comment_id
             )
-            runner_mod.logger.info(
+            logger.info(
                 "Reply-dismissal agreed: resolved review thread stable_id=%s thread_id=%s",
                 dctx.gate_exclusion_stable_id,
                 (dctx.thread_id or "").strip(),
             )
             return True
         except Exception as e:
-            runner_mod.logger.warning("resolve_review_thread failed: %s", e)
+            logger.warning("resolve_review_thread failed: %s", e)
             return self._decision_only_maybe_post_agreed_thread_reply(provider, caps_rd, comment_id)
 
     def _reply_dismissal_comment_id_or_none(self, app_cfg) -> str | None:
@@ -824,7 +837,7 @@ class ReviewOrchestrator:
         comment_id = (ctx.comment_id or "").strip() if ctx else ""
         if not app_cfg.reply_dismissal_enabled:
             if comment_id:
-                runner_mod.logger.info(
+                logger.info(
                     "Reply-dismissal disabled: "
                     "CODE_REVIEW_REPLY_DISMISSAL_ENABLED is explicitly false; "
                     "skipping LLM for comment_id=%s",
@@ -833,7 +846,7 @@ class ReviewOrchestrator:
             return None
         if app_cfg.reply_dismissal_enabled and ctx is not None and (ctx.comment_id or "").strip():
             return ctx.comment_id.strip()
-        runner_mod.logger.info(
+        logger.info(
             "Reply-dismissal enabled but not run: requires "
             "CODE_REVIEW_EVENT_COMMENT_ID; "
             "got comment_id=%r ctx_present=%s",
@@ -844,20 +857,20 @@ class ReviewOrchestrator:
 
     def _reply_dismissal_precheck(
         self, provider, comment_id: str
-    ) -> tuple[runner_mod.BotAttributionIdentity, runner_mod.ReviewThreadDismissalContext] | None:
+    ) -> tuple[BotAttributionIdentity, ReviewThreadDismissalContext] | None:
         """Return bot identity and dismissal context when reply-dismissal can proceed."""
         ctx = self._event_context
         if ctx is None:
-            runner_mod.logger.info("Reply-dismissal skipped: no event context present")
+            logger.info("Reply-dismissal skipped: no event context present")
             return None
-        runner_mod.logger.info(
+        logger.info(
             "Reply-dismissal candidate: loading thread context for comment_id=%s",
             comment_id,
         )
         bot_id = provider.get_bot_attribution_identity(self.owner, self.repo, self.pr_number)
-        if runner_mod._reply_added_event_authored_by_bot(ctx, bot_id):
-            runner_mod.observability.record_reply_dismissal_outcome("skipped_bot_author")
-            runner_mod.logger.info(
+        if _reply_added_event_authored_by_bot(ctx, bot_id):
+            observability.record_reply_dismissal_outcome("skipped_bot_author")
+            logger.info(
                 "Reply-dismissal skipped: reply_added actor matches bot "
                 "(actor_login=%r actor_id=%r)",
                 (ctx.actor_login or "").strip(),
@@ -866,8 +879,8 @@ class ReviewOrchestrator:
             return None
         caps_rd = provider.capabilities()
         if not caps_rd.supports_review_thread_dismissal_context:
-            runner_mod.observability.record_reply_dismissal_outcome("skipped_no_capability")
-            runner_mod.logger.info(
+            observability.record_reply_dismissal_outcome("skipped_no_capability")
+            logger.info(
                 "Reply-dismissal skipped: provider does not support review-thread context"
             )
             return None
@@ -875,27 +888,27 @@ class ReviewOrchestrator:
             self.owner, self.repo, self.pr_number, comment_id
         )
         if dctx is None or len(dctx.entries) < 2:
-            runner_mod.observability.record_reply_dismissal_outcome("skipped_insufficient_thread")
-            runner_mod.logger.info(
+            observability.record_reply_dismissal_outcome("skipped_insufficient_thread")
+            logger.info(
                 "Reply-dismissal skipped: insufficient thread context "
                 "for comment_id=%s (entries=%s)",
                 comment_id,
                 len(dctx.entries) if dctx is not None else 0,
             )
             return None
-        existing_bot_reply = runner_mod._reply_dismissal_existing_bot_reply_after_trigger(
-            dctx, bot_id, comment_id
+        existing_bot_reply = ReplyDismissalContext(dctx, bot_id).existing_bot_reply_after_trigger(
+            comment_id
         )
         if existing_bot_reply is not None:
-            runner_mod.observability.record_reply_dismissal_outcome("skipped_already_replied")
-            runner_mod.logger.info(
+            observability.record_reply_dismissal_outcome("skipped_already_replied")
+            logger.info(
                 "Reply-dismissal skipped: triggering comment_id=%s already has "
                 "a later bot reply in thread (comment_id=%s)",
                 comment_id,
                 (existing_bot_reply.comment_id or "").strip(),
             )
             return None
-        runner_mod.logger.info(
+        logger.info(
             "Reply-dismissal thread loaded: comment_id=%s entries=%d stable_id=%s thread_id=%s",
             comment_id,
             len(dctx.entries),
@@ -907,16 +920,16 @@ class ReviewOrchestrator:
     @staticmethod
     def _reply_dismissal_parse_verdict(
         raw_verdict: str,
-    ) -> runner_mod.ReplyDismissalVerdictV1 | None:
+    ) -> ReplyDismissalVerdictV1 | None:
         """Parse reply-dismissal LLM output and log a helpful truncated warning on failure."""
         verdict = runner_mod.reply_dismissal_verdict_from_llm_text(raw_verdict)
         if verdict is not None:
             return verdict
-        runner_mod.observability.record_reply_dismissal_outcome("parse_failed")
+        observability.record_reply_dismissal_outcome("parse_failed")
         snippet = (raw_verdict or "").strip()
         if len(snippet) > 1500:
             snippet = snippet[:1500] + "…"
-        runner_mod.logger.warning(
+        logger.warning(
             "Reply-dismissal LLM output could not be parsed as "
             "ReplyDismissalVerdictV1; enable DEBUG for full request/response. "
             "Raw (truncated): %r",
@@ -927,7 +940,7 @@ class ReviewOrchestrator:
     def _reply_dismissal_diff_context(
         self,
         provider,
-        dctx: runner_mod.ReviewThreadDismissalContext,
+        dctx: ReviewThreadDismissalContext,
     ) -> str:
         path = (dctx.path or "").strip()
         if not path:
@@ -935,11 +948,11 @@ class ReviewOrchestrator:
         if not provider.capabilities().supports_lightweight_pr_diff_for_file:
             return ""
         try:
-            return runner_mod._reply_dismissal_diff_context_for_thread(
+            return _reply_dismissal_diff_context_for_thread(
                 provider.get_pr_diff_for_file(self.owner, self.repo, self.pr_number, path), dctx
             )
         except Exception as e:
-            runner_mod.logger.warning(
+            logger.warning(
                 "Reply-dismissal diff context unavailable for path=%s line=%s: %s",
                 path,
                 int(dctx.line or 0),
@@ -949,19 +962,19 @@ class ReviewOrchestrator:
 
     def _reply_dismissal_run_llm_and_parse(
         self, user_msg: str
-    ) -> runner_mod.ReplyDismissalVerdictV1 | None:
+    ) -> ReplyDismissalVerdictV1 | None:
         try:
-            raw_verdict = runner_mod._run_reply_dismissal_llm(user_msg)
+            raw_verdict = _run_reply_dismissal_llm(user_msg)
         except Exception as e:
-            runner_mod.logger.warning("Reply-dismissal LLM run failed: %s", e)
-            runner_mod.observability.record_reply_dismissal_outcome("llm_error")
+            logger.warning("Reply-dismissal LLM run failed: %s", e)
+            observability.record_reply_dismissal_outcome("llm_error")
             return None
-        runner_mod.logger.info(
+        logger.info(
             "Reply-dismissal LLM completed: response_chars=%d",
             len((raw_verdict or "").strip()),
         )
-        if runner_mod.logger.isEnabledFor(runner_mod.logging.DEBUG):
-            runner_mod.logger.debug(
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
                 "Reply-dismissal raw LLM response: %s",
                 runner_mod._reply_dismissal_response_log_snippet(raw_verdict, limit=4000),
             )
@@ -971,28 +984,28 @@ class ReviewOrchestrator:
         self,
         provider,
         comment_id: str,
-        dctx: runner_mod.ReviewThreadDismissalContext,
-        verdict: runner_mod.ReplyDismissalVerdictV1,
+        dctx: ReviewThreadDismissalContext,
+        verdict: ReplyDismissalVerdictV1,
     ) -> frozenset[str]:
         if verdict.verdict == "agreed":
-            runner_mod.observability.record_reply_dismissal_outcome("agreed")
+            observability.record_reply_dismissal_outcome("agreed")
             persisted = self._decision_only_maybe_resolve_agreed_thread(
                 provider, provider.capabilities(), comment_id, dctx
             )
             if persisted:
-                runner_mod.logger.info(
+                logger.info(
                     "Reply-dismissal agreed; excluding gate stable_id=%s",
                     dctx.gate_exclusion_stable_id,
                 )
                 return frozenset({dctx.gate_exclusion_stable_id})
-            runner_mod.logger.info(
+            logger.info(
                 "Reply-dismissal agreed but SCM persistence failed; "
                 "keeping gate stable_id=%s in quality gate",
                 dctx.gate_exclusion_stable_id,
             )
             return frozenset()
         if verdict.verdict == "disagreed":
-            runner_mod.observability.record_reply_dismissal_outcome("disagreed")
+            observability.record_reply_dismissal_outcome("disagreed")
             self._decision_only_maybe_post_disagreed_thread_reply(
                 provider, provider.capabilities(), comment_id, verdict
             )
@@ -1012,10 +1025,10 @@ class ReviewOrchestrator:
         if precheck is None:
             return frozenset()
         bot_id, dctx = precheck
-        scm_reason = runner_mod._reply_dismissal_scm_already_addressed_reason(dctx)
+        scm_reason = _reply_dismissal_scm_already_addressed_reason(dctx)
         if scm_reason:
-            runner_mod.observability.record_reply_dismissal_outcome("skipped_scm_already_addressed")
-            runner_mod.logger.info(
+            observability.record_reply_dismissal_outcome("skipped_scm_already_addressed")
+            logger.info(
                 "Reply-dismissal skipped LLM: SCM already indicates thread "
                 "addressed (reason=%s stable_id=%s comment_id=%s)",
                 scm_reason,
@@ -1024,10 +1037,8 @@ class ReviewOrchestrator:
             )
             return frozenset({dctx.gate_exclusion_stable_id})
         diff_context = self._reply_dismissal_diff_context(provider, dctx)
-        user_msg = runner_mod._format_reply_dismissal_user_message(
-            dctx, bot_id, comment_id, diff_context
-        )
-        runner_mod.logger.info(
+        user_msg = ReplyDismissalContext(dctx, bot_id).format_user_message(comment_id, diff_context)
+        logger.info(
             "Reply-dismissal sending thread to LLM: comment_id=%s "
             "entries=%d stable_id=%s path=%s line=%s diff_context=%s",
             comment_id,
@@ -1040,7 +1051,7 @@ class ReviewOrchestrator:
         verdict = self._reply_dismissal_run_llm_and_parse(user_msg)
         if verdict is None:
             return frozenset()
-        runner_mod.logger.info(
+        logger.info(
             "reply_dismissal_verdict trace_id=%s verdict=%s pr=%s/%s#%s",
             trace_id,
             verdict.verdict,
@@ -1054,10 +1065,10 @@ class ReviewOrchestrator:
 
     def _run_review_decision_only(
         self, trace_id: str, start_time: float, run_handle, cfg, provider
-    ) -> list[runner_mod.FindingV1]:
+    ) -> list[FindingV1]:
         """Recompute quality-gate counts from SCM state and submit review decision only."""
         pr_url = self.pr_ctx.pr_url(cfg)
-        runner_mod.logger.info(
+        logger.info(
             "Review-decision-only run for %s/%s PR %s (provider=%s) URL: %s",
             self.owner,
             self.repo,
@@ -1068,6 +1079,7 @@ class ReviewOrchestrator:
         print(f"Review-decision-only for PR: {pr_url}")
         runner_mod._log_review_decision_event_if_present(self._event_context)
         app_cfg = runner_mod.get_code_review_app_config()
+
         skip_result = self._skip_if_needed(provider, cfg, trace_id, start_time, run_handle)
         if skip_result is not None:
             return skip_result
@@ -1086,7 +1098,7 @@ class ReviewOrchestrator:
             provider, self.owner, self.repo, self.pr_number, head_hint
         )
         if not head_sha and (not self.dry_run):
-            runner_mod.logger.warning(
+            logger.warning(
                 "Review-decision-only: head_sha missing after provider lookup; "
                 "submit_review_decision may omit commit id for some SCMs."
             )
@@ -1102,7 +1114,7 @@ class ReviewOrchestrator:
         if gate_outcome is not None:
             runner_mod._log_quality_gate_review_outcome("Review-decision-only", gate_outcome)
         else:
-            runner_mod.logger.warning(
+            logger.warning(
                 "Review-decision-only: skipping PR review decision because unresolved "
                 "review-item lookup failed."
             )
@@ -1130,7 +1142,7 @@ class ReviewOrchestrator:
         self,
         provider,
         head_sha: str,
-        pr_info_for_metadata: runner_mod.Any,
+        pr_info_for_metadata: Any,
     ) -> str:
         """Resolve the best head SHA to use when only refreshing the review decision."""
         if head_sha:
@@ -1151,14 +1163,14 @@ class ReviewOrchestrator:
         start_time: float,
         run_handle,
         paths: list[str],
-        pr_info_for_metadata: runner_mod.Any,
-    ) -> list[runner_mod.FindingV1] | None:
+        pr_info_for_metadata: Any,
+    ) -> list[FindingV1] | None:
         """Handle the empty-review-scope early return, including review-decision refresh."""
         if paths:
             return None
-        runner_mod.logger.info("No files to review")
+        logger.info("No files to review")
         if bool(getattr(cfg, "review_decision_enabled", False)):
-            runner_mod.logger.info(
+            logger.info(
                 "Recomputing PR review decision from unresolved SCM state "
                 "despite empty review scope"
             )
@@ -1168,7 +1180,7 @@ class ReviewOrchestrator:
             if gate_outcome is not None:
                 runner_mod._log_quality_gate_review_outcome("Empty-scope refresh", gate_outcome)
             else:
-                runner_mod.logger.warning(
+                logger.warning(
                     "Empty-scope refresh: skipping PR review decision because unresolved "
                     "review-item lookup failed."
                 )
@@ -1190,15 +1202,15 @@ class ReviewOrchestrator:
         )
 
     def _log_context_aware_prompt_inputs(
-        self, refs: list[runner_mod.Any], context_brief: str
+        self, refs: list[Any], context_brief: str
     ) -> None:
         """Log context-aware prompt supplements only when present."""
         if refs:
-            runner_mod.logger.info(
+            logger.info(
                 "context_aware: extracted %d reference(s) from PR text", len(refs)
             )
         if context_brief:
-            runner_mod.logger.info("context_aware: distilled context attached to review prompt")
+            logger.info("context_aware: distilled context attached to review prompt")
 
     def _run_standard_review(
         self,
@@ -1209,10 +1221,10 @@ class ReviewOrchestrator:
         llm_cfg,
         provider,
         app_cfg,
-    ) -> list[runner_mod.FindingV1]:
+    ) -> list[FindingV1]:
         """Execute the full non-decision-only review path."""
         pr_url = self.pr_ctx.pr_url(cfg)
-        runner_mod.logger.info(
+        logger.info(
             "Reviewing %s/%s PR %s (provider=%s) URL: %s",
             self.owner,
             self.repo,
@@ -1239,7 +1251,7 @@ class ReviewOrchestrator:
             incremental_base_sha=incremental_base_sha,
         )
         if idempotency_result is not None:
-            runner_mod.logger.info(
+            logger.info(
                 "Skipping run (idempotent: same review range/config already reviewed)"
             )
             return idempotency_result
@@ -1263,8 +1275,8 @@ class ReviewOrchestrator:
         if empty_scope_result is not None:
             return empty_scope_result
         if not self.dry_run:
-            runner_mod._maybe_post_started_review_comment(
-                provider, self.pr_ctx, pr_info_for_metadata, paths
+            CommentPoster(provider, self.pr_ctx).post_started_review_comment(
+                pr_info_for_metadata, paths
             )
         _, review_standards = self._detect_languages_for_files(paths)
         context_window = runner_mod.get_context_window()
@@ -1294,7 +1306,7 @@ class ReviewOrchestrator:
         context_brief_attached = bool(context_brief and _CONTEXT_TAG in prompt_suffix)
         self._log_review_batch_plan(batches, paths, incremental_base_sha)
         if not batches:
-            runner_mod.logger.info(
+            logger.info(
                 "Prepared zero review batches from the scoped diff; skipping LLM run"
             )
             return self._record_observability_and_build_result(
@@ -1328,7 +1340,7 @@ class ReviewOrchestrator:
             self._make_fingerprint_fn(provider),
             use_collapsible_prompt=provider.capabilities().markup_supports_collapsible,
         )
-        runner_mod.logger.info(
+        logger.info(
             "Agent returned %d finding(s), %d to post after filtering",
             len(all_findings),
             len(to_post),
@@ -1355,14 +1367,14 @@ class ReviewOrchestrator:
             context_brief_attached=context_brief_attached,
         )
 
-    def run(self) -> list[runner_mod.FindingV1]:
+    def run(self) -> list[FindingV1]:
         """
         Execute the full review flow. Returns list of findings that were posted
         (or would be posted if dry_run).
         """
-        trace_id = str(runner_mod.uuid.uuid4())
-        start_time = runner_mod.time.perf_counter()
-        run_handle = runner_mod.observability.start_run(trace_id)
+        trace_id = str(uuid.uuid4())
+        start_time = time.perf_counter()
+        run_handle = observability.start_run(trace_id)
         cfg, llm_cfg, provider = self._load_config_and_provider()
         app_cfg = runner_mod.get_code_review_app_config()
         decision_only = bool(self._review_decision_only) or bool(app_cfg.review_decision_only)
