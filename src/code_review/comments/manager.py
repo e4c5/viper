@@ -125,6 +125,7 @@ class CommentManager:
                 continue
             if fp:
                 self.ignore_set.add((f.path, fp))
-            self.ignore_set.add((f.path, body_hash))
+            else:
+                self.ignore_set.add((f.path, body_hash))
             to_post.append((f, fp))
         return to_post

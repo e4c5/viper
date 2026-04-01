@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -21,19 +22,35 @@ class ReviewFilter:
         if not pr_info:
             return None
 
+        skip_label = cfg.skip_label.strip() if isinstance(cfg.skip_label, str) else ""
+        raw_labels = getattr(pr_info, "labels", [])
+        labels = (
+            [
+                label
+                for label in raw_labels
+                if isinstance(label, str) and label.strip()
+            ]
+            if isinstance(raw_labels, Iterable) and not isinstance(raw_labels, str | bytes)
+            else []
+        )
+
         if (
-            cfg.skip_label
-            and cfg.skip_label.strip()
-            and any(
-                lb.strip().lower() == cfg.skip_label.strip().lower() for lb in pr_info.labels
-            )
+            skip_label
+            and labels
+            and any(lb.strip().lower() == skip_label.lower() for lb in labels)
         ):
             return f"PR has skip label: {cfg.skip_label}"
 
+        skip_title_pattern = (
+            cfg.skip_title_pattern.strip() if isinstance(cfg.skip_title_pattern, str) else ""
+        )
+        title = getattr(pr_info, "title", "")
+        normalized_title = title.strip().lower() if isinstance(title, str) and title.strip() else ""
+
         if (
-            cfg.skip_title_pattern
-            and cfg.skip_title_pattern.strip()
-            and cfg.skip_title_pattern.strip().lower() in pr_info.title.lower()
+            skip_title_pattern
+            and normalized_title
+            and skip_title_pattern.lower() in normalized_title
         ):
             return f"PR title matches skip pattern: {cfg.skip_title_pattern}"
 

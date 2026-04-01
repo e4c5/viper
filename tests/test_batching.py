@@ -2,6 +2,8 @@
 
 from textwrap import dedent
 
+import pytest
+
 from code_review.batching import (
     build_review_batch_budget,
     build_review_batches,
@@ -141,6 +143,17 @@ def test_split_file_diff_into_segments_splits_oversized_single_hunk_line():
     assert all(segment.split_strategy == "intra_hunk" for segment in segments)
     assert all(segment.estimated_tokens <= segment_budget for segment in segments)
     assert all("@@ -1,0 +1,1 @@" in segment.diff_text for segment in segments)
+
+
+def test_split_file_diff_into_segments_raises_when_wrapper_overhead_exceeds_budget():
+    diff_text = _file_diff("big.py", "+x", header="@@ -1,0 +1,1 @@")
+
+    with pytest.raises(ValueError, match="Cannot split diff line within segment budget"):
+        split_file_diff_into_segments(
+            "big.py",
+            diff_text,
+            segment_budget_tokens=1,
+        )
 
 
 def test_split_file_diff_into_segments_falls_back_when_no_hunks_exist():

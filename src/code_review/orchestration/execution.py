@@ -6,6 +6,7 @@ from google.genai import types
 
 from code_review import orchestration_deps as runner_mod
 from code_review.batching import ReviewBatch, build_review_batches
+from code_review.diff.utils import estimate_tokens
 from code_review.logging_config import emit_package_log
 from code_review.models import PRContext
 
@@ -49,7 +50,6 @@ def create_agent_and_runner(
         session_service=session_service,
         auto_create_session=True,
     )
-    runner._uses_sequential_batch_review = True
     return (session_id, session_service, runner)
 
 
@@ -245,10 +245,26 @@ def build_review_batches_for_scope(
     scoped_diff_by_path = {
         path: runner_mod.unified_diff_for_path(full_diff, path) for path in paths
     }
+    effective_diff_budget = diff_budget
+    if effective_diff_budget <= 0:
+        effective_diff_budget = max(
+            (
+                estimate_tokens(diff_text)
+                for diff_text in scoped_diff_by_path.values()
+                if diff_text.strip()
+            ),
+            default=1,
+        )
+        logger.warning(
+            "Computed diff budget %d is too small for batching; "
+            "falling back to max single-file diff estimate %d",
+            diff_budget,
+            effective_diff_budget,
+        )
     return build_review_batches(
         files,
         scoped_diff_by_path,
-        diff_budget_tokens=max(1, diff_budget),
+        diff_budget_tokens=effective_diff_budget,
     )
 
 

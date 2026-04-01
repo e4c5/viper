@@ -432,6 +432,13 @@ def _split_long_line(
             else:
                 high = mid - 1
         if best_length == 0:
+            minimum_fragment_tokens = estimate(remaining[:1])
+            if minimum_fragment_tokens > segment_budget_tokens:
+                raise ValueError(
+                    "Cannot split diff line within segment budget: "
+                    f"minimum fragment requires {minimum_fragment_tokens} tokens "
+                    f"but budget is {segment_budget_tokens}"
+                )
             best_length = 1
         fragments.append(remaining[:best_length])
         remaining = remaining[best_length:]

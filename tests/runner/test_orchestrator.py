@@ -357,7 +357,6 @@ def test_create_agent_and_runner_uses_sequential_batch_workflow(
         head_sha="sha1",
         context_brief_attached=False,
     )
-    assert runner._uses_sequential_batch_review is True
 
 
 @patch("code_review.orchestration.execution._run_sequential_batch_review_mode")
@@ -496,6 +495,31 @@ def test_review_filter_should_skip_returns_none_when_pr_info_is_none():
     assert rf.should_skip(None, cfg) is None
 
 
+def test_review_filter_should_skip_handles_none_labels_and_title() -> None:
+    """Missing labels/title should not raise and should behave like empty inputs."""
+    from code_review.orchestration.filter import ReviewFilter
+
+    cfg = MagicMock(skip_label="skip-review", skip_title_pattern="[skip-review]")
+    pr_info = MagicMock(labels=None, title=None)
+    rf = ReviewFilter()
+
+    assert rf.should_skip(pr_info, cfg) is None
+
+
+def test_review_filter_should_skip_ignores_non_string_labels() -> None:
+    """Skip-label matching should only consider real string labels."""
+    from code_review.orchestration.filter import ReviewFilter
+
+    cfg = MagicMock(skip_label="skip-review", skip_title_pattern="")
+    pr_info = MagicMock(labels=[None, 123, " skip-review "], title="Fix bug")
+    rf = ReviewFilter()
+
+    reason = rf.should_skip(pr_info, cfg)
+
+    assert reason is not None
+    assert "skip-review" in reason
+
+
 def test_comment_manager_load_existing_comments_builds_ignore_set():
     """CommentManager.load_existing_comments populates ignore_set and existing_comments."""
     from code_review.comments.manager import CommentManager
@@ -536,6 +560,25 @@ def test_comment_manager_filter_duplicates_returns_to_post():
     # Calling again with the same finding should be deduped
     to_post2 = mgr.filter_duplicates([finding], fp_fn)
     assert to_post2 == []
+
+
+def test_comment_manager_filter_duplicates_keeps_distinct_fingerprints_with_same_body():
+    """Distinct fingerprints should not be suppressed by body-hash dedup seeding."""
+    from code_review.comments.manager import CommentManager
+    from code_review.schemas.findings import FindingV1
+
+    mgr = CommentManager()
+    finding_one = FindingV1(path="foo.py", line=1, severity="low", code="X", message="msg")
+    finding_two = FindingV1(path="foo.py", line=1, severity="low", code="X", message="msg")
+
+    fps = {
+        id(finding_one): "fp-1",
+        id(finding_two): "fp-2",
+    }
+
+    to_post = mgr.filter_duplicates([finding_one, finding_two], lambda f: fps[id(f)])
+
+    assert to_post == [(finding_one, "fp-1"), (finding_two, "fp-2")]
 
 
 def test_comment_manager_filter_duplicates_skips_resolved_body_hash():
@@ -1072,3 +1115,28 @@ def test_build_review_batches_preserves_annotations_for_segment_diffs():
     assert "<L12>" in annotated
     removed_lines = [ln for ln in annotated.splitlines() if "-old_11" in ln]
     assert all(not ln.strip().startswith("<L") for ln in removed_lines)
+
+
+def test_build_review_batches_for_scope_falls_back_when_diff_budget_is_zero():
+    from code_review.orchestration.execution import build_review_batches_for_scope
+    from code_review.providers.base import FileInfo
+
+    diff_text = (
+        "diff --git a/foo.py b/foo.py\n"
+        "--- a/foo.py\n"
+        "+++ b/foo.py\n"
+        "@@ -1,1 +1,2 @@\n"
+        "-old_line\n"
+        "+new_line\n"
+    )
+
+    batches = build_review_batches_for_scope(
+        [FileInfo(path="foo.py", status="modified")],
+        ["foo.py"],
+        diff_text,
+        diff_budget=0,
+    )
+
+    assert len(batches) == 1
+    assert len(batches[0].segments) == 1
+    assert batches[0].segments[0].estimated_tokens > 0

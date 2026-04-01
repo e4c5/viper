@@ -7,7 +7,7 @@ from code_review.diff.utils import normalize_path
 
 
 def build_diff_line_index(diff_text: str) -> dict[tuple[str, int], str]:
-    """Build a mapping of (normalized_path, new_line) -> stripped line content from the diff.
+    """Build a mapping of (normalized_path, new_line) -> line content from the diff.
 
     Only includes lines visible in the new-file view (ADDED '+' and CONTEXT ' ').
     Used by _validate_suggested_patches to check whether a patch is anchored to the
@@ -18,14 +18,14 @@ def build_diff_line_index(diff_text: str) -> dict[tuple[str, int], str]:
         norm_path = normalize_path(hunk.path)
         for content, _old_ln, new_ln in hunk.lines:
             if new_ln is not None:
-                index[(norm_path, new_ln)] = content.strip()
+                index[(norm_path, new_ln)] = content
     return index
 
 
 def build_per_file_line_index(
     diff_text: str,
 ) -> dict[str, dict[int, str]]:
-    """Build {normalized_path: {new_line_no: stripped_content}} from a unified diff.
+    """Build {normalized_path: {new_line_no: content}} from a unified diff.
 
     Only includes lines visible in the new-file view (ADDED and CONTEXT).
     """
@@ -35,5 +35,5 @@ def build_per_file_line_index(
         bucket = file_lines.setdefault(norm_path, {})
         for content, _old_ln, new_ln in hunk.lines:
             if new_ln is not None:
-                bucket[new_ln] = content.strip()
+                bucket[new_ln] = content
     return file_lines
