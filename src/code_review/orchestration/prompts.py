@@ -2,15 +2,8 @@
 
 from __future__ import annotations
 
-from code_review.diff.analyzer import DiffAnalyzer as _DiffAnalyzer
-
-
-def _estimate_tokens(text: str) -> int:
-    return _DiffAnalyzer.estimate_tokens(text)
-
-
 def _supplement_char_budget(remaining_tokens: int | None) -> int | None:
-    # Keep the same rough conversion used by _estimate_tokens.
+    # Keep the same rough conversion as code_review.diff.utils.estimate_tokens().
     if remaining_tokens is None:
         return None
     return max(0, remaining_tokens * 4)

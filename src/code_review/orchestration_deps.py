@@ -33,7 +33,6 @@ from code_review.context.errors import ContextAwareFatalError  # noqa: F401
 from code_review.context.extract import extract_context_references  # noqa: F401
 from code_review.context.pipeline import build_context_brief_for_pr  # noqa: F401
 from code_review.context.validation import validate_context_aware_sources  # noqa: F401
-from code_review.diff.analyzer import DiffAnalyzer as _DiffAnalyzer  # noqa: F401
 from code_review.diff.fingerprint import (
     build_fingerprint,
     format_comment_body_with_marker,
@@ -52,6 +51,7 @@ from code_review.diff.parser import (
     parse_unified_diff,
 )
 from code_review.diff.position import get_diff_hunk_for_line
+from code_review.diff.utils import estimate_tokens as _estimate_tokens  # noqa: F401
 from code_review.formatters.comment import finding_to_comment_body, infer_severity_from_comment_body
 from code_review.json_utils import iter_json_candidates
 from code_review.models import (
@@ -117,7 +117,6 @@ except ValueError:
 # ---------------------------------------------------------------------------
 from code_review.orchestration.prompts import (  # noqa: E402
     _build_commit_messages_block,
-    _estimate_tokens,
     _format_review_prompt_supplement,
     _remaining_chars,
     _supplement_char_budget,

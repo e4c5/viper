@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from code_review.diff.parser import DiffHunk, parse_unified_diff
+from code_review.diff.utils import estimate_tokens
 from code_review.providers.base import FileInfo
 
 _HUNK_HEADER_RE = re.compile(r"^@@ ")
@@ -49,11 +50,6 @@ class ReviewBatch:
     estimated_tokens: int
     segments: tuple[ReviewSegment, ...]
     paths: tuple[str, ...]
-
-
-def estimate_tokens(text: str) -> int:
-    """Return a coarse chars/4 token estimate used for batching decisions."""
-    return max(0, len(text) // 4)
 
 
 def build_review_batch_budget(

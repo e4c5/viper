@@ -6,6 +6,7 @@ from google.genai import types
 
 from code_review import orchestration_deps as runner_mod
 from code_review.batching import ReviewBatch, build_review_batches
+from code_review.logging_config import emit_package_log
 from code_review.models import PRContext
 
 logger = logging.getLogger(__name__)
@@ -143,7 +144,9 @@ def build_batch_review_content(
     if prompt_suffix:
         msg += "\n\n" + prompt_suffix
     if runner_mod.get_code_review_app_config().log_prompts:
-        runner_mod.logger.info(
+        emit_package_log(
+            runner_mod.logger,
+            logging.INFO,
             "LLM user prompt session=%s prompt=%s",
             "<dynamic>",
             msg,
