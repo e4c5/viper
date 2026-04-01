@@ -500,9 +500,10 @@ def test_get_unresolved_review_items_paginates_discussions(mock_client):
 
     assert len(items) == 101
     assert any(i.thread_id == "page-two" and i.inferred_severity == "high" for i in items)
-    urls = [c[0][0] for c in mock_client.return_value.__enter__.return_value.get.call_args_list]
-    assert any("page=1" in u and "per_page=100" in u for u in urls)
-    assert any("page=2" in u for u in urls)
+    calls = mock_client.return_value.__enter__.return_value.get.call_args_list
+    assert calls[0][0][0].endswith("/merge_requests/1/discussions")
+    assert calls[0][1]["params"] == {"page": 1, "per_page": 100}
+    assert calls[1][1]["params"] == {"page": 2, "per_page": 100}
 
 
 @patch("code_review.providers.http_shortcuts.httpx.Client")
@@ -640,7 +641,7 @@ def test_submit_review_decision_approve_does_not_delete(mock_client):
     assert "/merge_requests/7/approve" in http.post.call_args[0][0]
 
 
-@patch("code_review.providers.gitlab.http_get_json_or_text")
+@patch.object(GitLabProvider, "_get")
 def test_get_bot_blocking_state_requested_changes_last_wins(mock_get):
     mock_get.side_effect = [
         {"id": 10},
@@ -653,7 +654,7 @@ def test_get_bot_blocking_state_requested_changes_last_wins(mock_get):
     assert p.get_bot_blocking_state("owner", "repo", 3) == "BLOCKING"
 
 
-@patch("code_review.providers.gitlab.http_get_json_or_text")
+@patch.object(GitLabProvider, "_get")
 def test_get_bot_blocking_state_not_blocking_when_other_users_only(mock_get):
     mock_get.side_effect = [
         {"id": 10},
@@ -663,7 +664,7 @@ def test_get_bot_blocking_state_not_blocking_when_other_users_only(mock_get):
     assert p.get_bot_blocking_state("owner", "repo", 3) == "NOT_BLOCKING"
 
 
-@patch("code_review.providers.gitlab.http_get_json_or_text")
+@patch.object(GitLabProvider, "_get")
 def test_get_bot_blocking_state_unknown_on_reviews_404(mock_get):
     import httpx as real_httpx
 
@@ -675,7 +676,7 @@ def test_get_bot_blocking_state_unknown_on_reviews_404(mock_get):
     assert p.get_bot_blocking_state("owner", "repo", 3) == "UNKNOWN"
 
 
-@patch("code_review.providers.gitlab.http_get_json_or_text")
+@patch.object(GitLabProvider, "_get")
 def test_get_bot_blocking_state_paginates_reviews(mock_get):
     """Bot review on page 2 must not be ignored (first page only is stale)."""
     page1 = [{"id": i, "user": {"id": 99}, "state": "approved"} for i in range(100)]

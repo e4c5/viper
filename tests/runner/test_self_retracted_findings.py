@@ -1,8 +1,10 @@
 """Tests for dropping findings whose messages retract or negate the issue."""
 
-from code_review.runner import (
-    _filter_self_retracted_finding_messages,
+from code_review.refinement.filters.self_retraction import (
     _finding_message_looks_self_retracted,
+)
+from code_review.refinement.filters.self_retraction import (
+    filter_self_retracted_findings as _filter_self_retracted_finding_messages,
 )
 from code_review.schemas.findings import FindingV1
 
@@ -72,9 +74,12 @@ def test_filter_drops_retracted_keeps_normal():
 
 
 def test_agent_instructions_discourage_self_retracting_messages():
-    from code_review.agent.agent import FINDINGS_ONLY_INSTRUCTION, SINGLE_SHOT_INSTRUCTION
+    from code_review.agent.agent import (
+        EMBEDDED_DIFF_REVIEW_INSTRUCTION,
+        TOOL_ENABLED_REVIEW_INSTRUCTION,
+    )
 
-    for text in (FINDINGS_ONLY_INSTRUCTION, SINGLE_SHOT_INSTRUCTION):
+    for text in (TOOL_ENABLED_REVIEW_INSTRUCTION, EMBEDDED_DIFF_REVIEW_INSTRUCTION):
         lowered = text.lower()
         assert "false positive" in lowered
         assert "retract" in lowered

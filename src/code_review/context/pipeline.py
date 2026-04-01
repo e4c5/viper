@@ -15,7 +15,7 @@ from code_review.context.rag import (
     embed_texts,
 )
 from code_review.context.store import ContextStore
-from code_review.context.types import ContextReference, ReferenceType
+from code_review.context.types import ContextReference, ExternalCredentials, ReferenceType
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +74,23 @@ def _source_name_and_base(
     return ("unknown", "")
 
 
-def _get_source_tokens(ctx: ContextAwareReviewConfig) -> tuple[str, str, str, str]:
+def _get_external_credentials(
+    scm: SCMConfig, ctx: ContextAwareReviewConfig
+) -> ExternalCredentials:
+    gh_api, gh_tok = _github_api_and_token(scm, ctx)
+    gl_api, gl_tok = _gitlab_api_and_token(scm, ctx)
     jira_tok = ctx.jira_token.get_secret_value() if ctx.jira_token else ""
     conf_tok = ctx.confluence_token.get_secret_value() if ctx.confluence_token else ""
-    return (ctx.jira_email.strip(), jira_tok, ctx.confluence_email.strip(), conf_tok)
+    return ExternalCredentials(
+        github_api=gh_api,
+        github_token=gh_tok,
+        gitlab_api=gl_api,
+        gitlab_token=gl_tok,
+        jira_email=ctx.jira_email.strip(),
+        jira_token=jira_tok,
+        confluence_email=ctx.confluence_email.strip(),
+        confluence_token=conf_tok,
+    )
 
 
 def _load_context_documents(
@@ -87,29 +100,22 @@ def _load_context_documents(
     scm: SCMConfig,
     ctx: ContextAwareReviewConfig,
     applicable: list[ContextReference],
-    gh_api: str,
-    gh_tok: str,
-    gl_api: str,
-    gl_tok: str,
-    jira_email: str,
-    jira_tok: str,
-    conf_email: str,
-    conf_tok: str,
+    creds: ExternalCredentials,
 ) -> tuple[list[tuple[str, str]], list[tuple[str, object]]]:
     docs_for_distill: list[tuple[str, str]] = []
     doc_ids_for_rag: list[tuple[str, object]] = []
     extra_fields = tuple(f.strip() for f in (ctx.jira_extra_fields or "").split(",") if f.strip())
     fetch_cfg = FetchReferenceConfig(
-        github_api_base=gh_api,
-        github_token=gh_tok,
-        gitlab_api_base=gl_api,
-        gitlab_token=gl_tok,
+        github_api_base=creds.github_api,
+        github_token=creds.github_token,
+        gitlab_api_base=creds.gitlab_api,
+        gitlab_token=creds.gitlab_token,
         jira_base=ctx.jira_url,
-        jira_email=jira_email,
-        jira_token=jira_tok,
+        jira_email=creds.jira_email,
+        jira_token=creds.jira_token,
         confluence_base=ctx.confluence_url,
-        confluence_email=conf_email,
-        confluence_token=conf_tok,
+        confluence_email=creds.confluence_email,
+        confluence_token=creds.confluence_token,
         ctx_github_enabled=ctx.github_issues_enabled,
         ctx_gitlab_enabled=ctx.gitlab_issues_enabled,
         ctx_jira_enabled=ctx.jira_enabled,
@@ -200,9 +206,7 @@ def build_context_brief_for_pr(
         logger.info("context_aware: no references for enabled sources")
         return None
 
-    gh_api, gh_tok = _github_api_and_token(scm, ctx)
-    gl_api, gl_tok = _gitlab_api_and_token(scm, ctx)
-    jira_email, jira_tok, conf_email, conf_tok = _get_source_tokens(ctx)
+    creds = _get_external_credentials(scm, ctx)
 
     db_url = ctx.db_url or ""
     cache_key = (db_url, ctx.embedding_dimensions)
@@ -220,14 +224,7 @@ def build_context_brief_for_pr(
             scm=scm,
             ctx=ctx,
             applicable=applicable,
-            gh_api=gh_api,
-            gh_tok=gh_tok,
-            gl_api=gl_api,
-            gl_tok=gl_tok,
-            jira_email=jira_email,
-            jira_tok=jira_tok,
-            conf_email=conf_email,
-            conf_tok=conf_tok,
+            creds=creds,
         )
 
         if not documents_for_distill:

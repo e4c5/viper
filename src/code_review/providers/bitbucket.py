@@ -3,7 +3,9 @@
 import logging
 from datetime import datetime
 from typing import Any
+import code_review.providers.http_shortcuts as http_shortcuts
 
+from code_review.diff.utils import normalize_path
 from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.base import (
     BotAttributionIdentity,
@@ -12,31 +14,22 @@ from code_review.providers.base import (
     InlineComment,
     PRInfo,
     ProviderCapabilities,
-    ProviderInterface,
     ReviewComment,
     ReviewDecision,
     UnresolvedReviewItem,
     _log_pr_info_warning,
     default_unresolved_review_items_from_comments,
-    normalize_diff_anchor_path,
     pr_info_from_api_dict,
 )
-from code_review.providers.http_shortcuts import (
-    http_delete,
-    http_get_bytes,
-    http_get_json_or_text,
-    http_post_json,
-    http_put_json,
-)
+from code_review.providers.http_base import HttpXProvider
 from code_review.providers.review_decision_common import delete_soft_fail, effective_review_body
-from code_review.providers.safety import truncate_repo_content
+from code_review.providers.safety import MAX_REPO_FILE_BYTES, truncate_repo_content
 from code_review.reply_dismissal_state import is_reply_dismissal_accepted_reply
 from code_review.schemas.review_thread_dismissal import (
     ReviewThreadDismissalContext,
     ReviewThreadDismissalEntry,
 )
 
-MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 DEFAULT_BASE_URL = "https://api.bitbucket.org/2.0"
 logger = logging.getLogger(__name__)
 
@@ -64,15 +57,12 @@ def _bitbucket_cloud_blocking_from_participants(
     return "NOT_BLOCKING"
 
 
-class BitbucketProvider(ProviderInterface):
+class BitbucketProvider(HttpXProvider):
     """Bitbucket Cloud API client for PR diff, file content, and comments."""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, token: str = "", timeout: float = 30.0):
-        self._base_url = base_url.rstrip("/")
-        self._token = token
-        self._timeout = timeout
+    _httpx_module = http_shortcuts.httpx
 
-    def _headers(self) -> dict[str, str]:
+    def _auth_header(self) -> dict[str, str]:
         if not self._token:
             return {}
         return {"Authorization": f"Bearer {self._token}"}
@@ -80,28 +70,9 @@ class BitbucketProvider(ProviderInterface):
     def _path(self, owner: str, repo: str, *parts: str) -> str:
         return f"{self._base_url}/repositories/{owner}/{repo}/" + "/".join(parts)
 
-    def _bitbucket_enter_next_link_page(self, url: str, visited: set[str]) -> bool:
-        """Mark ``url`` visited for next-link pagination; log and return False on repeat URL."""
-        if url in visited:
-            logger.warning(_BB_PAGINATION_LOOP_MSG, url)
-            return False
-        visited.add(url)
-        return True
-
-    def _get(self, path: str) -> Any:
-        return http_get_json_or_text(path, headers=self._headers(), timeout=self._timeout)
-
-    def _get_raw_bytes(self, path: str) -> bytes:
-        return http_get_bytes(path, headers=self._headers(), timeout=self._timeout)
-
-    def _post(self, path: str, json: dict) -> Any:
-        return http_post_json(path, json, headers=self._headers(), timeout=self._timeout)
-
-    def _put(self, path: str, json: dict) -> Any:
-        return http_put_json(path, json, headers=self._headers(), timeout=self._timeout)
-
-    def _delete(self, path: str) -> None:
-        http_delete(path, headers=self._headers(), timeout=self._timeout)
+    @staticmethod
+    def _log_pagination_loop(url: str | int | None) -> None:
+        logger.warning(_BB_PAGINATION_LOOP_MSG, url)
 
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff for the PR."""
@@ -109,7 +80,7 @@ class BitbucketProvider(ProviderInterface):
         out = self._get(path)
         return out if isinstance(out, str) else ""
 
-    def get_incremental_pr_diff(
+    def _get_incremental_pr_diff(
         self,
         owner: str,
         repo: str,
@@ -118,8 +89,6 @@ class BitbucketProvider(ProviderInterface):
         head_sha: str,
     ) -> str:
         """Return unified diff for the incremental compare range ``base_sha..head_sha``."""
-        if not base_sha or not head_sha or base_sha == head_sha:
-            return self.get_pr_diff(owner, repo, pr_number)
         spec = f"{base_sha}..{head_sha}"
         out = self._get(self._path(owner, repo, "diff", spec))
         return out if isinstance(out, str) else ""
@@ -127,7 +96,7 @@ class BitbucketProvider(ProviderInterface):
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
         """Return file content at ref (Bitbucket src endpoint)."""
         url = self._path(owner, repo, "src", ref, path)
-        raw = self._get_raw_bytes(url)
+        raw = self._get_bytes(url)
         text = raw.decode("utf-8", errors="replace")
         return truncate_repo_content(text, max_bytes=MAX_REPO_FILE_BYTES)
 
@@ -136,7 +105,7 @@ class BitbucketProvider(ProviderInterface):
         url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "diffstat")
         return self._get_diffstat_files(url)
 
-    def get_incremental_pr_files(
+    def _get_incremental_pr_files(
         self,
         owner: str,
         repo: str,
@@ -145,24 +114,17 @@ class BitbucketProvider(ProviderInterface):
         head_sha: str,
     ) -> list[FileInfo]:
         """Return files changed in the incremental compare range ``base_sha..head_sha``."""
-        if not base_sha or not head_sha or base_sha == head_sha:
-            return self.get_pr_files(owner, repo, pr_number)
         spec = f"{base_sha}..{head_sha}"
         return self._get_diffstat_files(self._path(owner, repo, "diffstat", spec))
 
     def _get_diffstat_files(self, url: str | None) -> list[FileInfo]:
         """Return FileInfo objects from a Bitbucket Cloud diffstat URL."""
         result: list[FileInfo] = []
-        visited: set[str] = set()
-        while url:
-            if not self._bitbucket_enter_next_link_page(url, visited):
-                break
-            data = self._get(url)
-            page_files, next_url = self._parse_diffstat_page(data)
+        if not url:
+            return result
+        for data in self._paginate_list(url, mode="next", on_repeat=self._log_pagination_loop):
+            page_files, _ = self._parse_diffstat_page(data)
             result.extend(page_files)
-            if not next_url:
-                break
-            url = next_url
         return result
 
     def _parse_diffstat_page(self, data: Any) -> tuple[list[FileInfo], str | None]:
@@ -203,7 +165,7 @@ class BitbucketProvider(ProviderInterface):
 
     def _anchor_path_for_diff(self, file_path: str) -> str:
         """Normalize path so it matches the PR diff (enables inline comments on the diff view)."""
-        return normalize_diff_anchor_path(file_path)
+        return normalize_path(file_path, strip_git_prefixes=False)
 
     def post_review_comments(
         self,
@@ -245,16 +207,9 @@ class BitbucketProvider(ProviderInterface):
         """Return existing PR comments (inline and non-inline; paginated)."""
         url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
         result: list[ReviewComment] = []
-        visited: set[str] = set()
-        while url:
-            if not self._bitbucket_enter_next_link_page(url, visited):
-                break
-            data = self._get(url)
-            page_comments, next_url = self._comments_from_page(data)
+        for data in self._paginate_list(url, mode="next", on_repeat=self._log_pagination_loop):
+            page_comments, _ = self._comments_from_page(data)
             result.extend(page_comments)
-            if not next_url:
-                break
-            url = next_url
         return result
 
     def _comments_from_page(self, data: Any) -> tuple[list[ReviewComment], str | None]:
@@ -462,39 +417,44 @@ class BitbucketProvider(ProviderInterface):
                 e,
             )
         url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "tasks")
-        visited: set[str] = set()
-        while url:
-            if not self._bitbucket_enter_next_link_page(url, visited):
-                break
-            try:
-                data = self._get(url)
-            except Exception as e:
-                logger.warning(
-                    "Bitbucket Cloud PR tasks fetch failed owner=%s repo=%s pr=%s: %s",
-                    owner,
-                    repo,
-                    pr_number,
-                    e,
-                )
-                break
-            if not isinstance(data, dict):
-                break
-            values = data.get("values")
-            if not isinstance(values, list):
-                break
-            self._bbcloud_append_open_tasks_from_page(values, out)
-            nxt = data.get("next")
-            url = nxt.strip() if isinstance(nxt, str) and nxt.strip() else None
+        try:
+            page_iter = self._paginate_list(
+                url,
+                mode="next",
+                on_repeat=self._log_pagination_loop,
+            )
+            for data in page_iter:
+                if not isinstance(data, dict):
+                    break
+                values = data.get("values")
+                if not isinstance(values, list):
+                    break
+                self._bbcloud_append_open_tasks_from_page(values, out)
+        except Exception as e:
+            logger.warning(
+                "Bitbucket Cloud PR tasks fetch failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
         return out
 
-    def _bbcloud_fetch_pr_comments_page(
-        self, owner: str, repo: str, pr_number: int, url: str, visited: set[str]
-    ) -> tuple[list[dict], str | None] | None:
-        """Fetch one comments page. Returns None if the pagination loop should stop."""
-        if not self._bitbucket_enter_next_link_page(url, visited):
-            return None
+    def _bbcloud_list_pr_comment_dicts(self, owner: str, repo: str, pr_number: int) -> list[dict]:
+        """Paginate GET pullrequest comments; return raw dicts (for reply-dismissal threading)."""
+        url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
+        out: list[dict] = []
         try:
-            data = self._get(url)
+            page_iter = self._paginate_list(
+                url,
+                mode="next",
+                on_repeat=self._log_pagination_loop,
+            )
+            for data in page_iter:
+                if not isinstance(data, dict):
+                    break
+                page = [c for c in (data.get("values") or []) if isinstance(c, dict)]
+                out.extend(page)
         except Exception as e:
             logger.warning(
                 "Bitbucket Cloud list comments failed owner=%s repo=%s pr=%s: %s",
@@ -503,29 +463,6 @@ class BitbucketProvider(ProviderInterface):
                 pr_number,
                 e,
             )
-            return None
-        if not isinstance(data, dict):
-            return None
-        page: list[dict] = []
-        for c in data.get("values") or []:
-            if isinstance(c, dict):
-                page.append(c)
-        nxt = data.get("next")
-        next_url = nxt.strip() if isinstance(nxt, str) and nxt.strip() else None
-        return page, next_url
-
-    def _bbcloud_list_pr_comment_dicts(self, owner: str, repo: str, pr_number: int) -> list[dict]:
-        """Paginate GET pullrequest comments; return raw dicts (for reply-dismissal threading)."""
-        url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "comments")
-        out: list[dict] = []
-        visited: set[str] = set()
-        while url:
-            chunk = self._bbcloud_fetch_pr_comments_page(owner, repo, pr_number, url, visited)
-            if chunk is None:
-                break
-            page, next_url = chunk
-            out.extend(page)
-            url = next_url
         return out
 
     @staticmethod
@@ -793,15 +730,18 @@ class BitbucketProvider(ProviderInterface):
         """List commits on the PR (paginated)."""
         url: str | None = self._path(owner, repo, "pullrequests", str(pr_number), "commits")
         out: list[str] = []
-        visited: set[str] = set()
-        while url:
-            if not self._bitbucket_enter_next_link_page(url, visited):
-                break
-            data = self._safe_get_commit_page(url, owner, repo, pr_number)
+        def _fetch_page(path: str, _params: dict[str, Any] | None) -> Any:
+            return self._safe_get_commit_page(path, owner, repo, pr_number)
+
+        for data in self._paginate_list(
+            url,
+            mode="next",
+            fetch_page=_fetch_page,
+            on_repeat=self._log_pagination_loop,
+        ):
             if data is None:
                 return out
             out.extend(self._messages_from_commit_page(data))
-            url = self._next_page_url(data)
         return out
 
     def _safe_get_commit_page(

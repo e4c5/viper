@@ -1,21 +1,121 @@
 """Unit tests for ReviewOrchestrator and its extracted helpers (RUN_REVIEW_REFACTOR_PLAN)."""
 
+import logging
+import os
+import hashlib
+import subprocess
+import sys
 from contextlib import contextmanager
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from code_review.runner import (
-    ReviewOrchestrator,
+from code_review.config import reset_config_cache
+from code_review.models import PRContext
+from code_review.orchestration.orchestrator import ReviewOrchestrator
+from code_review.orchestration_deps import (
+    _build_idempotency_key,
     _generate_auto_pr_description,
     _maybe_post_started_review_comment,
 )
 from tests.conftest import runner_run_async_returning
 
+TEST_REPO_ROOT = Path(__file__).resolve().parents[2]
+TEST_SRC_ROOT = TEST_REPO_ROOT / "src"
+
+
+def test_build_batch_review_content_logs_user_prompt_when_enabled(caplog):
+    from code_review.orchestration.execution import build_batch_review_content
+
+    with patch.dict(os.environ, {"CODE_REVIEW_LOG_PROMPTS": "true"}, clear=False):
+        reset_config_cache()
+        try:
+            caplog.set_level(logging.INFO)
+            build_batch_review_content(
+                pr_ctx=PRContext("o", "r", 1, head_sha="abc123"),
+                batch_count=2,
+                prompt_suffix="extra context",
+            )
+        finally:
+            reset_config_cache()
+
+    assert "LLM user prompt" in caplog.text
+    assert "extra context" in caplog.text
+
+
+@patch("google.adk.agents.SequentialAgent")
+@patch("code_review.agent.workflows.create_review_agent")
+def test_create_sequential_batch_review_agent_logs_instruction_when_enabled(
+    mock_create_review_agent, _mock_sequential_agent, caplog
+):
+    from code_review.agent.workflows import create_sequential_batch_review_agent
+    from code_review.batching import ReviewBatch, ReviewSegment
+
+    mock_create_review_agent.return_value = MagicMock(name="code_review_agent", instruction="base")
+    batch = ReviewBatch(
+        batch_index=0,
+        estimated_tokens=10,
+        paths=("foo.py",),
+        segments=(
+            ReviewSegment(
+                path="foo.py",
+                diff_text="diff --git a/foo.py b/foo.py\n@@ -1 +1 @@\n-old\n+new\n",
+                estimated_tokens=10,
+                split_strategy="whole_file",
+                segment_index=0,
+                total_segments=1,
+            ),
+        ),
+    )
+
+    with patch.dict(os.environ, {"CODE_REVIEW_LOG_PROMPTS": "true"}, clear=False):
+        reset_config_cache()
+        try:
+            caplog.set_level(logging.INFO)
+            create_sequential_batch_review_agent(
+                provider=MagicMock(),
+                review_standards="### Python",
+                batches=[batch],
+                head_sha="abc123",
+            )
+        finally:
+            reset_config_cache()
+
+    assert "LLM instruction agent=batch_review_0" in caplog.text
+    assert "Review exactly one prepared batch from this PR." in caplog.text
+
+
+def test_canonical_orchestrator_imports_without_circular_dependency():
+    """Directly importing the canonical orchestrator module should not trip lazy imports."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                f"sys.path.insert(0, {str(TEST_SRC_ROOT)!r}); "
+                "import code_review.orchestration.orchestrator; "
+                "print('ok')"
+            ),
+        ],
+        cwd=TEST_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "ok" in result.stdout
+
 
 @contextmanager
 def _orchestrator_run_env(
-    findings_json: str = '[{"path":"foo.py","line":1,"severity":"low","code":"c","message":"m"}]',
+    findings_json: str = (
+        '{"findings":[{"path":"foo.py","line":1,"severity":"low","code":"c",'
+        '"message":"m"}]}'
+    ),
 ):
     """Context manager: patch config/provider and ADK Runner; yield (provider, mock_runner)."""
     from code_review.providers.base import FileInfo
@@ -28,10 +128,15 @@ def _orchestrator_run_env(
     mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
     with (
-        patch("code_review.runner.get_context_window", return_value=1_000_000),
-        patch("code_review.runner.get_provider") as mock_get_provider,
-        patch("code_review.runner.get_scm_config") as mock_scm,
-        patch("code_review.runner.get_llm_config") as mock_llm,
+        patch(
+            "code_review.orchestration.orchestrator.runner_mod.get_context_window",
+            return_value=1_000_000,
+        ),
+        patch(
+            "code_review.orchestration.orchestrator.runner_mod.get_provider"
+        ) as mock_get_provider,
+        patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config") as mock_scm,
+        patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config") as mock_llm,
         patch("google.adk.runners.Runner", return_value=mock_runner_instance),
     ):
         mock_scm.return_value = MagicMock(
@@ -44,7 +149,14 @@ def _orchestrator_run_env(
         mock_llm.return_value = MagicMock()
         provider = MagicMock()
         provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-        provider.get_pr_diff.return_value = "diff"
+        provider.get_pr_diff.return_value = (
+            "diff --git a/foo.py b/foo.py\n"
+            "--- a/foo.py\n"
+            "+++ b/foo.py\n"
+            "@@ -1,1 +1,2 @@\n"
+            "-old\n"
+            "+new\n"
+        )
         provider.get_existing_review_comments.return_value = []
         provider.get_file_content.return_value = "line1\n"
         provider.capabilities.return_value = MagicMock(
@@ -57,9 +169,9 @@ def _orchestrator_run_env(
 # --- ReviewOrchestrator._load_config_and_provider() ---
 
 
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_load_config_and_provider_calls_deps_and_returns_tuple(
     mock_get_scm_config, mock_get_llm_config, mock_get_provider
 ):
@@ -89,9 +201,9 @@ def test_load_config_and_provider_calls_deps_and_returns_tuple(
     assert result == (cfg, llm_cfg, provider)
 
 
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_load_config_and_provider_unwraps_secret_str(
     mock_get_scm_config, mock_get_llm_config, mock_get_provider
 ):
@@ -118,9 +230,9 @@ def test_load_config_and_provider_unwraps_secret_str(
     )
 
 
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_load_config_and_provider_uses_plain_token_when_no_get_secret_value(
     mock_get_scm_config, mock_get_llm_config, mock_get_provider
 ):
@@ -142,8 +254,8 @@ def test_load_config_and_provider_uses_plain_token_when_no_get_secret_value(
     )
 
 
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_load_config_and_provider_propagates_scm_config_exception(
     mock_get_scm_config, mock_get_llm_config
 ):
@@ -157,9 +269,9 @@ def test_load_config_and_provider_propagates_scm_config_exception(
     mock_get_llm_config.assert_not_called()
 
 
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_load_config_and_provider_propagates_get_provider_exception(
     mock_get_scm_config, mock_get_llm_config, mock_get_provider
 ):
@@ -201,49 +313,217 @@ def test_review_orchestrator_run_returns_list_of_findings():
     assert result[0].message == "m"
 
 
-# --- Step 2: _determine_skip_reason, _load_existing_comments_and_markers,
-#            _compute_idempotency_and_maybe_short_circuit ---
+def test_review_orchestrator_run_does_not_start_observability_when_preflight_fails():
+    orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="abc123", dry_run=True)
 
-
-def test_determine_skip_reason_returns_none_when_no_skip_config():
-    """When cfg has no skip_label or skip_title_pattern, _determine_skip_reason returns None."""
-    cfg = MagicMock(skip_label="", skip_title_pattern="")
-    provider = MagicMock()
-    o = ReviewOrchestrator("o", "r", 1)
-    result = o._determine_skip_reason(provider, cfg, "o", "r", 1, "trace-1", 0.0, MagicMock())
-    assert result is None
-    provider.get_pr_info.assert_not_called()
-
-
-def test_determine_skip_reason_returns_empty_list_when_pr_has_skip_label():
-    """When PR has the skip label, _determine_skip_reason returns [] and emits observability."""
-    cfg = MagicMock()
-    cfg.skip_label = "skip-review"
-    cfg.skip_title_pattern = ""
-    provider = MagicMock()
-    provider.get_pr_info.return_value = MagicMock(labels=["skip-review", "other"], title="Fix bug")
-    o = ReviewOrchestrator("o", "r", 1)
     with (
-        patch("code_review.runner._log_run_complete"),
-        patch("code_review.runner.observability") as mock_obs,
+        patch.object(orchestrator, "_load_config_and_provider", side_effect=RuntimeError("boom")),
+        patch("code_review.orchestration.orchestrator.observability.start_run") as mock_start_run,
     ):
-        result = o._determine_skip_reason(provider, cfg, "o", "r", 1, "trace-1", 0.0, MagicMock())
-    assert result == []
-    mock_obs.finish_run.assert_called_once()
+        with pytest.raises(RuntimeError, match="boom"):
+            orchestrator.run()
+
+    mock_start_run.assert_not_called()
 
 
-def test_determine_skip_reason_returns_none_when_pr_info_is_none():
-    """When get_pr_info returns None, _determine_skip_reason returns None."""
-    cfg = MagicMock(skip_label="skip-review", skip_title_pattern="")
+@patch("google.adk.sessions.InMemorySessionService")
+@patch("google.adk.runners.Runner")
+@patch("code_review.agent.workflows.create_sequential_batch_review_agent")
+def test_create_agent_and_runner_uses_sequential_batch_workflow(
+    mock_create_sequential, mock_runner_cls, mock_session_service_cls
+):
+    from code_review.orchestration.execution import create_agent_and_runner
+
     provider = MagicMock()
-    provider.get_pr_info.return_value = None
-    o = ReviewOrchestrator("o", "r", 1)
-    result = o._determine_skip_reason(provider, cfg, "o", "r", 1, "trace-1", 0.0, MagicMock())
-    assert result is None
+    sequential_agent = MagicMock()
+    mock_create_sequential.return_value = sequential_agent
+    runner_instance = MagicMock()
+    mock_runner_cls.return_value = runner_instance
+    mock_session_service_cls.return_value = MagicMock()
+    batches = [MagicMock()]
+
+    _, _, runner = create_agent_and_runner(
+        PRContext("o", "r", 1, "sha1"),
+        provider,
+        "review standards",
+        batches,
+    )
+
+    assert runner is runner_instance
+    mock_create_sequential.assert_called_once_with(
+        provider,
+        "review standards",
+        batches,
+        head_sha="sha1",
+        context_brief_attached=False,
+    )
 
 
-def test_load_existing_comments_and_markers_returns_ignore_and_resolved_sets():
-    """_load_existing_comments_and_markers returns existing, dicts, ignore_set, resolved sets."""
+@patch("code_review.orchestration.execution._run_sequential_batch_review_mode")
+def test_execution_sequential_batch_mode_forwards_supported_args_only(mock_run_batch_mode):
+    """Execution helper should receive the supported batch-review arguments only."""
+    from code_review.orchestration.execution import run_agent_and_collect_findings
+
+    provider = MagicMock()
+    runner = MagicMock()
+    batches = [MagicMock()]
+    mock_run_batch_mode.return_value = []
+
+    result = run_agent_and_collect_findings(
+        PRContext("o", "r", 42, "abc123"),
+        provider,
+        "review standards",
+        runner,
+        "session-1",
+        batches,
+        context_brief_attached=True,
+        prompt_suffix="extra context",
+    )
+
+    assert result == []
+    mock_run_batch_mode.assert_called_once_with(
+        PRContext("o", "r", 42, "abc123"),
+        provider,
+        "review standards",
+        runner,
+        "session-1",
+        batches=batches,
+        batch_count=1,
+        context_brief_attached=True,
+        prompt_suffix="extra context",
+    )
+
+
+@patch("code_review.orchestration.execution.runner_mod._run_agent_and_collect_response")
+def test_execution_run_agent_and_collect_response_uses_canonical_runner_helper(
+    mock_collect_response,
+):
+    from code_review.orchestration.execution import run_agent_and_collect_response
+
+    runner = MagicMock()
+    session_service = MagicMock()
+    content = MagicMock()
+    mock_collect_response.return_value = "final response"
+
+    result = run_agent_and_collect_response(runner, session_service, "session-1", content)
+
+    assert result == "final response"
+    mock_collect_response.assert_called_once_with(runner, "session-1", content)
+
+
+@pytest.mark.asyncio
+async def test_collect_response_async_bypasses_adk_templating_for_single_response_runs():
+    from code_review.orchestration.runner_utils import _collect_response_async
+
+    agent = SimpleNamespace(instruction="Keep literal braces like {path} in prompts.")
+    event = MagicMock()
+    event.is_final_response.return_value = True
+    event.content = MagicMock()
+    event.content.parts = [MagicMock(text="final response")]
+    runner = SimpleNamespace(agent=agent, run_async=runner_run_async_returning([event]))
+
+    result = await _collect_response_async(runner, "session-1", MagicMock())
+
+    assert result == "final response"
+    assert callable(agent.instruction)
+    assert agent.instruction(None) == "Keep literal braces like {path} in prompts."
+
+
+@patch("code_review.orchestration.execution.runner_mod._run_agent_and_collect_responses")
+def test_run_agent_and_collect_findings_parses_sequential_workflow_responses(
+    mock_collect_responses,
+):
+    from code_review.orchestration.execution import run_agent_and_collect_findings
+
+    mock_collect_responses.return_value = [
+        (
+            "batch_review_0",
+            '{"findings":[{"path":"a.py","line":1,"severity":"low","code":"c1","message":"m1"}]}',
+        ),
+        (
+            "batch_review_1",
+            '{"findings":[{"path":"b.py","line":2,"severity":"medium","code":"c2","message":"m2"}]}',
+        ),
+    ]
+    runner = SimpleNamespace(_uses_sequential_batch_review=True)
+
+    findings = run_agent_and_collect_findings(
+        PRContext("o", "r", 1, "sha1"),
+        MagicMock(),
+        "review standards",
+        runner,
+        "session-1",
+        [MagicMock(), MagicMock()],
+    )
+
+    assert [(f.path, f.line, f.message) for f in findings] == [
+        ("a.py", 1, "m1"),
+        ("b.py", 2, "m2"),
+    ]
+
+
+# --- Step 2: ReviewFilter, CommentManager, _compute_idempotency_and_maybe_short_circuit ---
+
+
+def test_review_filter_should_skip_returns_none_when_no_config():
+    """ReviewFilter.should_skip returns None when cfg has no skip_label or skip_title_pattern."""
+    from code_review.orchestration.filter import ReviewFilter
+
+    cfg = MagicMock(skip_label="", skip_title_pattern="")
+    rf = ReviewFilter()
+    assert rf.should_skip(MagicMock(), cfg) is None
+
+
+def test_review_filter_should_skip_returns_reason_when_label_matches():
+    """ReviewFilter.should_skip returns a non-empty reason string when label is present."""
+    from code_review.orchestration.filter import ReviewFilter
+
+    cfg = MagicMock(skip_label="skip-review", skip_title_pattern="")
+    pr_info = MagicMock(labels=["skip-review", "other"], title="Fix bug")
+    rf = ReviewFilter()
+    reason = rf.should_skip(pr_info, cfg)
+    assert reason is not None
+    assert "skip-review" in reason
+
+
+def test_review_filter_should_skip_returns_none_when_pr_info_is_none():
+    """ReviewFilter.should_skip returns None when pr_info is None."""
+    from code_review.orchestration.filter import ReviewFilter
+
+    cfg = MagicMock(skip_label="skip-review", skip_title_pattern="")
+    rf = ReviewFilter()
+    assert rf.should_skip(None, cfg) is None
+
+
+def test_review_filter_should_skip_handles_none_labels_and_title() -> None:
+    """Missing labels/title should not raise and should behave like empty inputs."""
+    from code_review.orchestration.filter import ReviewFilter
+
+    cfg = MagicMock(skip_label="skip-review", skip_title_pattern="[skip-review]")
+    pr_info = MagicMock(labels=None, title=None)
+    rf = ReviewFilter()
+
+    assert rf.should_skip(pr_info, cfg) is None
+
+
+def test_review_filter_should_skip_ignores_non_string_labels() -> None:
+    """Skip-label matching should only consider real string labels."""
+    from code_review.orchestration.filter import ReviewFilter
+
+    cfg = MagicMock(skip_label="skip-review", skip_title_pattern="")
+    pr_info = MagicMock(labels=[None, 123, " skip-review "], title="Fix bug")
+    rf = ReviewFilter()
+
+    reason = rf.should_skip(pr_info, cfg)
+
+    assert reason is not None
+    assert "skip-review" in reason
+
+
+def test_comment_manager_load_existing_comments_builds_ignore_set():
+    """CommentManager.load_existing_comments populates ignore_set and existing_comments."""
+    from code_review.comments.manager import CommentManager
+
     provider = MagicMock()
     comment = MagicMock()
     comment.model_dump.return_value = {"path": "a.py", "body": "Hello"}
@@ -252,50 +532,131 @@ def test_load_existing_comments_and_markers_returns_ignore_and_resolved_sets():
     comment.resolved = False
     provider.get_existing_review_comments.return_value = [comment]
 
-    o = ReviewOrchestrator("o", "r", 1)
-    existing, existing_dicts, ignore_set, resolved_comments, resolved_body_set, resolved_fp_set = (
-        o._load_existing_comments_and_markers(provider, "o", "r", 1)
+    mgr = CommentManager()
+    mgr.load_existing_comments(provider, "o", "r", 1)
+
+    assert len(mgr.existing_comments) == 1
+    assert len(mgr.ignore_set) >= 1  # body_hash at least
+    assert mgr.resolved_fingerprints == set()
+    provider.get_existing_review_comments.assert_called_once_with("o", "r", 1)
+
+
+def test_comment_manager_filter_duplicates_returns_to_post():
+    """CommentManager.filter_duplicates returns (finding, fp) pairs and blocks duplicates."""
+    from code_review.comments.manager import CommentManager
+    from code_review.schemas.findings import FindingV1
+
+    mgr = CommentManager()  # empty ignore_set
+    finding = FindingV1(path="foo.py", line=1, severity="low", code="X", message="msg")
+
+    def fp_fn(_finding):
+        return "fp-abc"
+
+    to_post = mgr.filter_duplicates([finding], fp_fn)
+
+    assert len(to_post) == 1
+    assert to_post[0][0] is finding
+    assert isinstance(to_post[0][1], str)
+    # Calling again with the same finding should be deduped
+    to_post2 = mgr.filter_duplicates([finding], fp_fn)
+    assert to_post2 == []
+
+
+def test_comment_manager_filter_duplicates_keeps_distinct_fingerprints_with_same_body():
+    """Distinct fingerprints should not be suppressed by body-hash dedup seeding."""
+    from code_review.comments.manager import CommentManager
+    from code_review.schemas.findings import FindingV1
+
+    mgr = CommentManager()
+    finding_one = FindingV1(path="foo.py", line=1, severity="low", code="X", message="msg")
+    finding_two = FindingV1(path="foo.py", line=1, severity="low", code="X", message="msg")
+
+    fps = {
+        id(finding_one): "fp-1",
+        id(finding_two): "fp-2",
+    }
+
+    to_post = mgr.filter_duplicates([finding_one, finding_two], lambda f: fps[id(f)])
+
+    assert to_post == [(finding_one, "fp-1"), (finding_two, "fp-2")]
+
+
+def test_comment_manager_filter_duplicates_skips_resolved_body_hash():
+    """Resolved comments should suppress reposts even without a matching fingerprint."""
+    from code_review.comments.manager import CommentManager
+    from code_review.formatters.comment import finding_to_comment_body
+    from code_review.schemas.findings import FindingV1
+
+    mgr = CommentManager()
+    finding = FindingV1(path="foo.py", line=1, severity="low", code="X", message="msg")
+    body = finding_to_comment_body(finding)
+    body_hash = hashlib.sha256(body.encode()).hexdigest()
+    mgr._resolved_body_set.add((finding.path, body_hash))
+
+    to_post = mgr.filter_duplicates([finding], lambda _finding: "")
+
+    assert to_post == []
+
+
+def test_comment_manager_filter_duplicates_uses_posting_body_format_for_dedup():
+    """Dedup hashing must honor non-collapsible prompt formatting used during posting."""
+    from code_review.comments.manager import CommentManager
+    from code_review.formatters.comment import finding_to_comment_body
+    from code_review.schemas.findings import FindingV1
+
+    mgr = CommentManager()
+    finding = FindingV1(
+        path="foo.py",
+        line=1,
+        severity="low",
+        code="X",
+        message="msg",
+        agent_fix_prompt="Verify src://foo.py and apply the fix.",
+    )
+    posted_body = finding_to_comment_body(finding, use_collapsible_prompt=False)
+    posted_body_hash = hashlib.sha256(posted_body.encode()).hexdigest()
+    mgr.ignore_set.add((finding.path, posted_body_hash))
+
+    to_post = mgr.filter_duplicates(
+        [finding],
+        lambda _finding: "",
+        use_collapsible_prompt=False,
     )
 
-    assert len(existing) == 1
-    assert existing_dicts == [{"path": "a.py", "body": "Hello"}]
-    assert len(ignore_set) >= 1  # body_hash at least
-    assert resolved_comments == []
-    assert resolved_body_set == set()
-    assert resolved_fp_set == set()
-    provider.get_existing_review_comments.assert_called_once_with("o", "r", 1)
+    assert to_post == []
 
 
 def test_compute_idempotency_and_maybe_short_circuit_returns_none_when_no_head_sha():
     """When head_sha is empty, _compute_idempotency_and_maybe_short_circuit returns None."""
+    from code_review.orchestration.runner_utils import ReviewRunObservability
+
     o = ReviewOrchestrator("o", "r", 1, head_sha="")
     result = o._compute_idempotency_and_maybe_short_circuit(
-        MagicMock(), MagicMock(), "o", "r", 1, "", [], "trace", 0.0, MagicMock()
+        MagicMock(),
+        MagicMock(),
+        [],
+        ReviewRunObservability("trace", MagicMock(), start_time=0.0),
     )
     assert result is None
 
 
 def test_compute_idempotency_and_maybe_short_circuit_returns_none_when_key_not_seen():
     """When idempotency key not in comments, returns None."""
+    from code_review.orchestration.runner_utils import ReviewRunObservability
+
     o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
     result = o._compute_idempotency_and_maybe_short_circuit(
         MagicMock(),
         MagicMock(),
-        "o",
-        "r",
-        1,
-        "abc",
         [{"path": "x", "body": "no marker"}],
-        "trace",
-        0.0,
-        MagicMock(),
+        ReviewRunObservability("trace", MagicMock(), start_time=0.0),
     )
     assert result is None
 
 
 def test_compute_idempotency_and_maybe_short_circuit_returns_empty_list_when_key_seen():
     """When idempotency key is seen in comments, returns [] and emits observability."""
-    from code_review.runner import _build_idempotency_key
+    from code_review.orchestration.runner_utils import ReviewRunObservability
 
     cfg = MagicMock(provider="gitea", url="https://x.com", token="x")
     llm_cfg = MagicMock(provider="gemini", model="m")
@@ -303,11 +664,14 @@ def test_compute_idempotency_and_maybe_short_circuit_returns_empty_list_when_key
     existing_dicts = [{"path": "a.py", "body": f"<!-- code-review-agent:run={run_id} -->\nDone."}]
     o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
     with (
-        patch("code_review.runner._log_run_complete"),
-        patch("code_review.runner.observability") as mock_obs,
+        patch("code_review.orchestration.runner_utils._log_run_complete"),
+        patch("code_review.orchestration.runner_utils.observability") as mock_obs,
     ):
         result = o._compute_idempotency_and_maybe_short_circuit(
-            cfg, llm_cfg, "o", "r", 1, "abc", existing_dicts, "trace", 0.0, MagicMock()
+            cfg,
+            llm_cfg,
+            existing_dicts,
+            ReviewRunObservability("trace", MagicMock(), start_time=0.0),
         )
     assert result == []
     mock_obs.finish_run.assert_called_once()
@@ -315,7 +679,7 @@ def test_compute_idempotency_and_maybe_short_circuit_returns_empty_list_when_key
 
 def test_compute_idempotency_and_maybe_short_circuit_uses_incremental_base_in_key():
     """A different incremental base_sha must not short-circuit as the same run."""
-    from code_review.runner import _build_idempotency_key
+    from code_review.orchestration.runner_utils import ReviewRunObservability
 
     cfg = MagicMock(provider="gitea", url="https://x.com", token="x", base_sha="base-new")
     llm_cfg = MagicMock(provider="gemini", model="m")
@@ -324,14 +688,16 @@ def test_compute_idempotency_and_maybe_short_circuit_uses_incremental_base_in_ke
     o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
 
     result = o._compute_idempotency_and_maybe_short_circuit(
-        cfg, llm_cfg, "o", "r", 1, "abc", existing_dicts, "trace", 0.0, MagicMock()
+        cfg,
+        llm_cfg,
+        existing_dicts,
+        ReviewRunObservability("trace", MagicMock(), start_time=0.0),
     )
 
     assert result is None
 
 
-# --- Step 3: _fetch_pr_files_and_diffs, _build_ignore_set_and_filter_files,
-#            _detect_languages_for_files ---
+# --- Step 3: _fetch_review_files_and_diffs, _detect_languages_for_files ---
 
 
 def test_incremental_base_sha_uses_cfg_head_sha_when_parameter_missing():
@@ -342,8 +708,12 @@ def test_incremental_base_sha_uses_cfg_head_sha_when_parameter_missing():
     assert result == "base123"
 
 
-def test_fetch_pr_files_and_diffs_returns_files_paths_and_full_diff():
-    """_fetch_pr_files_and_diffs returns (files, paths, full_diff) from provider."""
+def test_fetch_review_files_and_diffs_returns_files_paths_and_full_diff():
+    """StandardReviewHandler.fetch_review_files_and_diffs returns the active review scope."""
+    from code_review.orchestration.context_enricher import ContextEnricher
+    from code_review.orchestration.review_decision import ReviewDecisionHandler
+    from code_review.orchestration.reply_dismissal import ReplyDismissalHandler
+    from code_review.orchestration.standard_review import StandardReviewHandler
     from code_review.providers.base import FileInfo
 
     provider = MagicMock()
@@ -353,29 +723,47 @@ def test_fetch_pr_files_and_diffs_returns_files_paths_and_full_diff():
     ]
     provider.get_pr_diff.return_value = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py"
 
-    o = ReviewOrchestrator("o", "r", 1)
-    files, paths, full_diff = o._fetch_pr_files_and_diffs(provider, "o", "r", 1)
+    pr_ctx = PRContext("o", "r", 1)
+    reply_handler = ReplyDismissalHandler(
+        pr_ctx, dry_run=True, event_context=None, run_reply_dismissal_llm=lambda _: ""
+    )
+    decision_handler = ReviewDecisionHandler(
+        pr_ctx,
+        dry_run=True,
+        event_context=None,
+        reply_dismissal_handler=reply_handler,
+        result_builder=MagicMock(),
+        skip_if_needed=MagicMock(),
+    )
+    handler = StandardReviewHandler(
+        pr_ctx,
+        dry_run=True,
+        print_findings=False,
+        context_enricher=ContextEnricher(pr_ctx),
+        review_decision_handler=decision_handler,
+        result_builder=MagicMock(),
+    )
+
+    files, paths, full_diff, incremental_base_sha = handler.fetch_review_files_and_diffs(
+        provider,
+        MagicMock(base_sha="", head_sha=""),
+        incremental_base_sha_fn=ReviewOrchestrator._incremental_base_sha,
+    )
 
     assert len(files) == 2
     assert paths == ["foo.py", "bar.go"]
     assert "diff --git" in full_diff
+    assert incremental_base_sha == ""
     provider.get_pr_files.assert_called_once_with("o", "r", 1)
     provider.get_pr_diff.assert_called_once_with("o", "r", 1)
 
 
-def test_build_ignore_set_and_filter_files_returns_paths_unchanged():
-    """_build_ignore_set_and_filter_files currently returns paths unchanged (no filtering)."""
-    o = ReviewOrchestrator("o", "r", 1)
-    paths = ["a.py", "b.go", "c.rs"]
-    result = o._build_ignore_set_and_filter_files(paths)
-    assert result == ["a.py", "b.go", "c.rs"]
-
-
 def test_detect_languages_for_files_returns_detected_and_review_standards():
-    """_detect_languages_for_files returns (detected, review_standards) from detect_from_paths."""
-    o = ReviewOrchestrator("o", "r", 1)
+    """StandardReviewHandler.detect_languages_for_files returns detector output plus standards."""
+    from code_review.orchestration.standard_review import StandardReviewHandler
+
     paths = ["src/main.py", "tests/test_foo.py"]
-    detected, review_standards = o._detect_languages_for_files(paths)
+    detected, review_standards = StandardReviewHandler.detect_languages_for_files(paths)
 
     assert hasattr(detected, "language")
     assert hasattr(detected, "framework")
@@ -387,94 +775,104 @@ def test_detect_languages_for_files_returns_detected_and_review_standards():
 # --- Step 4: _create_agent_and_runner ---
 
 
-@patch("code_review.runner.create_review_agent")
-def test_create_agent_and_runner_returns_session_id_service_runner(mock_create_agent):
-    """_create_agent_and_runner returns (session_id, session_service, runner).
+def test_create_agent_and_runner_returns_session_id_service_runner():
+    """create_agent_and_runner returns (session_id, session_service, runner).
 
-    Called with findings_only=True.  The default (use_file_by_file=False) means
-    single-shot mode so disable_tools=True is passed to create_review_agent.
+    Batch mode always constructs a SequentialAgent workflow over prepared batches.
     """
-    mock_agent = MagicMock()
-    mock_create_agent.return_value = mock_agent
+    from code_review.orchestration.execution import create_agent_and_runner
+
     provider = MagicMock()
     review_standards = "### Python"
+    batch_agent = MagicMock()
+    batches = [MagicMock()]
 
-    o = ReviewOrchestrator("o", "r", 42)
     with (
         patch("google.adk.runners.Runner") as MockRunner,
         patch("google.adk.sessions.InMemorySessionService") as MockSessionService,
+        patch(
+            "code_review.agent.workflows.create_sequential_batch_review_agent"
+        ) as mock_create_batch,
     ):
         mock_svc = MagicMock()
         MockSessionService.return_value = mock_svc
         mock_runner = MagicMock()
         MockRunner.return_value = mock_runner
+        mock_create_batch.return_value = batch_agent
 
-        session_id, session_service, runner = o._create_agent_and_runner(
-            provider, review_standards, "o", "r", 42
-        )
-
-        mock_create_agent.assert_called_once_with(
+        session_id, session_service, runner = create_agent_and_runner(
+            PRContext("o", "r", 42),
             provider,
             review_standards,
-            findings_only=True,
-            disable_tools=True,
+            batches,
+        )
+
+        mock_create_batch.assert_called_once_with(
+            provider,
+            review_standards,
+            batches,
+            head_sha="",
             context_brief_attached=False,
         )
     assert session_id.startswith("o/r/pr-42/")
     assert len(session_id) > len("o/r/pr-42/")
     assert session_service is mock_svc
     assert runner is mock_runner
-    # Session is created in _collect_response_async via create_session (async), not here
-    mock_svc.create_session_sync.assert_not_called()
+    # Runner is responsible for creating the in-memory session lazily.
     MockRunner.assert_called_once_with(
-        agent=mock_agent, app_name="code_review", session_service=mock_svc
+        agent=batch_agent,
+        app_name="code_review",
+        session_service=mock_svc,
+        auto_create_session=True,
     )
 
 
-# --- Step 5: _run_agent_and_collect_findings, _attach_fingerprints_and_filter_findings,
-#            _post_findings_and_summary ---
+def test_comment_manager_filter_duplicates_via_orchestrator_run():
+    """_filter_findings_by_diff_scope integration: orchestrator.run() returns correct findings.
 
-
-def test_attach_fingerprints_and_filter_findings_returns_to_post():
-    """_attach_fingerprints_and_filter_findings filters by ignore set.
-
-    Returns list of (finding, fp).
+    This is an implicit integration test verifying CommentManager.filter_duplicates is wired
+    into the full run() path.
     """
-    from code_review.schemas.findings import FindingV1
+    with _orchestrator_run_env() as (provider, _):
+        orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="abc123", dry_run=True)
+        result = orchestrator.run()
 
-    o = ReviewOrchestrator("o", "r", 1, head_sha="abc")
-    finding = FindingV1(path="foo.py", line=1, severity="low", code="X", message="msg")
-    all_findings = [finding]
-    provider = MagicMock()
-    provider.get_file_content.return_value = "line1\nline2\n"
-    ignore_set = set()
-    resolved_body_set = set()
-    resolved_fp_set = set()
-
-    to_post = o._attach_fingerprints_and_filter_findings(
-        all_findings,
-        provider,
-        "o",
-        "r",
-        "abc",
-        ignore_set,
-        resolved_body_set,
-        resolved_fp_set,
-    )
-
-    assert len(to_post) == 1
-    assert to_post[0][0] is finding
-    assert isinstance(to_post[0][1], str)
-    assert len(ignore_set) >= 1
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0].path == "foo.py"
 
 
 def test_post_findings_and_summary_returns_zero_when_dry_run():
-    """_post_findings_and_summary returns 0 when dry_run=True (no posts)."""
-    o = ReviewOrchestrator("o", "r", 1, head_sha="abc", dry_run=True)
+    """StandardReviewHandler.post_findings_and_summary returns 0 when dry_run=True."""
+    from code_review.orchestration.context_enricher import ContextEnricher
+    from code_review.orchestration.reply_dismissal import ReplyDismissalHandler
+    from code_review.orchestration.review_decision import ReviewDecisionHandler
+    from code_review.orchestration.standard_review import StandardReviewHandler
+
+    pr_ctx = PRContext("o", "r", 1, "abc")
+    reply_handler = ReplyDismissalHandler(
+        pr_ctx, dry_run=True, event_context=None, run_reply_dismissal_llm=lambda _: ""
+    )
+    decision_handler = ReviewDecisionHandler(
+        pr_ctx,
+        dry_run=True,
+        event_context=None,
+        reply_dismissal_handler=reply_handler,
+        result_builder=MagicMock(),
+        skip_if_needed=MagicMock(),
+    )
+    handler = StandardReviewHandler(
+        pr_ctx,
+        dry_run=True,
+        print_findings=False,
+        context_enricher=ContextEnricher(pr_ctx),
+        review_decision_handler=decision_handler,
+        result_builder=MagicMock(),
+    )
     provider = MagicMock()
     to_post = []
-    count = o._post_findings_and_summary(
-        provider, "o", "r", 1, "abc", "", True, to_post, MagicMock(), MagicMock(), []
+    count = handler.post_findings_and_summary(
+        provider, "", to_post, MagicMock(), MagicMock(), []
     )
     assert count == 0
     provider.post_review_comments.assert_not_called()
@@ -488,17 +886,22 @@ def test_record_observability_and_build_result_returns_findings_and_emits_log():
 
     Returns findings list.
     """
+    from code_review.orchestration.runner_utils import ReviewRunObservability
     from code_review.schemas.findings import FindingV1
 
     o = ReviewOrchestrator("o", "r", 1)
     finding = FindingV1(path="a.py", line=1, severity="low", code="X", message="m")
     to_post = [(finding, "fp1")]
     with (
-        patch("code_review.runner._log_run_complete") as mock_log,
-        patch("code_review.runner.observability") as mock_obs,
+        patch("code_review.orchestration.runner_utils._log_run_complete") as mock_log,
+        patch("code_review.orchestration.runner_utils.observability") as mock_obs,
     ):
         result = o._record_observability_and_build_result(
-            "trace-1", "o", "r", 1, 0.0, MagicMock(), ["a.py"], [finding], 1, to_post
+            ReviewRunObservability("trace-1", MagicMock(), start_time=0.0),
+            ["a.py"],
+            [finding],
+            1,
+            to_post,
         )
     assert result == [finding]
     mock_log.assert_called_once()
@@ -522,7 +925,7 @@ def test_maybe_post_started_review_comment_posts_when_description_missing():
     pr_info = MagicMock(title="T", description="")
     paths = ["foo.py", "bar.py"]
 
-    _maybe_post_started_review_comment(provider, "o", "r", 1, pr_info, paths)
+    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info, paths)
 
     provider.post_pr_summary_comment.assert_called_once()
     args, _ = provider.post_pr_summary_comment.call_args
@@ -538,7 +941,7 @@ def test_maybe_post_started_review_comment_updates_pr_description_when_supported
     pr_info = MagicMock(title="kafka", description="")
     paths = ["AGENTS.md", "README.md"]
 
-    _maybe_post_started_review_comment(provider, "o", "r", 1, pr_info, paths)
+    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info, paths)
 
     provider.update_pr_description.assert_called_once()
     call_args = provider.update_pr_description.call_args[0]
@@ -560,8 +963,23 @@ def test_maybe_post_started_review_comment_skips_when_description_present():
     )
     paths = ["foo.py"]
 
-    _maybe_post_started_review_comment(provider, "o", "r", 1, pr_info, paths)
+    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info, paths)
 
+    provider.post_pr_summary_comment.assert_not_called()
+
+
+def test_maybe_post_started_review_comment_skips_when_description_is_short_but_intentional():
+    """Short non-empty descriptions should not be overwritten by the auto-generated summary."""
+    provider = MagicMock()
+    pr_info = MagicMock(
+        title="T",
+        description="WIP fix.",
+    )
+    paths = ["foo.py"]
+
+    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info, paths)
+
+    provider.update_pr_description.assert_not_called()
     provider.post_pr_summary_comment.assert_not_called()
 
 
@@ -575,16 +993,11 @@ def test_run_does_not_post_started_review_comment_in_dry_run():
     provider.post_pr_summary_comment.assert_not_called()
 
 
-# --- Per-file user message content ---
+# --- Batch-mode prompt content ---
 
 
-def test_run_file_by_file_message_includes_head_sha_ref_guidance():
-    """Per-file user message must tell the agent to use head_sha as ref for get_file_lines.
-
-    When the agent calls get_file_lines for surrounding context it needs to know
-    which ref (revision) to use.  Without this guidance it may omit the ref or
-    use 'main', resulting in context from a different revision than the PR head.
-    """
+def test_run_batch_mode_message_includes_head_sha_and_batch_count():
+    """Batch-mode user message should describe the sequential batch review run."""
     from unittest.mock import AsyncMock
 
     captured_messages: list[str] = []
@@ -595,21 +1008,24 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
             for part in new_msg.parts:
                 if hasattr(part, "text") and part.text:
                     captured_messages.append(part.text)
-        # Yield a final response with an empty findings array so the runner
-        # doesn't try to post anything.
         event = MagicMock()
         event.is_final_response.return_value = True
         event.content = MagicMock()
-        event.content.parts = [MagicMock(text="[]")]
+        event.content.parts = [MagicMock(text='{"findings":[]}')]
         yield event
 
     from code_review.providers.base import FileInfo
 
     with (
-        patch("code_review.runner.get_context_window", return_value=10),  # force file-by-file
-        patch("code_review.runner.get_provider") as mock_get_provider,
-        patch("code_review.runner.get_scm_config") as mock_scm,
-        patch("code_review.runner.get_llm_config") as mock_llm,
+        patch(
+            "code_review.orchestration.orchestrator.runner_mod.get_context_window",
+            return_value=10,
+        ),
+        patch(
+            "code_review.orchestration.orchestrator.runner_mod.get_provider"
+        ) as mock_get_provider,
+        patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config") as mock_scm,
+        patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config") as mock_llm,
         patch("google.adk.runners.Runner") as mock_runner_cls,
         patch("google.adk.sessions.InMemorySessionService") as mock_session_svc_cls,
     ):
@@ -623,7 +1039,15 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
         mock_llm.return_value = MagicMock(disable_tool_calls=False)
         provider = MagicMock()
         provider.get_pr_files.return_value = [FileInfo(path="src/foo.py", status="modified")]
-        provider.get_pr_diff.return_value = "@@ -1,2 +1,3 @@\n line1\n+line2\n line3\n"
+        provider.get_pr_diff.return_value = (
+            "diff --git a/src/foo.py b/src/foo.py\n"
+            "--- a/src/foo.py\n"
+            "+++ b/src/foo.py\n"
+            "@@ -1,2 +1,3 @@\n"
+            " line1\n"
+            "+line2\n"
+            " line3\n"
+        )
         provider.get_existing_review_comments.return_value = []
         provider.get_file_content.return_value = "line1\nline2\n"
         provider.get_pr_info.return_value = None
@@ -636,7 +1060,6 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
         )
         mock_get_provider.return_value = provider
 
-        # create_session is awaited in _collect_response_async; must be an AsyncMock.
         mock_session_svc = MagicMock()
         mock_session_svc.create_session = AsyncMock()
         mock_session_svc_cls.return_value = mock_session_svc
@@ -650,117 +1073,70 @@ def test_run_file_by_file_message_includes_head_sha_ref_guidance():
         )
         orchestrator.run()
 
-    # At least one message should have been sent to the LLM
-    assert captured_messages, "No messages were sent to the LLM"
+    assert captured_messages
     combined = " ".join(captured_messages)
-    # The per-file message must include the head_sha
-    assert "abc123def" in combined, "per-file message must include head_sha"
-    # The per-file message must explicitly guide the agent to use head_sha as the ref
-    # parameter for get_file_lines — both the guidance text and the sha value should appear.
-    assert "ref=" in combined and "abc123def" in combined, (
-        "per-file message must contain 'ref=<head_sha>' guidance so the agent reads "
-        "file lines at the correct PR-head revision"
-    )
-    # The per-file message must mention <L{n}> annotations so the LLM is reminded
-    # to use them as line numbers in every per-file session, not just in the
-    # system instruction that may be "forgotten" across many files.
-    assert "<L{n}>" in combined or "<L" in combined, (
-        "per-file message must mention <L{n}> annotations so the LLM uses them as "
-        "line numbers rather than computing from hunk headers"
-    )
+    assert "Review the prepared PR batches sequentially." in combined
+    assert "abc123def" in combined
+    assert "Prepared batch count:" in combined
 
 
-# --- Single-shot diff annotation ---
+def test_build_review_batches_preserves_annotations_for_segment_diffs():
+    """Prepared batches must preserve explicit <L{n}> annotations in embedded diff segments."""
+    from code_review.orchestration.execution import build_review_batches_for_scope
+    from code_review.providers.base import FileInfo
 
-
-def test_single_shot_mode_prompt_contains_annotated_diff():
-    """In single-shot mode the diff embedded in the LLM prompt must carry <L{n}> annotations.
-
-    Without annotations the LLM has to derive absolute new-file line numbers by
-    counting +/- lines relative to hunk headers — a calculation it frequently gets
-    wrong when deletions precede the target line.  Annotations make the line number
-    explicit so the LLM can copy it directly into the ``line`` field of a finding.
-    """
-    from unittest.mock import AsyncMock
-
-    # A diff with a deletion that would cause off-by-one errors without annotations.
-    # The added line (+added_line) is at new-file line 11, NOT line 12.
     diff_with_deletion = (
         "diff --git a/foo.py b/foo.py\n"
-        "--- a/foo.py\n+++ b/foo.py\n"
+        "--- a/foo.py\n"
+        "+++ b/foo.py\n"
         "@@ -10,3 +10,3 @@\n"
         " ctx_10\n"
         "-old_11\n"
         "+added_line\n"
         " ctx_12\n"
     )
-    captured_messages: list[str] = []
 
-    async def _capture_run_async(*args, **kwargs):
-        new_msg = kwargs.get("new_message")
-        if new_msg and hasattr(new_msg, "parts"):
-            for part in new_msg.parts:
-                if hasattr(part, "text") and part.text:
-                    captured_messages.append(part.text)
-        event = MagicMock()
-        event.is_final_response.return_value = True
-        event.content = MagicMock()
-        event.content.parts = [MagicMock(text="[]")]
-        yield event
+    batches = build_review_batches_for_scope(
+        [FileInfo(path="foo.py", status="modified")],
+        ["foo.py"],
+        diff_with_deletion,
+        diff_budget=10_000,
+    )
 
+    assert len(batches) == 1
+    segment_text = batches[0].segments[0].diff_text
+    assert "@@ -10,3 +10,3 @@" in segment_text
+
+    from code_review.diff.parser import annotate_diff_with_line_numbers
+
+    annotated = annotate_diff_with_line_numbers(segment_text)
+    assert "<L10>" in annotated
+    assert "<L11>" in annotated
+    assert "<L12>" in annotated
+    removed_lines = [ln for ln in annotated.splitlines() if "-old_11" in ln]
+    assert all(not ln.strip().startswith("<L") for ln in removed_lines)
+
+
+def test_build_review_batches_for_scope_falls_back_when_diff_budget_is_zero():
+    from code_review.orchestration.execution import build_review_batches_for_scope
     from code_review.providers.base import FileInfo
 
-    with (
-        patch("code_review.runner.get_context_window", return_value=1_000_000),  # force single-shot
-        patch("code_review.runner.get_provider") as mock_get_provider,
-        patch("code_review.runner.get_scm_config") as mock_scm,
-        patch("code_review.runner.get_llm_config") as mock_llm,
-        patch("google.adk.runners.Runner") as mock_runner_cls,
-        patch("google.adk.sessions.InMemorySessionService") as mock_session_svc_cls,
-    ):
-        mock_scm.return_value = MagicMock(
-            provider="gitea",
-            url="https://x.com",
-            token="x",
-            skip_label="",
-            skip_title_pattern="",
-        )
-        mock_llm.return_value = MagicMock(disable_tool_calls=False)
-        provider = MagicMock()
-        provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-        provider.get_pr_diff.return_value = diff_with_deletion
-        provider.get_existing_review_comments.return_value = []
-        provider.get_file_content.return_value = "line1\n"
-        provider.get_pr_info.return_value = None
-        provider.capabilities.return_value = MagicMock(
-            resolvable_comments=False,
-            supports_suggestions=False,
-            omit_fingerprint_marker_in_body=False,
-            markup_supports_collapsible=False,
-            markup_hides_html_comment=False,
-        )
-        mock_get_provider.return_value = provider
-
-        mock_session_svc = MagicMock()
-        mock_session_svc.create_session = AsyncMock()
-        mock_session_svc_cls.return_value = mock_session_svc
-
-        mock_runner_instance = MagicMock()
-        mock_runner_instance.run_async = _capture_run_async
-        mock_runner_cls.return_value = mock_runner_instance
-
-        orchestrator = ReviewOrchestrator("o", "r", 1, head_sha="sha1", dry_run=True)
-        orchestrator.run()
-
-    combined = " ".join(captured_messages)
-
-    # Annotations must be present for visible lines
-    assert "<L10>" in combined, "context line 10 must be annotated as <L10>"
-    assert "<L11>" in combined, "added line must be annotated as <L11> (not <L12>)"
-    assert "<L12>" in combined, "context line 12 must be annotated as <L12>"
-
-    # Removed line must NOT be annotated — split prompt into lines and check directly
-    removed_lines = [ln for ln in combined.splitlines() if "-old_11" in ln]
-    assert all(not ln.strip().startswith("<L") for ln in removed_lines), (
-        "removed line -old_11 must not carry a <L{n}> annotation"
+    diff_text = (
+        "diff --git a/foo.py b/foo.py\n"
+        "--- a/foo.py\n"
+        "+++ b/foo.py\n"
+        "@@ -1,1 +1,2 @@\n"
+        "-old_line\n"
+        "+new_line\n"
     )
+
+    batches = build_review_batches_for_scope(
+        [FileInfo(path="foo.py", status="modified")],
+        ["foo.py"],
+        diff_text,
+        diff_budget=0,
+    )
+
+    assert len(batches) == 1
+    assert len(batches[0].segments) == 1
+    assert batches[0].segments[0].estimated_tokens > 0

@@ -26,6 +26,32 @@ def load_module():
     return module
 
 
+def dismissed_thread_comments(
+    *,
+    root_id: int = 1,
+    reply_id: int = 2,
+    root_text: str = "[High] still blocking",
+    author_name: str = "review-bot",
+) -> list[dict[str, object]]:
+    return [
+        {
+            "id": root_id,
+            "text": root_text,
+            "state": "OPEN",
+            "author": {"name": author_name},
+            "anchor": {"path": "src/Foo.java", "line": 5},
+        },
+        {
+            "id": reply_id,
+            "text": REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT,
+            "state": "OPEN",
+            "author": {"name": author_name},
+            "parentComment": {"id": root_id},
+            "anchor": {"path": "src/Foo.java", "line": 5},
+        },
+    ]
+
+
 def test_build_comment_report_marks_orphaned_comment_not_counted() -> None:
     module = load_module()
 
@@ -97,23 +123,7 @@ def test_build_pr_gate_report_excludes_dismissed_threads(
     monkeypatch.setattr(
         module,
         "list_pull_request_comments",
-        lambda *args, **kwargs: [
-            {
-                "id": 1,
-                "text": "[High] still blocking",
-                "state": "OPEN",
-                "author": {"name": "review-bot"},
-                "anchor": {"path": "src/Foo.java", "line": 5},
-            },
-            {
-                "id": 2,
-                "text": REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT,
-                "state": "OPEN",
-                "author": {"name": "review-bot"},
-                "parentComment": {"id": 1},
-                "anchor": {"path": "src/Foo.java", "line": 5},
-            },
-        ],
+        lambda *args, **kwargs: dismissed_thread_comments(),
     )
     monkeypatch.setattr(module, "list_pull_request_tasks", lambda *args, **kwargs: [])
 
@@ -142,23 +152,7 @@ def test_build_pr_gate_report_uses_configured_bot_slug_for_dismissed_threads(
     monkeypatch.setattr(
         module,
         "list_pull_request_comments",
-        lambda *args, **kwargs: [
-            {
-                "id": 1,
-                "text": "[High] still blocking",
-                "state": "OPEN",
-                "author": {"name": "review-bot"},
-                "anchor": {"path": "src/Foo.java", "line": 5},
-            },
-            {
-                "id": 2,
-                "text": REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT,
-                "state": "OPEN",
-                "author": {"name": "review-bot"},
-                "parentComment": {"id": 1},
-                "anchor": {"path": "src/Foo.java", "line": 5},
-            },
-        ],
+        lambda *args, **kwargs: dismissed_thread_comments(),
     )
     monkeypatch.setattr(module, "list_pull_request_tasks", lambda *args, **kwargs: [])
 
@@ -250,23 +244,11 @@ def test_main_comment_prints_json_report_for_dismissed_thread(
     monkeypatch.setattr(
         module,
         "list_pull_request_comments",
-        lambda *args, **kwargs: [
-            {
-                "id": 42,
-                "text": "[High] sanitize this",
-                "state": "OPEN",
-                "author": {"name": "review-bot"},
-                "anchor": {"path": "src/Foo.java", "line": 5},
-            },
-            {
-                "id": 43,
-                "text": REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT,
-                "state": "OPEN",
-                "author": {"name": "review-bot"},
-                "parentComment": {"id": 42},
-                "anchor": {"path": "src/Foo.java", "line": 5},
-            },
-        ],
+        lambda *args, **kwargs: dismissed_thread_comments(
+            root_id=42,
+            reply_id=43,
+            root_text="[High] sanitize this",
+        ),
     )
     monkeypatch.setattr(
         sys,

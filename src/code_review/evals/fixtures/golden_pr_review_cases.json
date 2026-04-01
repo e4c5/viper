@@ -1,0 +1,44 @@
+[
+  {
+    "case_id": "python_missing_none_guard",
+    "description": "Flags a direct len(...) call on an Optional value introduced by the diff.",
+    "language": "python",
+    "pr_diff": "diff --git a/service.py b/service.py\n--- a/service.py\n+++ b/service.py\n@@ -10,3 +10,4 @@\n def summary(payload):\n-    return 0\n+    count = len(payload.get(\"items\"))\n+    return count\n",
+    "expected": {
+      "findings": [
+        {
+          "path": "service.py",
+          "line": 11,
+          "severity": "medium",
+          "code": "missing-none-guard",
+          "category": "Correctness",
+          "confidence": "high",
+          "message": "Guard payload.get(\"items\") before calling len(...) because it may be None.",
+          "evidence": "The new code calls len(payload.get(\"items\")) directly, and dict.get returns None when the key is absent.",
+          "anchor": "count = len(payload.get(\"items\"))"
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "java_sql_concatenation",
+    "description": "Flags SQL built from user-controlled input in a prepared-statement sized diff.",
+    "language": "java",
+    "pr_diff": "diff --git a/src/UserRepo.java b/src/UserRepo.java\n--- a/src/UserRepo.java\n+++ b/src/UserRepo.java\n@@ -21,3 +21,4 @@\n-    return jdbc.query(sql, mapper);\n+    String sql = \"select * from users where email = '\" + email + \"'\";\n+    return jdbc.query(sql, mapper);\n",
+    "expected": {
+      "findings": [
+        {
+          "path": "src/UserRepo.java",
+          "line": 22,
+          "severity": "high",
+          "code": "sql-string-concatenation",
+          "category": "Security",
+          "confidence": "high",
+          "message": "Do not concatenate email into SQL; use a parameterized query to avoid injection.",
+          "evidence": "The new SQL string includes the email variable inside the statement text.",
+          "anchor": "String sql = \"select * from users where email = '\" + email + \"'\";"
+        }
+      ]
+    }
+  }
+]

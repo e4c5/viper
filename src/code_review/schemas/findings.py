@@ -33,7 +33,10 @@ class FindingV1(BaseModel):
     )
     evidence: str | None = Field(
         default=None,
-        description="Optional short factual justification citing the visible code that supports the finding",
+        description=(
+            "Optional short factual justification citing the visible code "
+            "that supports the finding"
+        ),
     )
     anchor: str | None = Field(
         default=None,
@@ -67,3 +70,17 @@ class FindingV1(BaseModel):
     def get_body(self) -> str:
         """Comment body; use body if set else message."""
         return self.body if self.body is not None else self.message
+
+
+class FindingsBatchV1(BaseModel):
+    """Structured ADK output wrapper for a review run's findings."""
+
+    model_config = {"extra": "ignore"}
+
+    findings: list[FindingV1] = Field(
+        default_factory=list,
+        description=(
+            "Structured list of code review findings. "
+            "Use an empty list when no issues exist."
+        ),
+    )

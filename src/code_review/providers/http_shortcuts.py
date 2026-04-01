@@ -1,4 +1,9 @@
-"""One-shot httpx GET/POST/PUT/DELETE helpers shared by SCM providers."""
+"""Compatibility helpers around httpx for SCM providers and tests.
+
+The main transport path now lives on ``HttpXProvider``. These one-shot helpers remain
+available as a stable compatibility seam, including the module-level ``httpx`` object
+that older tests patch directly.
+"""
 
 from __future__ import annotations
 

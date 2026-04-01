@@ -5,8 +5,9 @@ match the diff content at the reported line, the runner searches nearby lines
 and relocates the finding to the closest matching line.
 """
 
-
-from code_review.runner import _relocate_findings_by_anchor
+from code_review.refinement.filters.anchor_relocator import (
+    relocate_findings_by_anchor as _relocate_findings_by_anchor,
+)
 from code_review.schemas.findings import FindingV1
 
 # A diff with several visible lines in two files.

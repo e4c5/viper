@@ -49,6 +49,7 @@ Tests mirror `src/`: `tests/test_runner.py`, `tests/providers/`, `tests/runner/`
 - **Provider interface** (`providers/base.py`): Adding a method? Implement it in all providers (gitea, github, gitlab, bitbucket, bitbucket_server) or document the default.
 - **Finding schema** (`schemas/findings.py`): `FindingV1` is the agent output contract. Backward-compatible changes only (optional fields, defaults).
 - **Agent instruction** (`agent/agent.py`): Keep findings-only instruction clear that the agent must **not** post or fetch existing comments; the runner handles that.
+- **Custom boundaries**: Keep SCM provider behavior, idempotency/dedupe, diff anchoring/relocation, stale-comment resolution, and review-decision policy in Python rather than moving them into ADK state or tools.
 
 ---
 

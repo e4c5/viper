@@ -6,8 +6,11 @@ line-visibility guardrail). Without this check the patch would be rendered as a
 suggestion block replacing the wrong code.
 """
 
+from unittest.mock import patch
 
-from code_review.runner import _validate_suggested_patches
+from code_review.refinement.filters.patch_validator import (
+    validate_suggested_patches as _validate_suggested_patches,
+)
 from code_review.schemas.findings import FindingV1
 
 # A minimal diff with two files.
@@ -64,6 +67,25 @@ def test_misplaced_patch_stripped():
     assert result[0].suggested_patch is None, (
         "Patch referencing completely unrelated code should be stripped"
     )
+
+
+def test_misplaced_patch_warning_does_not_log_raw_code():
+    """Misplaced patch warning should log metadata only, not raw source content."""
+    suggested_patch = '.append(System.nanoTime()).append("* author=\\"antikythera\\"\\n");'
+    f = _finding("foo.py", 10, suggested_patch)
+
+    with patch("code_review.refinement.filters.patch_validator.logger.warning") as mock_warning:
+        result = _validate_suggested_patches([f], SAMPLE_DIFF)
+
+    assert result[0].suggested_patch is None
+    mock_warning.assert_called_once()
+    message = mock_warning.call_args.args[0] % mock_warning.call_args.args[1:]
+    assert "foo.py:10" in message
+    assert "overlap_tokens=0" in message
+    assert "patch_tokens=" in message
+    assert "actual_tokens=" in message
+    assert suggested_patch not in message
+    assert "if isId || !nullable {" not in message
 
 
 def test_no_patch_unchanged():

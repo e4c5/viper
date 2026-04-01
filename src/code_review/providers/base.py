@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from code_review.diff.parser import parse_unified_diff
+from code_review.diff.utils import normalize_path
 from code_review.schemas.review_thread_dismissal import ReviewThreadDismissalContext
 
 
@@ -253,21 +254,6 @@ def pr_info_from_api_dict(data: dict, description_key: str = "body") -> PRInfo:
     )
 
 
-def normalize_diff_anchor_path(file_path: str) -> str:
-    """Normalize a file path so it matches PR diffs across providers.
-
-    Strips dst:// and src:// prefixes so e.g. dst://src/main/java/foo.java ->
-    src/main/java/foo.java, and removes leading slashes. Falls back to the
-    original value if normalization results in an empty string.
-    """
-    p = (file_path or "").strip()
-    for prefix in ("dst://", "src://"):
-        if p.lower().startswith(prefix):
-            p = p[len(prefix) :].lstrip("/")
-            break
-    return p.lstrip("/") or file_path or ""
-
-
 def file_infos_from_pull_file_list(files: list) -> list[FileInfo]:
     """Build list of FileInfo from a provider list of file dicts.
 
@@ -296,12 +282,12 @@ def unified_diff_for_path(diff_text: str, path: str) -> str:
     Matches paths using the same normalization used for diff anchors so callers
     can safely pass paths with or without provider-specific prefixes.
     """
-    wanted_path = normalize_diff_anchor_path(path)
+    wanted_path = normalize_path(path, strip_git_prefixes=False)
     hunks = parse_unified_diff(diff_text)
     lines: list[str] = []
     headers_emitted = False
     for hunk in hunks:
-        hunk_path = normalize_diff_anchor_path(hunk.path)
+        hunk_path = normalize_path(hunk.path, strip_git_prefixes=False)
         if hunk_path != wanted_path:
             continue
         if not headers_emitted:
@@ -654,9 +640,9 @@ class ProviderInterface(ABC):
         pr_number: int,
         thread_context: ReviewThreadDismissalContext,
         triggered_comment_id: str,
-    ) -> None:  # noqa: B027
+    ) -> None:
         """Resolve a review thread/discussion after an agreed dismissal verdict."""
-        pass
+        raise NotImplementedError("resolve_review_thread not implemented for this provider")
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """

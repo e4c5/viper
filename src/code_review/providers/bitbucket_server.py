@@ -6,7 +6,9 @@ from urllib.parse import quote
 
 import httpx
 
+from code_review.diff.format_adapters import bitbucket_json_diff_to_unified
 from code_review.diff.parser import parse_unified_diff
+from code_review.diff.utils import normalize_path
 from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.base import (
     BotAttributionIdentity,
@@ -15,7 +17,6 @@ from code_review.providers.base import (
     InlineComment,
     PRInfo,
     ProviderCapabilities,
-    ProviderInterface,
     ReviewComment,
     ReviewDecision,
     UnresolvedReviewItem,
@@ -24,9 +25,9 @@ from code_review.providers.base import (
     commit_messages_from_commit_list,
     default_unresolved_review_items_from_comments,
     head_sha_from_pr_api_dict,
-    normalize_diff_anchor_path,
 )
-from code_review.providers.safety import truncate_repo_content
+from code_review.providers.http_base import HttpXProvider
+from code_review.providers.safety import MAX_REPO_FILE_BYTES, truncate_repo_content
 from code_review.reply_dismissal_state import is_reply_dismissal_accepted_reply
 from code_review.schemas.review_thread_dismissal import (
     ReviewThreadDismissalContext,
@@ -145,98 +146,6 @@ def _bbs_blocking_state_from_user_entries(
             return hit
     return None
 
-
-MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
-CONTENT_TYPE_JSON = "application/json"
-_DEV_NULL = "/dev/null"
-
-
-def _diff_file_headers(src_path: str, dst_path: str) -> list[str]:
-    """Return the three header lines for one file in a unified diff.
-
-    Produces::
-
-        diff --git a/<path> b/<path>
-        --- a/<src>  (or --- /dev/null for new files)
-        +++ b/<dst>  (or +++ /dev/null for deleted files)
-
-    The ``diff --git`` header is required by :func:`parse_unified_diff` so it can
-    flush the previous file's hunks before starting a new file.  For deleted files
-    the effective path is taken from the source so the diff is still attributed
-    correctly.
-    """
-    src_header = _DEV_NULL if src_path == _DEV_NULL else f"a/{src_path}"
-    dst_header = _DEV_NULL if dst_path == _DEV_NULL else f"b/{dst_path}"
-    effective_path = dst_path if dst_path != _DEV_NULL else src_path
-    return [
-        f"diff --git a/{effective_path} b/{effective_path}",
-        f"--- {src_header}",
-        f"+++ {dst_header}",
-    ]
-
-
-def _hunk_header(hunk: dict) -> str:
-    """Return the ``@@ -old +new @@`` header line for one hunk dict."""
-    src_start = hunk.get("sourceLine", 0)
-    src_span = hunk.get("sourceSpan", 0)
-    dst_start = hunk.get("destinationLine", 0)
-    dst_span = hunk.get("destinationSpan", 0)
-    return f"@@ -{src_start},{src_span} +{dst_start},{dst_span} @@"
-
-
-def _segment_lines(segment: dict) -> list[str]:
-    """Return unified-diff lines for one Bitbucket Server diff segment.
-
-    Each segment has a ``type`` (``"ADDED"``, ``"REMOVED"``, or ``"CONTEXT"``)
-    and a ``lines`` list of ``{"line": "<content>"}`` dicts.
-    """
-    seg_type = segment.get("type", "CONTEXT")
-    _prefix = {"ADDED": "+", "REMOVED": "-"}
-    prefix = _prefix.get(seg_type, " ")
-    return [f"{prefix}{entry.get('line', '')}" for entry in segment.get("lines") or []]
-
-
-def _bitbucket_json_diff_to_unified(data: dict) -> str:
-    """Convert a Bitbucket Server JSON diff response to unified diff format.
-
-    Bitbucket Server GET /diff returns a structured JSON object with a ``diffs``
-    array instead of a standard unified diff text.  The JSON has the shape::
-
-        {
-            "diffs": [
-                {
-                    "source":      {"toString": "old/path.java", ...},
-                    "destination": {"toString": "new/path.java", ...},
-                    "hunks": [
-                        {
-                            "sourceLine": 1, "sourceSpan": 3,
-                            "destinationLine": 1, "destinationSpan": 4,
-                            "segments": [
-                                {"type": "CONTEXT", "lines": [{"line": "...", ...}]},
-                                {"type": "ADDED",   "lines": [{"line": "...", ...}]},
-                                {"type": "REMOVED", "lines": [{"line": "...", ...}]},
-                            ]
-                        }
-                    ]
-                }
-            ]
-        }
-
-    This function converts that structure to the unified diff format expected by
-    :func:`~code_review.diff.parser.parse_unified_diff`.
-    """
-    output: list[str] = []
-    for file_diff in data.get("diffs") or []:
-        src_path = (file_diff.get("source") or {}).get("toString") or _DEV_NULL
-        dst_path = (file_diff.get("destination") or {}).get("toString") or _DEV_NULL
-        output.extend(_diff_file_headers(src_path, dst_path))
-        for hunk in file_diff.get("hunks") or []:
-            output.append(_hunk_header(hunk))
-            for segment in hunk.get("segments") or []:
-                output.extend(_segment_lines(segment))
-    return "\n".join(output)
-
-
 def _extract_commit_id(ref: dict) -> str | None:
     """Extract the commit hash from a Bitbucket Server ref object.
 
@@ -253,7 +162,7 @@ def _extract_commit_id(ref: dict) -> str | None:
     return ref.get("id") or None
 
 
-class BitbucketServerProvider(ProviderInterface):
+class BitbucketServerProvider(HttpXProvider):
     """Bitbucket Server / Data Center REST API 1.0 client for PR diff, file content, and comments.
 
     Use SCM_PROVIDER=bitbucket_server and SCM_URL with the REST API base including /rest/api/1.0,
@@ -268,56 +177,22 @@ class BitbucketServerProvider(ProviderInterface):
         *,
         participant_user_slug: str = "",
     ):
-        self._base_url = base_url.rstrip("/")
-        self._token = token
-        self._timeout = timeout
+        super().__init__(base_url, token, timeout)
         self._participant_user_slug = (participant_user_slug or "").strip()
         # Cache (owner, repo, ref, path) combinations that returned 404 from the raw API
         # so we don't hammer Bitbucket or spam logs when the LLM repeatedly asks for
         # content of a file that doesn't exist at this ref (e.g. deleted/renamed files).
         self._missing_files: set[tuple[str, str, str, str]] = set()
 
-    def _headers(self) -> dict[str, str]:
+    _httpx_module = httpx
+
+    def _auth_header(self) -> dict[str, str]:
         if not self._token:
             return {}
         return {"Authorization": f"Bearer {self._token}"}
 
     def _path(self, owner: str, repo: str, *parts: str) -> str:
         return f"{self._base_url}/projects/{owner}/repos/{repo}/" + "/".join(parts)
-
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.get(path, headers=self._headers(), params=params or {})
-            r.raise_for_status()
-            if CONTENT_TYPE_JSON in (r.headers.get("content-type") or ""):
-                return r.json()
-            return r.text
-
-    def _get_raw_bytes(self, path: str, params: dict[str, Any] | None = None) -> bytes:
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.get(path, headers=self._headers(), params=params or {})
-            r.raise_for_status()
-            return r.content
-
-    def _post(self, path: str, json: dict) -> Any:
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.post(
-                path,
-                headers={**self._headers(), "Content-Type": CONTENT_TYPE_JSON},
-                json=json,
-            )
-            r.raise_for_status()
-            return r.json() if r.content else None
-
-    def _put(self, path: str, json: dict) -> Any:
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.put(
-                path,
-                headers={**self._headers(), "Content-Type": CONTENT_TYPE_JSON},
-                json=json,
-            )
-            r.raise_for_status()
-            return r.json() if r.content else None
 
     @staticmethod
     def _next_diff_page_start(data: dict[str, Any], current_start: int) -> int | None:
@@ -343,20 +218,20 @@ class BitbucketServerProvider(ProviderInterface):
     ) -> dict[str, Any]:
         merged = dict(first_page)
         merged["diffs"] = list(first_page.get("diffs") or [])
-        page_params = dict(params or {})
-        try:
-            start = int(page_params.get("start", 0) or 0)
-        except (TypeError, ValueError):
-            start = 0
-        for _ in range(500):
-            start = self._next_diff_page_start(first_page, start)
-            if start is None:
+        page_iter = self._paginate_list(
+            path,
+            params=params,
+            mode="start",
+            max_pages=500,
+            initial_data=first_page,
+            next_page=self._next_diff_page_start,
+        )
+        for page in page_iter:
+            if page is first_page:
+                continue
+            if not isinstance(page, dict):
                 break
-            page_params["start"] = start
-            first_page = self._get(path, params=page_params)
-            if not isinstance(first_page, dict):
-                break
-            merged["diffs"].extend(first_page.get("diffs") or [])
+            merged["diffs"].extend(page.get("diffs") or [])
         return merged
 
     def _get_unified_diff(self, path: str, params: dict[str, Any] | None = None) -> str:
@@ -364,7 +239,7 @@ class BitbucketServerProvider(ProviderInterface):
         if isinstance(out, str):
             return out
         if isinstance(out, dict) and "diffs" in out:
-            return _bitbucket_json_diff_to_unified(
+            return bitbucket_json_diff_to_unified(
                 self._merge_paginated_diff_pages(path, out, params=params)
             )
         return ""
@@ -375,7 +250,8 @@ class BitbucketServerProvider(ProviderInterface):
         Bitbucket Server returns a JSON diff object from this endpoint rather
         than unified diff text.  When a JSON response is detected the structured
         diff is converted to unified diff format via
-        :func:`_bitbucket_json_diff_to_unified` so the rest of the codebase can
+        :func:`code_review.diff.format_adapters.bitbucket_json_diff_to_unified` so the rest of
+        the codebase can
         parse it normally.
         """
         path = self._path(owner, repo, "pull-requests", str(pr_number), "diff")
@@ -435,7 +311,7 @@ class BitbucketServerProvider(ProviderInterface):
         )
         return super().get_pr_diff_for_file(owner, repo, pr_number, wanted_path)
 
-    def get_incremental_pr_diff(
+    def _get_incremental_pr_diff(
         self,
         owner: str,
         repo: str,
@@ -444,8 +320,6 @@ class BitbucketServerProvider(ProviderInterface):
         head_sha: str,
     ) -> str:
         """Return unified diff for the incremental compare range ``base_sha..head_sha``."""
-        if not base_sha or not head_sha or base_sha == head_sha:
-            return self.get_pr_diff(owner, repo, pr_number)
         path = self._path(owner, repo, "compare", "diff")
         return self._get_unified_diff(path, params={"from": base_sha, "to": head_sha})
 
@@ -456,7 +330,7 @@ class BitbucketServerProvider(ProviderInterface):
             return ""
         url = self._path(owner, repo, "raw", path.lstrip("/"))
         try:
-            raw = self._get_raw_bytes(url, params={"at": ref})
+            raw = self._get_bytes(url, params={"at": ref})
         except httpx.HTTPStatusError as e:
             # Treat 404 as "file not present at this ref" instead of failing the whole run.
             # This can happen for renamed/deleted paths or when diff paths don't exist at `ref`.
@@ -481,7 +355,7 @@ class BitbucketServerProvider(ProviderInterface):
         diff_text = self.get_pr_diff(owner, repo, pr_number)
         return self._file_infos_from_diff_text(diff_text)
 
-    def get_incremental_pr_files(
+    def _get_incremental_pr_files(
         self,
         owner: str,
         repo: str,
@@ -490,8 +364,6 @@ class BitbucketServerProvider(ProviderInterface):
         head_sha: str,
     ) -> list[FileInfo]:
         """Return changed files in the incremental compare range ``base_sha..head_sha``."""
-        if not base_sha or not head_sha or base_sha == head_sha:
-            return self.get_pr_files(owner, repo, pr_number)
         return self._file_infos_from_diff_text(
             self.get_incremental_pr_diff(owner, repo, pr_number, base_sha, head_sha)
         )
@@ -514,7 +386,7 @@ class BitbucketServerProvider(ProviderInterface):
 
     def _anchor_path_for_diff(self, file_path: str) -> str:
         """Normalize path so it matches the PR diff (enables inline comments on the diff view)."""
-        return normalize_diff_anchor_path(file_path)
+        return normalize_path(file_path, strip_git_prefixes=False)
 
     def _get_pr_diff_refs(
         self, owner: str, repo: str, pr_number: int
@@ -763,26 +635,28 @@ class BitbucketServerProvider(ProviderInterface):
         """Collect unique PR comment dicts from paginated activities (COMMENTED)."""
         path = self._path(owner, repo, "pull-requests", str(pr_number), "activities")
         by_id: dict[str, dict] = {}
-        start = 0
-        for _ in range(500):
-            try:
-                data = self._get(path, params={"start": start, "limit": 100})
-            except Exception as e:
-                logger.warning(
-                    "Bitbucket Server activities fetch for dismissal owner=%s repo=%s pr=%s: %s",
-                    owner,
-                    repo,
-                    pr_number,
-                    e,
-                )
-                return None
-            if not isinstance(data, dict):
-                return None
-            self._bbs_merge_commented_activities_into(by_id, data)
-            nxt = BitbucketServerProvider._bbs_activities_next_start(data, start)
-            if nxt is None:
-                break
-            start = nxt
+        try:
+            page_iter = self._paginate_list(
+                path,
+                params={"start": 0, "limit": 100},
+                mode="start",
+                page_size=100,
+                max_pages=500,
+                next_page=self._bbs_activities_next_start,
+            )
+            for data in page_iter:
+                if not isinstance(data, dict):
+                    return None
+                self._bbs_merge_commented_activities_into(by_id, data)
+        except Exception as e:
+            logger.warning(
+                "Bitbucket Server activities fetch for dismissal owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
         return list(by_id.values())
 
     @staticmethod
@@ -1008,17 +882,21 @@ class BitbucketServerProvider(ProviderInterface):
         path = self._path(owner, repo, "pull-requests", str(pr_number), "activities")
         result: list[ReviewComment] = []
         merged_recursive_by_id: dict[str, dict] = {}
-        start = 0
-        max_pages = 500  # safeguard against infinite loop
-        for _ in range(max_pages):
-            data = self._get(path, params={"start": start, "limit": 100})
+        page_iter = self._paginate_list(
+            path,
+            params={"start": 0, "limit": 100},
+            mode="start",
+            page_size=100,
+            max_pages=500,
+            next_page=self._bbs_activities_next_start,
+        )
+        for data in page_iter:
             comments, next_start = self._comments_from_activities_page(data)
             result.extend(comments)
             if isinstance(data, dict):
                 self._bbs_merge_commented_activities_into(merged_recursive_by_id, data)
-            if next_start is None or next_start == start:
+            if next_start is None:
                 break
-            start = next_start
         merged_recursive = [
             comment
             for raw_comment in merged_recursive_by_id.values()
@@ -1033,24 +911,34 @@ class BitbucketServerProvider(ProviderInterface):
         """Best-effort comment listing from ``/comments`` when that endpoint is available."""
         path = self._path(owner, repo, "pull-requests", str(pr_number), "comments")
         merged_by_id: dict[str, dict] = {}
-        start = 0
-        max_pages = 500
-        for _ in range(max_pages):
-            data = self._bbs_get_comments_endpoint_page(
-                path,
+        def _fetch_page(request_path: str, params: dict[str, Any] | None) -> Any:
+            start = 0
+            if isinstance(params, dict):
+                try:
+                    start = int(params.get("start", 0) or 0)
+                except (TypeError, ValueError):
+                    start = 0
+            return self._bbs_get_comments_endpoint_page(
+                request_path,
                 owner,
                 repo,
                 pr_number,
                 start,
             )
+        page_iter = self._paginate_list(
+            path,
+            params={"start": 0, "limit": 100},
+            mode="start",
+            page_size=100,
+            max_pages=500,
+            fetch_page=_fetch_page,
+            next_page=self._bbs_activities_next_start,
+        )
+        for data in page_iter:
             if data is None:
                 return None
             for raw_comment in data.get("values") or []:
                 self._bbs_merge_nested_comment_dicts_into(merged_by_id, raw_comment)
-            next_start = self._bbs_activities_next_start(data, start)
-            if next_start is None or next_start == start:
-                break
-            start = next_start
         return self._bbs_review_comments_from_raw_comment_map(merged_by_id)
 
     @staticmethod
@@ -1098,9 +986,10 @@ class BitbucketServerProvider(ProviderInterface):
             data = self._get(path, params={"start": start, "limit": 100})
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else 0
-            if status == 404:
+            if status in (400, 404):
                 logger.debug(
-                    "Bitbucket Server comments endpoint unavailable owner=%s repo=%s pr=%s",
+                    "Bitbucket Server comments endpoint unavailable (status=%d) owner=%s repo=%s pr=%s",
+                    status,
                     owner,
                     repo,
                     pr_number,

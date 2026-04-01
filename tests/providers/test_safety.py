@@ -1,6 +1,10 @@
 """Tests for repo content safety (truncation, delimiter)."""
 
-from code_review.providers.safety import TRUNCATE_SUFFIX, truncate_repo_content
+from code_review.providers.safety import (
+    MAX_REPO_FILE_BYTES,
+    TRUNCATE_SUFFIX,
+    truncate_repo_content,
+)
 
 
 def test_truncate_repo_content_under_limit():
@@ -9,11 +13,10 @@ def test_truncate_repo_content_under_limit():
 
 
 def test_truncate_repo_content_over_limit():
-    max_bytes = 16 * 1024
     content = "a" * (20 * 1024)
-    result = truncate_repo_content(content, max_bytes=max_bytes)
+    result = truncate_repo_content(content, max_bytes=MAX_REPO_FILE_BYTES)
     assert result.endswith(TRUNCATE_SUFFIX)
-    assert len(result.encode("utf-8")) <= max_bytes
+    assert len(result.encode("utf-8")) <= MAX_REPO_FILE_BYTES
 
 
 def test_truncate_repo_content_utf8_boundary():

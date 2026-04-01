@@ -9,7 +9,6 @@ from code_review.providers import get_provider
 from code_review.providers.base import InlineComment
 from code_review.providers.bitbucket_server import (
     BitbucketServerProvider,
-    _bitbucket_json_diff_to_unified,
     _extract_commit_id,
 )
 from code_review.reply_dismissal_state import REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT
@@ -91,24 +90,6 @@ def test_get_pr_diff_for_file_tries_next_variant_after_empty_single_file_diff():
     assert mock_get_unified_diff.call_count == 2
 
 
-# ---------------------------------------------------------------------------
-# _bitbucket_json_diff_to_unified unit tests
-# ---------------------------------------------------------------------------
-
-
-def _make_bb_diff(src_path, dst_path, hunks):
-    """Helper to build a minimal Bitbucket Server JSON diff dict."""
-    return {
-        "diffs": [
-            {
-                "source": {"toString": src_path} if src_path else None,
-                "destination": {"toString": dst_path} if dst_path else None,
-                "hunks": hunks,
-            }
-        ]
-    }
-
-
 def _mock_bb_json_response(payload):
     mock_r = MagicMock()
     mock_r.headers = {"content-type": "application/json"}
@@ -160,147 +141,6 @@ def _bbs_commented_activity(comment):
 
 def _bbs_page(*values):
     return {"isLastPage": True, "values": list(values)}
-
-
-def test_bitbucket_json_diff_to_unified_modified_file():
-    """A modified file with CONTEXT, ADDED and REMOVED segments converts correctly."""
-    data = _make_bb_diff(
-        "src/Foo.java",
-        "src/Foo.java",
-        [
-            {
-                "sourceLine": 10,
-                "sourceSpan": 3,
-                "destinationLine": 10,
-                "destinationSpan": 4,
-                "segments": [
-                    {"type": "CONTEXT", "lines": [{"line": "context line"}]},
-                    {"type": "ADDED", "lines": [{"line": "new line"}, {"line": "another new"}]},
-                    {"type": "REMOVED", "lines": [{"line": "old line"}]},
-                    {"type": "CONTEXT", "lines": [{"line": "end context"}]},
-                ],
-            }
-        ],
-    )
-    result = _bitbucket_json_diff_to_unified(data)
-    lines = result.splitlines()
-    assert lines[0] == "diff --git a/src/Foo.java b/src/Foo.java"
-    assert lines[1] == "--- a/src/Foo.java"
-    assert lines[2] == "+++ b/src/Foo.java"
-    assert lines[3] == "@@ -10,3 +10,4 @@"
-    assert lines[4] == " context line"
-    assert lines[5] == "+new line"
-    assert lines[6] == "+another new"
-    assert lines[7] == "-old line"
-    assert lines[8] == " end context"
-
-
-def test_bitbucket_json_diff_to_unified_new_file():
-    """A new file (no source) uses /dev/null as the source header."""
-    data = _make_bb_diff(
-        None,
-        "src/NewFile.java",
-        [
-            {
-                "sourceLine": 0,
-                "sourceSpan": 0,
-                "destinationLine": 1,
-                "destinationSpan": 2,
-                "segments": [
-                    {"type": "ADDED", "lines": [{"line": "line 1"}, {"line": "line 2"}]},
-                ],
-            }
-        ],
-    )
-    result = _bitbucket_json_diff_to_unified(data)
-    lines = result.splitlines()
-    assert lines[0] == "diff --git a/src/NewFile.java b/src/NewFile.java"
-    assert lines[1] == "--- /dev/null"
-    assert lines[2] == "+++ b/src/NewFile.java"
-    assert lines[3] == "@@ -0,0 +1,2 @@"
-    assert lines[4] == "+line 1"
-    assert lines[5] == "+line 2"
-
-
-def test_bitbucket_json_diff_to_unified_deleted_file():
-    """A deleted file (no destination) uses /dev/null as the destination header."""
-    data = _make_bb_diff(
-        "src/Old.java",
-        None,
-        [
-            {
-                "sourceLine": 1,
-                "sourceSpan": 2,
-                "destinationLine": 0,
-                "destinationSpan": 0,
-                "segments": [
-                    {"type": "REMOVED", "lines": [{"line": "gone 1"}, {"line": "gone 2"}]},
-                ],
-            }
-        ],
-    )
-    result = _bitbucket_json_diff_to_unified(data)
-    lines = result.splitlines()
-    assert lines[0] == "diff --git a/src/Old.java b/src/Old.java"
-    assert lines[1] == "--- a/src/Old.java"
-    assert lines[2] == "+++ /dev/null"
-    assert lines[3] == "@@ -1,2 +0,0 @@"
-    assert lines[4] == "-gone 1"
-    assert lines[5] == "-gone 2"
-
-
-def test_bitbucket_json_diff_to_unified_empty_diffs():
-    """An empty diffs array produces an empty string."""
-    assert _bitbucket_json_diff_to_unified({"diffs": []}) == ""
-    assert _bitbucket_json_diff_to_unified({}) == ""
-
-
-def test_bitbucket_json_diff_to_unified_multiple_files():
-    """Multiple files in a single diff response are all converted."""
-    data = {
-        "diffs": [
-            {
-                "source": {"toString": "a.py"},
-                "destination": {"toString": "a.py"},
-                "hunks": [
-                    {
-                        "sourceLine": 1,
-                        "sourceSpan": 1,
-                        "destinationLine": 1,
-                        "destinationSpan": 2,
-                        "segments": [
-                            {"type": "CONTEXT", "lines": [{"line": "ctx"}]},
-                            {"type": "ADDED", "lines": [{"line": "added"}]},
-                        ],
-                    }
-                ],
-            },
-            {
-                "source": {"toString": "b.py"},
-                "destination": {"toString": "b.py"},
-                "hunks": [
-                    {
-                        "sourceLine": 5,
-                        "sourceSpan": 1,
-                        "destinationLine": 5,
-                        "destinationSpan": 1,
-                        "segments": [
-                            {"type": "REMOVED", "lines": [{"line": "removed"}]},
-                            {"type": "ADDED", "lines": [{"line": "replaced"}]},
-                        ],
-                    }
-                ],
-            },
-        ]
-    }
-    result = _bitbucket_json_diff_to_unified(data)
-    assert "--- a/a.py" in result
-    assert "+++ b/a.py" in result
-    assert "--- a/b.py" in result
-    assert "+++ b/b.py" in result
-    assert "+added" in result
-    assert "-removed" in result
-    assert "+replaced" in result
 
 
 # ---------------------------------------------------------------------------
@@ -953,6 +793,50 @@ def test_get_unresolved_review_items_continues_when_activities_fails(mock_client
     assert items[0].inferred_severity == "high"
 
 
+@patch("code_review.providers.bitbucket_server.httpx.Client")
+def test_get_unresolved_review_items_continues_when_comments_endpoint_returns_400(mock_client):
+    """Quality gate must handle 400 on /comments gracefully (happens when path is missing)."""
+
+    def _get_side_effect(url: str, params=None, **kwargs):
+        mock_r = MagicMock()
+        mock_r.headers = {"content-type": "application/json"}
+        u = str(url)
+        if u.endswith("/comments"):
+            mock_r.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "400", request=MagicMock(), response=MagicMock(status_code=400)
+            )
+        elif "/activities" in u:
+            mock_r.raise_for_status = MagicMock()
+            mock_r.json.return_value = {
+                "isLastPage": True,
+                "values": [
+                    {
+                        "action": "COMMENTED",
+                        "comment": {
+                            "id": 1,
+                            "text": "note",
+                            "state": "OPEN",
+                            "anchor": {"path": "f.java", "line": 2},
+                        },
+                    }
+                ],
+            }
+        elif "/tasks" in u:
+            mock_r.json.return_value = {"isLastPage": True, "values": []}
+        else:
+            mock_r.raise_for_status = MagicMock()
+            mock_r.json.return_value = {}
+        return mock_r
+
+    mock_client.return_value.__enter__.return_value.get.side_effect = _get_side_effect
+
+    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    items = p.get_unresolved_review_items_for_quality_gate("PROJ", "my-repo", 42)
+    # Should still have the comment from /activities
+    assert len(items) == 1
+    assert items[0].stable_id == "comment:1"
+
+
 def test_extract_commit_id_string_latestcommit():
     """Bitbucket Server commonly returns latestCommit as a plain string hash."""
     ref = {
@@ -1220,7 +1104,8 @@ def test_fallback_preserves_line_type_for_bitbucket_server():
     lines this results in HTTP 409 because the lineType doesn't match the diff line.
     The fix is to call post_review_comments([c]) which passes the full InlineComment.
     """
-    from code_review.runner import _post_comments_one_by_one
+    from code_review.orchestration_deps import _post_comments_one_by_one
+    from code_review.models import PRContext
 
     provider = MagicMock()
     provider.post_review_comments = MagicMock()
@@ -1228,7 +1113,7 @@ def test_fallback_preserves_line_type_for_bitbucket_server():
     context_comment = InlineComment(path="foo.java", line=8, body="Issue", line_type="CONTEXT")
     added_comment = InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")
 
-    _post_comments_one_by_one(provider, "PROJ", "repo", 1, "sha1", [context_comment, added_comment])
+    _post_comments_one_by_one(provider, PRContext("PROJ", "repo", 1, "sha1"), [context_comment, added_comment])
 
     # Must use post_review_comments (not post_review_comment) so line_type is preserved
     assert provider.post_review_comments.call_count == 2
@@ -1248,16 +1133,17 @@ def test_fallback_no_pr_summary_when_inline_fails():
     """_post_comments_one_by_one must NOT call post_pr_summary_comment as a fallback.
 
     When individual inline posting fails, the comment is simply skipped (logged as WARNING).
-    This mirrors the tool-based (file-by-file / multi-shot) behaviour.
+    This mirrors the current tool-based inline-posting behaviour.
     """
-    from code_review.runner import _post_comments_one_by_one
+    from code_review.orchestration_deps import _post_comments_one_by_one
+    from code_review.models import PRContext
 
     provider = MagicMock()
     provider.post_review_comments.side_effect = RuntimeError("409 Conflict")
     provider.post_pr_summary_comment = MagicMock()
 
     comment = InlineComment(path="foo.java", line=8, body="Issue", line_type="CONTEXT")
-    count = _post_comments_one_by_one(provider, "PROJ", "repo", 1, "sha1", [comment])
+    count = _post_comments_one_by_one(provider, PRContext("PROJ", "repo", 1, "sha1"), [comment])
 
     # Nothing posted successfully
     assert count == 0

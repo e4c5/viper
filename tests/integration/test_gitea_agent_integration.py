@@ -39,10 +39,13 @@ index 123..456 100644
 
 @pytest.mark.skipif(respx is None, reason="respx required for integration test")
 @pytest.mark.respx(assert_all_mocked=True, assert_all_called=False)
-@patch("code_review.runner.get_scm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_context_window", return_value=1_000_000)
-@patch("code_review.runner.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch(
+    "code_review.orchestration.orchestrator.runner_mod.get_context_window",
+    return_value=1_000_000,
+)
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
 @patch("google.adk.runners.Runner")
 def test_agent_vs_gitea_posts_findings_to_mocked_api(
     mock_runner_class, mock_llm, mock_context_window, mock_get_provider, mock_cfg, respx_mock
@@ -105,15 +108,17 @@ def test_agent_vs_gitea_posts_findings_to_mocked_api(
     mock_llm.return_value = MagicMock(provider="gemini", model="gemini-2.5-flash")
     mock_get_provider.return_value = GiteaProvider(base_url=BASE, token="test-token")
 
-    findings_json = """[
-        {
-            "path": "foo.py",
-            "line": 2,
-            "severity": "medium",
-            "code": "unused-import",
-            "message": "Remove unused import os."
-        }
-    ]"""
+    findings_json = """{
+        "findings": [
+            {
+                "path": "foo.py",
+                "line": 2,
+                "severity": "medium",
+                "code": "unused-import",
+                "message": "Remove unused import os."
+            }
+        ]
+    }"""
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
     mock_event.content = MagicMock()

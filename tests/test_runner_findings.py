@@ -1,8 +1,12 @@
 """Tests for runner findings parsing and ignore set."""
 
+import pytest
+
+from code_review.comments.manager import _build_ignore_set
 from code_review.formatters.comment import finding_to_comment_body
-from code_review.runner import (
-    _build_ignore_set,
+from code_review.orchestration.execution import findings_from_batch_responses
+from code_review.orchestration_deps import (
+    _build_commit_messages_block,
     _findings_from_response,
     _parse_findings_json,
 )
@@ -16,22 +20,36 @@ def test_build_ignore_set_from_dicts():
     assert ("a.py", "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824") in s
 
 
-def test_parse_findings_json_raw_array():
-    text = '[{"path":"x","line":1,"severity":"low","code":"c","message":"m"}]'
-    out = _parse_findings_json(text)
-    assert len(out) == 1
-    assert out[0]["path"] == "x" and out[0]["line"] == 1
-
-
 def test_parse_findings_json_markdown_wrapped():
-    text = '```json\n[{"path":"y","line":2,"severity":"medium","code":"s","message":"msg"}]\n```'
+    text = (
+        "```json\n"
+        '{"findings":[{"path":"y","line":2,"severity":"medium","code":"s","message":"msg"}]}'
+        "\n```"
+    )
     out = _parse_findings_json(text)
-    assert len(out) == 1
-    assert out[0]["path"] == "y"
+    assert out["findings"][0]["path"] == "y"
+
+
+def test_parse_findings_json_unlabeled_fence():
+    text = (
+        "```\n"
+        '{"findings":[{"path":"u","line":5,"severity":"low","code":"s","message":"msg"}]}'
+        "\n```"
+    )
+    out = _parse_findings_json(text)
+    assert out["findings"][0]["path"] == "u"
+
+
+def test_parse_findings_json_structured_object():
+    text = (
+        '{"findings":[{"path":"z","line":4,"severity":"low","code":"c","message":"m"}]}'
+    )
+    out = _parse_findings_json(text)
+    assert out["findings"][0]["path"] == "z"
 
 
 def test_findings_from_response_valid():
-    text = '[{"path":"p","line":3,"severity":"high","code":"x","message":"fix it"}]'
+    text = '{"findings":[{"path":"p","line":3,"severity":"high","code":"x","message":"fix it"}]}'
     findings = _findings_from_response(text)
     assert len(findings) == 1
     assert isinstance(findings[0], FindingV1)
@@ -39,17 +57,52 @@ def test_findings_from_response_valid():
 
 
 def test_findings_from_response_invalid_skipped():
-    text = '[{"path":"p","line":1},{"not":"valid"}]'
+    text = '{"findings":[{"path":"p","line":1},{"not":"valid"}]}'
     findings = _findings_from_response(text)
-    # First item missing required fields, second not a valid finding
+    # Invalid structured batches fail closed.
     assert len(findings) == 0
 
 
-def test_findings_from_response_malformed_json_returns_empty():
-    """Malformed JSON from agent should not raise; runner parses it as no findings."""
+def test_findings_from_response_malformed_json_raises_value_error():
+    """Malformed JSON from agent must raise so the orchestrator does not treat it as clean."""
     text = '{"path": "missing array wrapper"'  # invalid JSON
-    findings = _findings_from_response(text)
-    assert findings == []
+    with pytest.raises(ValueError, match="Failed to parse structured findings JSON"):
+        _findings_from_response(text)
+
+
+def test_findings_from_batch_responses_propagates_parse_failure():
+    """Batch parsing must surface malformed responses instead of returning zero findings."""
+    responses = [("batch_review_0", '{"path": "missing array wrapper"')]
+    with pytest.raises(ValueError, match="Failed to parse structured findings JSON"):
+        findings_from_batch_responses(responses)
+
+
+def test_build_commit_messages_block_respects_remaining_char_budget():
+    """A nearly-full prompt budget must not be exceeded by the next commit-message bullet."""
+    header = "### PR commit messages (subject / first line)\n"
+    max_chars = 60
+    already_used_chars = max_chars - len(header) - 7
+
+    block = _build_commit_messages_block(
+        commit_messages=["A very long commit subject that should be truncated aggressively"],
+        max_chars=max_chars,
+        already_used_chars=already_used_chars,
+    )
+
+    assert block == header + "- A ve"
+    assert already_used_chars + len(block) <= max_chars
+
+
+def test_build_commit_messages_block_keeps_full_subject_when_unbounded():
+    """Without a max_chars budget, reserve bullet/newline space before capping the subject."""
+    subject = "x" * 600
+    block = _build_commit_messages_block(
+        commit_messages=[subject],
+        max_chars=None,
+        already_used_chars=0,
+    )
+
+    assert block.endswith("- " + ("x" * 497))
 
 
 def test_finding_to_comment_body():

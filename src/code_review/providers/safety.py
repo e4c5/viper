@@ -1,9 +1,10 @@
 """Repo content safety: max size and explicit delimiter when truncating."""
 
+MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 TRUNCATE_SUFFIX = "\n\n--- (truncated, max size exceeded)\n"
 
 
-def truncate_repo_content(content: str, max_bytes: int = 16 * 1024) -> str:
+def truncate_repo_content(content: str, max_bytes: int = MAX_REPO_FILE_BYTES) -> str:
     """
     Return content as-is if within max_bytes; otherwise truncate and append
     an explicit delimiter so the model knows context was cut.

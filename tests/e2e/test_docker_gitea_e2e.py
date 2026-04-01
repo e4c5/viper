@@ -219,7 +219,7 @@ def test_e2e_docker_gitea_full_review(e2e_stack):
     mock_provider.get_pr_diff.return_value = "diff"
     mock_provider.get_file_content.return_value = "content"
 
-    findings_json = "[]"
+    findings_json = '{"findings":[]}'
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
     mock_event.content = MagicMock()
@@ -228,7 +228,10 @@ def test_e2e_docker_gitea_full_review(e2e_stack):
     mock_runner_instance.run_async = runner_run_async_returning([mock_event])
 
     with (
-        patch("code_review.runner.get_provider", return_value=mock_provider),
+        patch(
+            "code_review.orchestration.orchestrator.runner_mod.get_provider",
+            return_value=mock_provider,
+        ),
         patch("google.adk.runners.Runner", return_value=mock_runner_instance),
     ):
         findings = run_review(owner, repo, pr_number, head_sha=head_sha, dry_run=True)

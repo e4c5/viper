@@ -111,7 +111,7 @@ class LLMConfig(BaseSettings):
             "(single key; provider chosen via LLM_PROVIDER)."
         ),
     )
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3.1"
     context_window: int = Field(
         default=128_000,
         description="Context window in tokens (explicit, avoid model-name guessing)",
@@ -280,6 +280,19 @@ class CodeReviewAppConfig(BaseSettings):
             "(non-empty CODE_REVIEW_EVENT_*), skip recomputation if the provider reports "
             "the token user is not in a blocking review state. "
             "No effect when event context is empty or for non-reply events."
+        ),
+    )
+    log_prompts: bool = Field(
+        default=False,
+        validation_alias="CODE_REVIEW_LOG_PROMPTS",
+        description="Log the assembled LLM instruction and user prompt for debugging.",
+    )
+    disable_idempotency: bool = Field(
+        default=False,
+        validation_alias="CODE_REVIEW_DISABLE_IDEMPOTENCY",
+        description=(
+            "Test-only escape hatch: skip the normal idempotency short-circuit so the "
+            "same PR head/config can be reviewed again."
         ),
     )
     reply_dismissal_enabled: bool = Field(

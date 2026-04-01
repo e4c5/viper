@@ -709,7 +709,7 @@ def test_submit_review_decision_approve_ignores_404_on_clear(mock_client):
     assert any(u.endswith("/pullrequests/9/approve") for u in urls)
 
 
-@patch("code_review.providers.bitbucket.http_get_json_or_text")
+@patch.object(BitbucketProvider, "_get")
 def test_get_bot_blocking_state_needs_work(mock_get):
     mock_get.side_effect = [
         {"uuid": "{me}"},
@@ -723,7 +723,7 @@ def test_get_bot_blocking_state_needs_work(mock_get):
     assert p.get_bot_blocking_state("ws", "repo", 1) == "BLOCKING"
 
 
-@patch("code_review.providers.bitbucket.http_get_json_or_text")
+@patch.object(BitbucketProvider, "_get")
 def test_get_bot_blocking_state_approved(mock_get):
     mock_get.side_effect = [
         {"uuid": "{me}"},

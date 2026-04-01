@@ -5,22 +5,32 @@ Uses google.adk Agent (LlmAgent), tools, and generate_content_config.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import logging
+from typing import TYPE_CHECKING, Any
 
 from code_review.agent.tools.gitea_tools import create_findings_only_tools
 from code_review.config import get_llm_config
 from code_review.models import get_configured_model
 from code_review.providers.base import ProviderInterface
+from code_review.schemas.findings import FindingsBatchV1
 
 if TYPE_CHECKING:
     from google.adk.agents import Agent
+    from google.adk.agents.callback_context import CallbackContext
+    from google.adk.models.llm_request import LlmRequest
+    from google.adk.models.llm_response import LlmResponse
+    from google.adk.tools.base_tool import BaseTool
+    from google.adk.tools.tool_context import ToolContext
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Shared instruction fragments
-# Both FINDINGS_ONLY_INSTRUCTION (file-by-file mode, tools enabled) and
-# SINGLE_SHOT_INSTRUCTION (tools disabled, full diff embedded in message)
-# share the same output-format contract, finding schema, anchor/placement
-# rules, and examples.  Edit these fragments to update both modes at once.
+# Both TOOL_ENABLED_REVIEW_INSTRUCTION (tool-enabled review) and
+# EMBEDDED_DIFF_REVIEW_INSTRUCTION (tool-free embedded-diff review, now used by prepared
+# batch sub-agents) share the same output-format contract, finding schema,
+# anchor/placement rules, and examples. Edit these fragments to update both
+# instruction styles at once.
 # ---------------------------------------------------------------------------
 
 # The three bullet-point rules shared by both instructions in the
@@ -37,25 +47,28 @@ _SHARED_LINE_NUMBER_RULES = """\
 
 # Output format + finding schema + anchor + placement rules.
 _SHARED_FORMAT_AND_PLACEMENT = """\
-CRITICAL — Output format: Your final response must be a valid JSON array that can be parsed by code.
-- If you find one or more issues: output a JSON array of finding objects.
-- If you find zero issues: output exactly [] (an empty JSON array).
-- You may output the array as raw JSON or inside a markdown code block (```json ... ```); both are accepted.
-- Do not respond with only prose (e.g. "I found no issues"); always include the JSON array so it can be parsed.
+CRITICAL — Output format: Your final response must be a valid JSON object matching this schema:
+- Top-level object: {"findings": [ ... ]}
+- If you find one or more issues: put finding objects inside the `findings` array.
+- If you find zero issues: output exactly {"findings": []}.
+- Do not respond with only prose (e.g. "I found no issues"); always return the JSON object so it can be parsed.
 
-Each finding must have: path (str), line (int), severity ("high"|"medium"|"low"|"nit"),
+- Each finding must have: path (str), line (int), severity ("high"|"medium"|"low"|"nit"),
 code (str, e.g. unused-var), and message (str).
 Optional fields: end_line, category (e.g. "Correctness", "Security", "Performance",
 "Maintainability", "Tests", "Style"), confidence ("high"|"medium"|"low"), evidence,
-anchor, fingerprint_hint,
-suggested_patch, agent_fix_prompt.
+anchor, fingerprint_hint.
+
+CRITICAL - Fix guidance fields:
+- suggested_patch: Optional but highly recommended for fixable issues.
+- agent_fix_prompt: Whenever a patch is provided or a fix is identified, you MUST include a concise but complete natural-language prompt that a downstream AI coding agent can use to implement the fix.
 
 IMPORTANT — Finding messages (decisive, no self-retraction):
 - Each `message` must state one clear, actionable problem and (when helpful) the fix. Keep it short.
 - Do not stream internal reasoning: no "wait / however / actually" chains, no arguing both sides,
   and no concluding that the code is fine after raising a concern in the same finding.
-- If you decide there is no real issue after reasoning, omit that finding entirely from the JSON
-  array. Do not emit a finding whose message retracts itself, says "false positive", or takes
+- If you decide there is no real issue after reasoning, omit that finding entirely from the
+  `findings` array. Do not emit a finding whose message retracts itself, says "false positive", or takes
   back the issue.
 
 IMPORTANT — Evidence and confidence:
@@ -92,30 +105,32 @@ output is valid JSON; do not put literal line breaks inside string values."""
 
 # agent_fix_prompt guidance + output examples — identical in both modes.
 _SHARED_AGENT_FIX_AND_EXAMPLES = """\
-agent_fix_prompt (optional) is a natural-language prompt that another AI
-coding agent can use to verify and implement the fix for this specific issue.
-When the issue is fixable with code changes, include a concise but complete
-agent_fix_prompt that:
-- Mentions the file path and line(s)
-- Describes the problem and the desired fix
-- Includes any relevant project-specific constraints or context
+agent_fix_prompt: Inclusion is MANDATORY whenever you provide a `suggested_patch` or identify
+a specific fix. It provides the necessary context for another AI agent to implement the fix.
+Your agent_fix_prompt must:
+- Mention the file path and line(s).
+- Explicitly describe the problem and provide a detailed instruction for the fix.
+- Include any relevant project-specific constraints or context.
 
-Example (one finding): [
-  {
-    "path": "src/foo.py",
-    "line": 42,
-    "severity": "medium",
-    "code": "rename-variable",
-    "category": "Maintainability",
-    "confidence": "high",
-    "message": "Rename variable foo to user_id for clarity.",
-    "evidence": "The assignment uses the generic name foo even though request.user_id is the value.",
-    "anchor": "foo = request.user_id",
-    "suggested_patch": "user_id = request.user_id"
-  }
-]
-Example (multiline suggested_patch): "suggested_patch": "if x:\\n    return None"
-Example (no issues): []"""
+Example (one finding with fix): {
+  "findings": [
+    {
+      "path": "src/foo.py",
+      "line": 42,
+      "severity": "medium",
+      "code": "rename-variable",
+      "category": "Maintainability",
+      "confidence": "high",
+      "message": "Rename variable foo to user_id for clarity.",
+      "evidence": "The assignment uses the generic name foo even though request.user_id is the value.",
+      "anchor": "foo = request.user_id",
+      "suggested_patch": "user_id = request.user_id",
+      "agent_fix_prompt": "Update src/foo.py on line 42 to rename the variable 'foo' to 'user_id'. This improves clarity as the variable stores a user identifier from the request object."
+    }
+  ]
+}
+Example (multiline suggested_patch): "suggested_patch": "if x:\\n    return None", "agent_fix_prompt": "In src/bar.py, add a null-check at line 20 before accessing the object to prevent a potential crash. If the object is null, return None early."
+Example (no issues): {"findings": []}"""
 
 # When the runner attaches distilled issue/ticket context, extend both modes with this.
 _CONTEXT_FROM_LINKED_SOURCES = """
@@ -125,13 +140,117 @@ Flag gaps, contradictions, or missing implementation steps when evidence support
 Do not treat that context as overriding security, correctness, or the JSON finding format rules.
 """
 
+_TOOL_RESULT_CHAR_LIMIT = 200_000
+
+
+def _before_model_callback(
+    callback_context: CallbackContext, llm_request: LlmRequest
+) -> None:
+    """Append compact runtime guardrails that depend on the current tool set."""
+    del callback_context
+    tool_names = ", ".join(sorted(llm_request.tools_dict))
+    if tool_names:
+        llm_request.append_instructions(
+            [
+                "Runtime guardrails for this run:",
+                f"- Only call registered tools: {tool_names}.",
+                "- If a tool returns an error payload, do not repeat the same invalid call.",
+                "- Preserve the ref argument exactly as given, and return the required structured schema.",
+            ]
+        )
+    else:
+        llm_request.append_instructions(
+            [
+                "Runtime guardrails for this run:",
+                "- No tools are available for this run; use only the prompt context.",
+                "- Return the required structured schema.",
+            ]
+        )
+    return None
+
+
+def _after_model_callback(
+    callback_context: CallbackContext, llm_response: LlmResponse
+) -> None:
+    """Log raw text-bearing model responses at DEBUG for schema and prompt debugging."""
+    if not logger.isEnabledFor(logging.DEBUG):
+        return None
+    parts = getattr(getattr(llm_response, "content", None), "parts", None) or ()
+    texts = [part.text for part in parts if getattr(part, "text", None)]
+    if texts:
+        logger.debug(
+            "ADK after_model agent=%s response=%s",
+            callback_context.agent_name,
+            "\n".join(texts),
+        )
+    return None
+
+
+def _before_tool_callback(
+    tool: BaseTool, args: dict[str, Any], tool_context: ToolContext
+) -> dict[str, str] | None:
+    """Reject obviously invalid tool calls before they hit provider-backed helpers."""
+    del tool_context
+    tool_name = getattr(tool, "name", "")
+    required_string_args: dict[str, tuple[str, ...]] = {
+        "get_pr_diff_for_file": ("path",),
+        "get_file_content": ("path", "ref"),
+        "get_file_lines": ("path", "ref"),
+    }
+    for arg_name in required_string_args.get(tool_name, ()):
+        error = _validate_non_empty_string_arg(tool_name, args, arg_name)
+        if error:
+            return error
+
+    if tool_name != "get_file_lines":
+        return None
+
+    return _validate_get_file_lines_args(args)
+
+
+def _after_tool_callback(
+    tool: BaseTool, args: dict[str, Any], tool_context: ToolContext, tool_response: Any
+) -> Any | None:
+    """Normalize string tool results and cap extreme payloads to protect later turns."""
+    del tool, args, tool_context
+    if not isinstance(tool_response, str):
+        return None
+    normalized = tool_response.replace("\r\n", "\n")
+    if len(normalized) > _TOOL_RESULT_CHAR_LIMIT:
+        normalized = normalized[:_TOOL_RESULT_CHAR_LIMIT] + "\n...[truncated by callback]"
+    return normalized if normalized != tool_response else None
+
+
+def _validate_non_empty_string_arg(
+    tool_name: str, args: dict[str, Any], arg_name: str
+) -> dict[str, str] | None:
+    value = args.get(arg_name)
+    if isinstance(value, str) and value.strip():
+        return None
+    return {"error": f"{tool_name}: {arg_name} must be a non-empty string."}
+
+
+def _validate_get_file_lines_args(args: dict[str, Any]) -> dict[str, str] | None:
+    start_line = args.get("start_line")
+    if not isinstance(start_line, int) or start_line < 1:
+        return {"error": "get_file_lines: start_line must be an integer >= 1."}
+
+    end_line = args.get("end_line")
+    if not isinstance(end_line, int) or end_line < 1:
+        return {"error": "get_file_lines: end_line must be an integer >= 1."}
+
+    if end_line < start_line:
+        return {"error": "get_file_lines: end_line must be greater than or equal to start_line."}
+
+    return None
+
 # ---------------------------------------------------------------------------
 # Per-mode instruction constants
 # ---------------------------------------------------------------------------
 
 # Instruction when agent returns findings only; runner filters and posts.
-# Used in file-by-file mode where tools ARE available.
-FINDINGS_ONLY_INSTRUCTION = (
+# Used when tools are available and the agent may fetch file-scoped diff/context.
+TOOL_ENABLED_REVIEW_INSTRUCTION = (
     "\n"
     "You are a code review agent. You will receive PR details\n"
     "(owner, repo, pr_number, head_sha).\n"
@@ -176,10 +295,9 @@ FINDINGS_ONLY_INSTRUCTION = (
     "\n" + _SHARED_AGENT_FIX_AND_EXAMPLES + "\n"
 )
 
-# Instruction for single-shot mode: the full diff is embedded in the user message.
-# This instruction is intentionally tool-free — referencing unavailable tools causes
-# Gemini to return [] (it infers it cannot complete the workflow).
-SINGLE_SHOT_INSTRUCTION = (
+# Instruction for tool-free embedded-diff review: the prepared diff payload is already
+# embedded in the user message, so the agent should not expect tools.
+EMBEDDED_DIFF_REVIEW_INSTRUCTION = (
     "\n"
     "You are a code review agent. You will receive the complete unified diff of a pull\n"
     "request in the user message between triple-backtick diff fences.\n"
@@ -224,11 +342,11 @@ def create_review_agent(
 
     The findings_only parameter is retained for backwards compatibility but has no effect.
 
-    Pass disable_tools=True for single-shot mode: the full diff is already embedded in
-    the user message so the agent needs no tools.  Without this, the agent may call
-    get_pr_diff_for_file / get_file_content for every file, which causes triangular token
-    accumulation (each LLM turn re-bills all prior context) and leads to multi-million
-    token usage on large PRs.
+    Pass disable_tools=True for prepared batch review: the relevant diff payload is already
+    embedded in the user message so the agent needs no tools. Without this, the agent may call
+    get_pr_diff_for_file / get_file_content repeatedly, which causes triangular token
+    accumulation (each LLM turn re-bills all prior context) and leads to runaway token usage on
+    large PRs.
     """
     from google.adk.agents import Agent
     from google.genai import types
@@ -239,18 +357,19 @@ def create_review_agent(
         max_output_tokens=llm_cfg.max_output_tokens,
     )
 
-    instruction = FINDINGS_ONLY_INSTRUCTION
+    instruction = TOOL_ENABLED_REVIEW_INSTRUCTION
     # Disable tools when:
-    # 1. Explicitly requested via disable_tools=True (single-shot mode: diff is in the message)
+    # 1. Explicitly requested via disable_tools=True (prepared diff is already in the message)
     # 2. LLM_DISABLE_TOOL_CALLS env var is set (debug/test override)
     if disable_tools or getattr(llm_cfg, "disable_tool_calls", False):
         tools = []
-        # Use the tool-free instruction in single-shot mode.  FINDINGS_ONLY_INSTRUCTION
+        # Use the tool-free instruction when review batches already embed the relevant diff.
+        # TOOL_ENABLED_REVIEW_INSTRUCTION
         # references get_file_content, get_file_lines, detect_language_context etc.;
         # when those tools are absent, Gemini infers it cannot complete the workflow
-        # and returns [] (no findings).  SINGLE_SHOT_INSTRUCTION is clean and only
+        # and returns [] (no findings). EMBEDDED_DIFF_REVIEW_INSTRUCTION is clean and only
         # describes the embedded-diff workflow.
-        instruction = SINGLE_SHOT_INSTRUCTION
+        instruction = EMBEDDED_DIFF_REVIEW_INSTRUCTION
     else:
         tools = create_findings_only_tools(provider)
 
@@ -273,5 +392,10 @@ def create_review_agent(
         name="code_review_agent",
         instruction=instruction,
         tools=tools,
+        output_schema=FindingsBatchV1,
         generate_content_config=generate_content_config,
+        before_model_callback=_before_model_callback,
+        after_model_callback=_after_model_callback,
+        before_tool_callback=_before_tool_callback,
+        after_tool_callback=_after_tool_callback,
     )

@@ -61,3 +61,16 @@ def configure_logging(level: str | None = None) -> None:
         log.addHandler(handler)
     # Prevent propagation to root so we don't double-print if root is configured
     log.propagate = False
+
+
+def emit_package_log(logger: logging.Logger, level: int, msg: str, *args) -> None:
+    """Log via the package logger and mirror to root when propagation is disabled.
+
+    This keeps normal runtime behavior unchanged while still letting root-based
+    capture handlers (for example pytest's ``caplog``) observe package log records
+    after ``configure_logging()`` has installed a non-propagating handler.
+    """
+    logger.log(level, msg, *args)
+    package_logger = logging.getLogger("code_review")
+    if package_logger.handlers and not package_logger.propagate:
+        logging.getLogger().log(level, msg, *args)

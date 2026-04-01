@@ -77,11 +77,10 @@ def test_findings_only_tools_include_get_pr_diff_for_file_but_not_full_diff():
 
     get_pr_diff (full-PR diff) is excluded to prevent the agent from re-fetching
     the entire diff on every invocation:
-    - In single-shot mode the diff is already embedded in the user message;
+    - In embedded-diff review the diff is already embedded in the user message;
       calling get_pr_diff would duplicate it and double the token cost.
-    - In file-by-file mode the agent must use get_pr_diff_for_file; allowing
-      get_pr_diff risks fetching the full multi-hundred-kilobyte diff on every
-      per-file session, which was the root cause of multi-million-token waste.
+    - In tool-enabled review the agent should use get_pr_diff_for_file; allowing
+      get_pr_diff risks fetching the full multi-hundred-kilobyte diff unnecessarily.
     """
     provider = _mock_provider()
     tools = create_findings_only_tools(provider)

@@ -29,9 +29,9 @@ The code review agent:
 
 Design principles:
 
-- **Findings-only agent**: The LLM agent only discovers issues and returns a JSON array of findings. The **runner** (Python) handles fetching existing comments, building an ignore set, fingerprinting, idempotency, and posting. This keeps the agent focused and avoids giving the LLM access to “post” or “resolve” tools in the default mode.
+- **Findings-only agent**: The LLM agent only discovers issues and returns structured findings (`FindingsBatchV1`, serialized as `{"findings": [...]}`). The **runner** (Python) handles fetching existing comments, building an ignore set, fingerprinting, idempotency, and posting. This keeps the agent focused and avoids giving the LLM access to “post” or “resolve” tools in the default mode.
 - **Provider-agnostic**: SCM access is behind `ProviderInterface`; concrete implementations exist for Gitea, GitHub, GitLab, and Bitbucket.
-- **LLM-agnostic**: The model is chosen via config (Gemini, OpenAI, Anthropic, Ollama, Vertex); the agent uses Google ADK’s `Agent` and model factory.
+- **LLM-agnostic**: The model is chosen via config (Gemini, OpenAI, Anthropic, Ollama, Vertex); the agent uses Google ADK’s `Agent`, `output_schema`, callback hooks, and model factory.
 
 ---
 
@@ -55,7 +55,7 @@ Design principles:
 │  • create_review_agent(provider, review_standards, findings_only=True)  │
 │  • ADK Runner + InMemorySessionService                                  │
 │  • If diff too large: loop per file; else single run                    │
-│  • runner.run() → collect response text → _findings_from_response()      │
+│  • Runner.run_async() → collect response text → _findings_from_response()│
 │  • Filter findings (ignore set, fingerprint)                            │
 │  • Format bodies, add fingerprint marker → post_review_comments         │
 │  • post_pr_summary_comment (then observability.finish_run)              │
@@ -90,7 +90,8 @@ src/code_review/
 ├── __main__.py              # CLI: Typer app → run_review()
 ├── config.py                 # SCMConfig, LLMConfig (Pydantic Settings); get_scm_config(), get_llm_config()
 ├── models.py                 # get_configured_model(), get_context_window(), get_max_output_tokens()
-├── runner.py                 # run_review(); orchestration and ADK Runner
+├── runner.py                 # run_review(); thin public entry point with explicit compatibility re-exports
+├── orchestration_deps.py     # Legacy helper hub retained temporarily for compatibility during Phase 4 cleanup
 ├── observability.py          # Optional Prometheus/OTel; start_run(), finish_run(), get_prometheus_registry()
 ├── agent/
 │   ├── __init__.py           # create_review_agent
@@ -99,6 +100,23 @@ src/code_review/
 │       ├── __init__.py
 │       ├── gitea_tools.py    # create_gitea_tools(), create_findings_only_tools() — wrap ProviderInterface
 │       └── review_helpers.py # detect_language_context() — agent tool
+├── orchestration/
+│   ├── __init__.py           # Re-exports ReviewOrchestrator, ReviewFilter
+│   ├── orchestrator.py       # ReviewOrchestrator — main review orchestration class
+│   ├── execution.py          # Agent execution helpers (_run_agent_and_collect_response, etc.)
+│   └── filter.py             # ReviewFilter — PR skip-label/title-pattern logic
+├── comments/
+│   └── manager.py            # CommentManager, _build_ignore_set, _should_skip_finding_for_dedup
+├── quality/
+│   ├── gate.py               # QualityGate, _compute_quality_gate_review_outcome
+│   └── outcome.py            # QualityGateOutcome, QualityGateReviewOutcome
+├── refinement/
+│   ├── __init__.py
+│   └── filters/
+│       ├── anchor_relocator.py  # relocate_findings_by_anchor (_relocate_findings_by_anchor)
+│       ├── contradiction.py     # filter_obviously_contradicted_findings, _message_describes_syntax_or_missing_token_issue
+│       ├── patch_validator.py   # validate_suggested_patches (_validate_suggested_patches)
+│       └── self_retraction.py   # filter_self_retracted_findings, _finding_message_looks_self_retracted
 ├── providers/
 │   ├── __init__.py           # get_provider(name, base_url, token); exports base types
 │   ├── base.py               # ProviderInterface, InlineComment, ReviewComment, FileInfo, PRInfo, ProviderCapabilities
@@ -110,6 +128,8 @@ src/code_review/
 ├── schemas/
 │   └── findings.py          # FindingV1 (path, line, severity, code, message, ...)
 ├── diff/
+│   ├── analyzer.py          # DiffAnalyzer (estimate_tokens, normalize_path)
+│   ├── line_index.py        # build_diff_line_index, build_per_file_line_index
 │   ├── parser.py             # parse_unified_diff(), DiffHunk, iter_new_lines()
 │   ├── position.py          # get_commentable_positions(), position_for_line(), CommentablePosition
 │   └── fingerprint.py       # build_fingerprint(), surrounding_content_hash(), format_comment_body_with_marker(), parse_marker_from_comment_body()
@@ -122,6 +142,22 @@ src/code_review/
 └── formatters/
     └── comment.py           # finding_to_comment_body(f) → "[Severity] message"
 ```
+
+### 3.1 Module Responsibilities
+
+| Module | Responsibility |
+|--------|----------------|
+| `runner.py` | Public entry point; thin wrapper that calls `ReviewOrchestrator.run()`. Re-exports key symbols for test compatibility. |
+| `orchestration/orchestrator.py` | `ReviewOrchestrator` — owns the full review lifecycle: config, provider, skip/idempotency, agent runs, filter, post. |
+| `orchestration/execution.py` | Agent execution helpers (single-shot and multi-batch `run_async` wrappers). |
+| `orchestration/filter.py` | `ReviewFilter` — encapsulates PR skip-label and title-pattern logic. |
+| `orchestration_deps.py` | Legacy helper hub retained temporarily during cleanup. It still contains helper implementations plus re-exports for backward-compatible test patching, so Phase 4 cleanup is not fully complete yet. |
+| `diff/analyzer.py` | `DiffAnalyzer` — token estimation (`estimate_tokens`) and path normalization (`normalize_path`). |
+| `diff/line_index.py` | `build_diff_line_index`, `build_per_file_line_index` — hunk-based line lookup structures. |
+| `refinement/filters/` | Deterministic finding post-processors: anchor relocation, self-retraction filter, contradiction filter, patch validation. |
+| `comments/manager.py` | `CommentManager` — loading existing comments, building ignore sets, dedup. |
+| `quality/gate.py` | `QualityGate` — severity counting, threshold comparison, review decision computation. |
+| `quality/outcome.py` | `QualityGateOutcome`, `QualityGateReviewOutcome` — dataclasses for gate results. |
 
 ---
 
@@ -143,11 +179,11 @@ src/code_review/
 | 5 | **Idempotency**: If `head_sha` is set, build `run_id` from provider/owner/repo/pr/head_sha/agent_version/config_hash. If any existing comment body contains this run id in the marker → skip run, return `[]`. |
 | 6 | **PR files**: `provider.get_pr_files(owner, repo, pr_number)` → list of paths. |
 | 7 | **Language & standards**: `detect_from_paths(paths)` → `DetectedContext`; `get_review_standards(language, framework)` → string appended to agent instruction. |
-| 8 | **Agent**: `create_review_agent(provider, review_standards, findings_only=True)` → ADK `Agent` with model, instruction, tools, `generate_content_config`. |
+| 8 | **Agent**: `create_review_agent(provider, review_standards, findings_only=True)` → ADK `Agent` with model, instruction, tools, `output_schema=FindingsBatchV1`, callback hooks, and `generate_content_config`. |
 | 9 | **Session**: `InMemorySessionService()`; create session with `app_name`, `user_id`, `session_id`. |
 | 10 | **Runner**: `Runner(agent=agent, app_name=..., session_service=...)`. |
-| 11 | **Token budget**: `diff_budget = get_context_window() * DIFF_TOKEN_BUDGET_RATIO`; `full_diff = provider.get_pr_diff(...)`; if `_estimate_tokens(full_diff) > diff_budget` and there are paths → **file-by-file**: for each path, build user message “Review this PR … Review only this file: {path}”, call `runner.run(..., new_message=content)`, collect response, parse findings; else single message “Review this PR …”, one `runner.run()`, parse findings. |
-| 12 | **Parse**: `_findings_from_response(response_text)` extracts JSON array and maps to `FindingV1` (invalid entries skipped). |
+| 11 | **Token budget**: `diff_budget = get_context_window() * DIFF_TOKEN_BUDGET_RATIO`; `full_diff = provider.get_pr_diff(...)`; if `_estimate_tokens(full_diff) > diff_budget` and there are paths → **file-by-file**: for each path, build user message “Review this PR … Review only this file: {path}”, call `runner.run_async(..., new_message=content)`, collect response, parse findings; else single message “Review this PR …”, one `runner.run_async()`, parse findings. |
+| 12 | **Parse**: `_findings_from_response(response_text)` validates the structured findings payload and maps `{"findings": [...]}` into `FindingV1` items. |
 | 13 | **Filter**: For each finding, compute comment body and body hash; optionally `_fingerprint_for_finding()` using file lines at `head_sha`. Skip if `(path, body_hash)` or `(path, fingerprint)` in `ignore_set`; else append to `to_post`. |
 | 14 | **Optional**: If `print_findings`, print each finding to stdout. |
 | 15 | **Post** (if not dry_run and `to_post`): Require `head_sha`. For each finding, build `body` with `finding_to_comment_body()` and `format_comment_body_with_marker(fingerprint, version, run_id)`. Build list of `InlineComment`; call `provider.post_review_comments(...)`. On exception, fall back to posting one-by-one; on per-comment failure, post that finding as PR-level summary. Then `provider.post_pr_summary_comment(...)` with summary body. |
@@ -155,13 +191,22 @@ src/code_review/
 
 ### 4.3 Where the LLM Is Used
 
-All LLM calls occur inside **ADK’s `Runner.run()`**. The runner only:
+All LLM calls occur inside **ADK’s `Runner.run_async()`**. The runner only:
 
 - Builds the user message (PR context and optionally “Review only this file: path”).
-- Calls `runner.run(user_id, session_id, new_message=content)`.
+- Calls `runner.run_async(user_id, session_id, new_message=content)`.
 - Consumes the event stream and concatenates final response text.
 
 The agent (inside ADK) uses `get_configured_model()` for the model and calls tools (e.g. `get_pr_diff`, `get_pr_diff_for_file`, `get_file_content`, `get_file_lines`, `get_pr_files`, `detect_language_context`), which in turn call the **provider**. So the provider is used both by the runner (get existing comments, get files, get diff, get file content for fingerprinting, post comments) and by the agent via tools (get diff, get file content, etc.).
+
+The review agent also uses ADK callback hooks to apply runtime behavior that depends on the active tool set:
+
+- `before_model_callback`: appends short per-run guardrails. In tool-enabled mode it tells the model to call only registered tools, to preserve the `ref` argument exactly as given, and to return the required structured schema. In tool-free mode it reminds the model that only prompt context is available.
+- `after_model_callback`: logs raw text-bearing model responses at `DEBUG` level for schema and prompt debugging.
+- `before_tool_callback`: rejects obviously invalid tool calls before they hit provider code, such as empty `path`, empty `ref`, or invalid `get_file_lines` ranges.
+- `after_tool_callback`: normalizes CRLF to LF and truncates extreme string tool results before they are fed back into later turns.
+
+This callback layer is intentionally narrow. It handles dynamic runtime guardrails and light tool/result hygiene, while the runner still owns review policy, dedupe, fingerprinting, comment posting, and SCM-specific behavior.
 
 ---
 
@@ -184,8 +229,14 @@ The agent (inside ADK) uses `get_configured_model()` for the model and calls too
   - If `findings_only`: tools from `create_findings_only_tools(provider)` (get_pr_diff, get_pr_diff_for_file, get_file_content, get_file_lines, get_pr_files, detect_language_context); instruction = `FINDINGS_ONLY_INSTRUCTION`.
   - Else: tools from `create_gitea_tools(provider)` (adds post_review_comment, get_existing_review_comments); instruction = `BASE_INSTRUCTION`.
   - Appends `review_standards` to instruction.
+  - In single-shot mode (`disable_tools=True` or `LLM_DISABLE_TOOL_CALLS=1`), uses `SINGLE_SHOT_INSTRUCTION` and an empty tool list.
   - Builds `generate_content_config` from `get_llm_config()` (temperature, max_output_tokens).
-  - Returns ADK `Agent(model=get_configured_model(), name="code_review_agent", instruction=..., tools=..., generate_content_config=...)`.
+  - Returns ADK `Agent(model=get_configured_model(), name="code_review_agent", instruction=..., tools=..., output_schema=FindingsBatchV1, before_model_callback=..., after_model_callback=..., before_tool_callback=..., after_tool_callback=..., generate_content_config=...)`.
+- **Callback behavior**:
+  - `_before_model_callback(...)`: adds dynamic runtime guardrails based on whether tools are available for the current run.
+  - `_after_model_callback(...)`: emits debug logs for raw text responses.
+  - `_before_tool_callback(...)`: validates minimal tool-call preconditions before provider-backed helpers run.
+  - `_after_tool_callback(...)`: normalizes line endings and truncates oversized string results.
 
 ### 5.4 `agent/tools/gitea_tools.py`
 
@@ -200,7 +251,8 @@ The agent (inside ADK) uses `get_configured_model()` for the model and calls too
 
 ### 5.6 `schemas/findings.py`
 
-- **FindingV1**: Pydantic model for one finding: `path`, `line`, `end_line`, `severity`, `code`, `message`, `body`, `category`, `anchor`, `fingerprint_hint`, `version`. Used to parse the agent’s JSON output and to represent “findings to post.” `get_body()` returns the comment text (body or message).
+- **FindingV1**: Pydantic model for one finding: `path`, `line`, `end_line`, `severity`, `code`, `message`, `body`, `category`, `anchor`, `fingerprint_hint`, `version`. Used to parse the agent’s structured output and to represent “findings to post.” `get_body()` returns the comment text (body or message).
+- **FindingsBatchV1**: Wrapper schema for ADK structured output. The review agent returns `{"findings": [...]}` and the runner validates that wrapper before converting entries into `FindingV1` items.
 
 ### 5.7 `diff/`
 
@@ -398,7 +450,7 @@ This mode is optional: CI can still call the agent directly without any orchestr
 Tests mirror the source layout and live under `tests/`:
 
 - **cli/test_main.py**: CLI parsing, missing args, env fallback, `fail_on_critical`; mocks `run_review`.
-- **test_runner.py**, **runner/test_*.py**: Runner and idempotency, chunking, observability; use a **MockProvider** (or similar) and **patch `google.adk.runners.Runner`** so `run()` yields a single final event with JSON findings (no real LLM).
+- **test_runner.py**, **runner/test_*.py**: Runner and idempotency, chunking, observability; use a **MockProvider** (or similar) and **patch `google.adk.runners.Runner`** so `run_async()` yields final events with structured findings text (no real LLM).
 - **test_providers_gitea.py**, **providers/test_github.py**, **providers/test_gitlab.py**, **providers/test_bitbucket.py**: Provider behavior with **mocked HTTP** (e.g. `@patch("code_review.providers.gitea.httpx.Client")` and set `request.return_value`).
 - **tools/test_scm_tools.py**: Agent tools; **MagicMock** for the provider; call tool functions and assert delegation to the provider.
 - **integration/test_gitea_agent_integration.py**: Runner + real GiteaProvider with **respx** for Gitea API; **Runner** patched so no real LLM; asserts POST to review endpoint with expected payload.
@@ -410,7 +462,7 @@ Tests mirror the source layout and live under `tests/`:
 ### 8.2 Mocking Patterns
 
 - **Provider**: Implement a minimal `ProviderInterface` (or use `MagicMock(spec=ProviderInterface)`). In runner tests, **patch `code_review.runner.get_provider`** to return this provider.
-- **ADK / LLM**: **Patch `google.adk.runners.Runner`** so the constructed runner’s **run()** returns an iterator yielding one (or more) events where `is_final_response()` is True and `content.parts[].text` is the JSON array of findings. No real Runner or model is invoked.
+- **ADK / LLM**: **Patch `google.adk.runners.Runner`** so the constructed runner’s **run_async()** yields one (or more) events where `is_final_response()` is True and `content.parts[].text` contains the structured findings payload (typically `{"findings": [...]}`). No real Runner or model is invoked.
 - **Config**: **Patch `get_scm_config`** and **get_llm_config** (and in runner tests **get_context_window**) so tests do not depend on real env.
 - **HTTP (Gitea, etc.)**: Patch `httpx.Client` (or the client used by the provider) and set `.request.return_value` (or `.get`/`.post` if the provider uses them) to a mock response with `.text`, `.json()`, `.headers` as needed.
 

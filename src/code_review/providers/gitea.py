@@ -15,19 +15,17 @@ from code_review.providers.base import (
     InlineComment,
     PRInfo,
     ProviderCapabilities,
-    ProviderInterface,
     RateLimitError,
     ReviewComment,
     ReviewDecision,
     _log_pr_commit_messages_warning,
-    _log_pr_info_warning,
     commit_messages_from_commit_list,
     file_infos_from_pull_file_list,
-    pr_info_from_api_dict,
 )
 from code_review.providers.bot_blocking_common import (
     blocking_state_from_token_and_github_style_review_list,
 )
+from code_review.providers.http_base import HttpXProvider
 from code_review.providers.review_decision_common import github_style_pull_review_json
 from code_review.providers.safety import truncate_repo_content
 
@@ -35,19 +33,19 @@ logger = logging.getLogger(__name__)
 _COMPARE_FALLBACK_STATUSES = {404, 405, 422}
 
 
-class GiteaProvider(ProviderInterface):
+class GiteaProvider(HttpXProvider):
     """Gitea API client for PR diff, file content, and review comments."""
 
-    def __init__(self, base_url: str, token: str, timeout: float = 30.0):
-        self._base_url = base_url.rstrip("/")
-        self._token = token
-        self._timeout = timeout
+    _httpx_module = httpx
 
-    def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"token {self._token}",
-            "Accept": "application/json",
-        }
+    def _auth_header(self) -> dict[str, str]:
+        return {"Authorization": f"token {self._token}"}
+
+    def _default_headers(self) -> dict[str, str]:
+        return {"Accept": "application/json"}
+
+    def _api_prefix(self) -> str:
+        return "/api/v1"
 
     _RETRY_STATUSES = (502, 503, 504)
     _RETRY_DELAY_SECONDS = 1.0
@@ -57,6 +55,7 @@ class GiteaProvider(ProviderInterface):
         method: str,
         url: str,
         *,
+        headers: dict[str, str] | None = None,
         max_retries: int = 1,
         **kwargs: Any,
     ) -> httpx.Response:
@@ -66,47 +65,43 @@ class GiteaProvider(ProviderInterface):
         immediately so callers can skip to the next task rather than making
         the rate limit situation worse.
         """
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.request(method, url, headers=self._headers(), **kwargs)
+        request_headers = self._headers()
+        if headers:
+            request_headers = {**request_headers, **headers}
+        with self._httpx_module.Client(timeout=self._timeout) as client:
+            r = client.request(method, url, headers=request_headers, **kwargs)
             if r.status_code == 429:
                 raise RateLimitError(f"Rate limit exceeded (HTTP 429) for {method} {url}: {r.text}")
             if r.status_code in self._RETRY_STATUSES and max_retries > 0:
                 time.sleep(self._RETRY_DELAY_SECONDS)
-                r = client.request(method, url, headers=self._headers(), **kwargs)
+                r = client.request(method, url, headers=request_headers, **kwargs)
             return r
 
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        url = f"{self._base_url}/api/v1{path}"
-        r = self._request_with_retry("GET", url, params=params)
-        r.raise_for_status()
-        return (
-            r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        r = self._request_with_retry(
+            method,
+            self._build_url(path),
+            params=params or None,
+            json=json,
+            headers=headers,
         )
-
-    def _get_text(self, path: str) -> str:
-        url = f"{self._base_url}/api/v1{path}"
-        r = self._request_with_retry("GET", url)
         r.raise_for_status()
-        return r.text
-
-    def _post(self, path: str, json: Any) -> Any:
-        url = f"{self._base_url}/api/v1{path}"
-        r = self._request_with_retry("POST", url, json=json)
-        r.raise_for_status()
-        return r.json() if r.content else None
-
-    def _patch(self, path: str, json: Any) -> Any:
-        url = f"{self._base_url}/api/v1{path}"
-        r = self._request_with_retry("PATCH", url, json=json)
-        r.raise_for_status()
-        return r.json() if r.content else None
+        return r
 
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff for the PR."""
         path = f"/repos/{owner}/{repo}/pulls/{pr_number}.diff"
         return self._get_text(path)
 
-    def get_incremental_pr_diff(
+    def _get_incremental_pr_diff(
         self,
         owner: str,
         repo: str,
@@ -115,8 +110,6 @@ class GiteaProvider(ProviderInterface):
         head_sha: str,
     ) -> str:
         """Return unified diff for the incremental compare range ``base_sha...head_sha``."""
-        if not base_sha or not head_sha or base_sha == head_sha:
-            return self.get_pr_diff(owner, repo, pr_number)
         path = f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}.diff"
         try:
             return self._get_text(path)
@@ -158,7 +151,7 @@ class GiteaProvider(ProviderInterface):
         data = self._get(path)
         return file_infos_from_pull_file_list(data) if isinstance(data, list) else []
 
-    def get_incremental_pr_files(
+    def _get_incremental_pr_files(
         self,
         owner: str,
         repo: str,
@@ -167,8 +160,6 @@ class GiteaProvider(ProviderInterface):
         head_sha: str,
     ) -> list[FileInfo]:
         """Return files changed in the incremental compare range ``base_sha...head_sha``."""
-        if not base_sha or not head_sha or base_sha == head_sha:
-            return self.get_pr_files(owner, repo, pr_number)
         path = f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}"
         try:
             data = self._get(path)
@@ -415,21 +406,23 @@ class GiteaProvider(ProviderInterface):
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title, labels, and description for skip-review and metadata."""
-        try:
-            data = self._get(f"/repos/{owner}/{repo}/pulls/{pr_number}")
-            return pr_info_from_api_dict(data, "body") if isinstance(data, dict) else None
-        except Exception as e:
-            _log_pr_info_warning(logger, owner, repo, pr_number, e)
-            return None
+        return self._get_pr_info_from_path(
+            owner,
+            repo,
+            pr_number,
+            path=f"/repos/{owner}/{repo}/pulls/{pr_number}",
+            logger=logger,
+        )
 
     def update_pr_description(
         self, owner: str, repo: str, pr_number: int, description: str, title: str | None = None
     ) -> None:
         """Update the PR body (and optionally title) via PATCH /repos/.../pulls/{index}."""
-        payload: dict[str, str] = {"body": description}
-        if title is not None:
-            payload["title"] = title
-        self._patch(f"/repos/{owner}/{repo}/pulls/{pr_number}", payload)
+        self._patch_pr_description(
+            path=f"/repos/{owner}/{repo}/pulls/{pr_number}",
+            description=description,
+            title=title,
+        )
 
     def capabilities(self) -> ProviderCapabilities:
         """

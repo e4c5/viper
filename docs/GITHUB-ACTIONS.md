@@ -402,11 +402,130 @@ Private Docker Hub example:
 
 ### 7.5 Comment-triggered review decision refresh
 
-To re-run **only** the quality gate and PR review decision after discussion activity (no LLM), trigger a workflow on events such as `issue_comment` or `pull_request_review_comment` and run the agent with `--review-decision-only` plus `SCM_REVIEW_DECISION_ENABLED=true`. `SCM_HEAD_SHA` may be empty; the runner resolves the current head from the GitHub API when needed.
+To re-run **only** the quality gate and PR review decision after discussion activity, add a **second workflow** that listens to comment events and runs the agent with `--review-decision-only` plus `SCM_REVIEW_DECISION_ENABLED=true`.
+
+This path is what enables GitHub-side reply handling such as:
+
+- recomputing the quality gate after a human reply
+- optional reply-dismissal on review threads when `CODE_REVIEW_EVENT_COMMENT_ID` is present
+- optional thread reply / thread resolution on providers that support it
+
+Use these GitHub events:
+
+- `issue_comment` for PR conversation comments (top-level discussion on the PR)
+- `pull_request_review_comment` for diff-thread comments and replies
+
+`SCM_HEAD_SHA` may be empty for review-decision-only runs; the runner resolves the current head from the GitHub API when needed.
 
 Optional `CODE_REVIEW_EVENT_*` variables add structured audit fields to logs; see [Configuration reference — §5.1](CONFIGURATION-REFERENCE.md).
 
-Example container invocation (adapt `SCM_PR_NUM` / `SCM_HEAD_SHA` to your event shape):
+Recommended workflow:
+
+```yaml
+name: Code Review Comment Events
+
+on:
+  issue_comment:
+    types: [created, edited, deleted]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: code-review-comment-${{ github.event_name }}-${{ github.event.comment.id }}
+  cancel-in-progress: true
+
+jobs:
+  code-review-comment-events:
+    name: Refresh review decision
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: >
+      github.event_name != 'issue_comment' ||
+      github.event.issue.pull_request != null
+
+    env:
+      IMAGE: your-dockerhub-user/code-review-agent:v1.2.3
+
+      SCM_PROVIDER: github
+      SCM_URL: https://api.github.com
+      SCM_OWNER: ${{ github.repository_owner }}
+      SCM_REPO: ${{ github.event.repository.name }}
+      SCM_PR_NUM: ${{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number }}
+      SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      LLM_PROVIDER: openrouter
+      LLM_MODEL: google/gemini-3.1-flash-lite-preview
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+
+      SCM_REVIEW_DECISION_ENABLED: "true"
+      CODE_REVIEW_REVIEW_DECISION_ONLY: "1"
+      CODE_REVIEW_REPLY_DISMISSAL_ENABLED: "true"
+      CODE_REVIEW_EVENT_COMMENT_ID: ${{ github.event.comment.id }}
+      CODE_REVIEW_EVENT_ACTOR_LOGIN: ${{ github.event.sender.login }}
+      CODE_REVIEW_EVENT_ACTOR_ID: ${{ github.event.sender.id }}
+      CODE_REVIEW_LOG_LEVEL: INFO
+
+    steps:
+      - name: Skip when LLM secret is not configured
+        if: ${{ env.LLM_API_KEY == '' }}
+        run: echo "LLM_API_KEY is not configured; skipping review-decision refresh."
+
+      - name: Pull agent image
+        if: ${{ env.LLM_API_KEY != '' }}
+        run: docker pull "$IMAGE"
+
+      - name: Refresh review decision after comment activity
+        if: ${{ env.LLM_API_KEY != '' }}
+        run: |
+          docker run --rm \
+            -e SCM_PROVIDER \
+            -e SCM_URL \
+            -e SCM_OWNER \
+            -e SCM_REPO \
+            -e SCM_PR_NUM \
+            -e SCM_TOKEN \
+            -e LLM_PROVIDER \
+            -e LLM_MODEL \
+            -e LLM_API_KEY \
+            -e SCM_REVIEW_DECISION_ENABLED \
+            -e CODE_REVIEW_REVIEW_DECISION_ONLY \
+            -e CODE_REVIEW_REPLY_DISMISSAL_ENABLED \
+            -e CODE_REVIEW_EVENT_COMMENT_ID \
+            -e CODE_REVIEW_EVENT_ACTOR_LOGIN \
+            -e CODE_REVIEW_EVENT_ACTOR_ID \
+            -e CODE_REVIEW_LOG_LEVEL \
+            "$IMAGE" \
+            --owner "$SCM_OWNER" \
+            --repo "$SCM_REPO" \
+            --pr "$SCM_PR_NUM" \
+            --review-decision-only
+```
+
+Event mapping for the workflow above:
+
+- `issue_comment`
+  - use only when `github.event.issue.pull_request != null`
+  - `SCM_PR_NUM=${{ github.event.issue.number }}`
+  - `CODE_REVIEW_EVENT_COMMENT_ID=${{ github.event.comment.id }}`
+- `pull_request_review_comment`
+  - `SCM_PR_NUM=${{ github.event.pull_request.number }}`
+  - `CODE_REVIEW_EVENT_COMMENT_ID=${{ github.event.comment.id }}`
+- both events
+  - `CODE_REVIEW_EVENT_ACTOR_LOGIN=${{ github.event.sender.login }}`
+  - `CODE_REVIEW_EVENT_ACTOR_ID=${{ github.event.sender.id }}`
+
+Notes:
+
+- `issue_comment` also fires for issues, so the workflow must filter to pull requests
+- for reply-dismissal on GitHub review threads, `pull_request_review_comment` is the important event because it carries a review-comment id
+- this second workflow is intentionally separate from the full PR-review workflow because it needs different env flags
+- the workflow file must exist on the repository's default branch before these comment-triggered events will run reliably
+
+Minimal container invocation only:
 
 ```yaml
 - run: |
@@ -414,6 +533,10 @@ Example container invocation (adapt `SCM_PR_NUM` / `SCM_HEAD_SHA` to your event 
       -e SCM_PROVIDER -e SCM_URL -e SCM_TOKEN \
       -e SCM_OWNER -e SCM_REPO -e SCM_PR_NUM \
       -e SCM_REVIEW_DECISION_ENABLED=true \
+      -e CODE_REVIEW_REVIEW_DECISION_ONLY=1 \
+      -e CODE_REVIEW_EVENT_COMMENT_ID \
+      -e CODE_REVIEW_EVENT_ACTOR_LOGIN \
+      -e CODE_REVIEW_EVENT_ACTOR_ID \
       "$IMAGE" \
       --owner "$SCM_OWNER" --repo "$SCM_REPO" --pr "$SCM_PR_NUM" \
       --review-decision-only

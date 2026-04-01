@@ -1,13 +1,13 @@
 """Tests for the diff-line guardrail: findings outside diff hunks are filtered out.
 
 Root cause of the inline comment bug:
-  In single-shot mode the LLM receives the full multi-file diff and can report
+  In embedded-diff review the LLM receives the prepared multi-file diff batch and can report
   findings for lines that appear in the FILE but not in any diff hunk.  When such
   a line is sent to Bitbucket Cloud via the inline-comment API, the API either
   rejects it (raising an exception that causes a fallback to post_pr_summary_comment
   with the **path:line** format visible only in the Activity feed) or creates a
-  non-inline comment.  File-by-file mode avoids this because the LLM only sees
-  each individual file's diff and naturally reports lines within the hunks.
+  non-inline comment. The diff-line guardrail avoids this by filtering to visible
+  hunk lines before posting.
 
 Fix: _diff_visible_new_lines() builds the set of visible lines; the runner uses it
 to drop any finding whose line is not in that set before posting.
@@ -15,8 +15,8 @@ to drop any finding whose line is not in that set before posting.
 
 from unittest.mock import MagicMock, patch
 
+from code_review.orchestration_deps import _diff_visible_new_lines, _normalize_path_for_anchor
 from code_review.providers.base import FileInfo
-from code_review.runner import _diff_visible_new_lines, _normalize_path_for_anchor
 from tests.conftest import runner_run_async_returning
 
 # A minimal unified diff that changes only lines 10-11 of foo.py.
@@ -90,8 +90,10 @@ diff --git a/src/foo.py b/src/foo.py
 # ---------------------------------------------------------------------------
 
 _FINDINGS_WITH_OUT_OF_DIFF_LINE = (
-    '[{"path":"foo.py","line":1,"severity":"low","code":"c","message":"line 1 not in diff"},'
-    '{"path":"foo.py","line":10,"severity":"low","code":"d","message":"line 10 is in diff"}]'
+    '{"findings":['
+    '{"path":"foo.py","line":1,"severity":"low","code":"c","message":"line 1 not in diff"},'
+    '{"path":"foo.py","line":10,"severity":"low","code":"d","message":"line 10 is in diff"}'
+    ']}'
 )
 
 
@@ -128,7 +130,7 @@ def _run_review_with_mocked_bitbucket_runner(
         omit_fingerprint_marker_in_body=True,
     )
     mock_get_provider.return_value = provider
-    mock_context_window.return_value = 1_000_000  # large → single-shot mode
+    mock_context_window.return_value = 1_000_000  # large enough for embedded-diff batch review
 
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
@@ -141,10 +143,10 @@ def _run_review_with_mocked_bitbucket_runner(
         return run_review("owner", "repo", 1, head_sha=head_sha, dry_run=True)
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_runner_drops_findings_for_lines_outside_diff(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
 ) -> None:
@@ -174,10 +176,10 @@ def test_runner_drops_findings_for_lines_outside_diff(
     assert findings[0].line == 10
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_runner_keeps_context_line_findings(
     mock_scm, mock_get_provider, mock_llm, mock_context_window
 ) -> None:
@@ -185,7 +187,8 @@ def test_runner_keeps_context_line_findings(
 
     # Line 8 is a context line visible in the diff — it should NOT be filtered.
     context_line_finding = (
-        '[{"path":"foo.py","line":8,"severity":"medium","code":"c","message":"context line issue"}]'
+        '{"findings":[{"path":"foo.py","line":8,"severity":"medium","code":"c",'
+        '"message":"context line issue"}]}'
     )
 
     findings = _run_review_with_mocked_bitbucket_runner(

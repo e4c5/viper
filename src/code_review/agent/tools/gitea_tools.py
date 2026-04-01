@@ -185,12 +185,11 @@ def create_findings_only_tools(provider: ProviderInterface) -> list[Callable]:
     Tools for agent that only returns findings (no post, no get_existing).
     Runner will fetch comments, filter, and post.
 
-    Note: get_pr_diff (full-PR diff) is intentionally excluded.  In single-shot
-    mode the diff is already embedded in the user message, so fetching it again
-    would double the token cost.  In file-by-file mode the agent must use
-    get_pr_diff_for_file instead; including get_pr_diff here risks the agent
-    fetching the entire multi-hundred-kilobyte diff on every per-file session,
-    which causes the multi-million-token waste reported in the issue.
+    Note: get_pr_diff (full-PR diff) is intentionally excluded. In prepared
+    batch review the relevant diff is already embedded in the user message, so
+    fetching it again would double the token cost. In tool-enabled review the
+    agent should use get_pr_diff_for_file instead; including get_pr_diff here
+    risks fetching the entire multi-hundred-kilobyte diff unnecessarily.
     """
 
     def get_pr_diff_for_file(owner: str, repo: str, pr_number: int, path: str) -> str:

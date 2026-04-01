@@ -9,6 +9,7 @@ from code_review.providers.base import (
     ReviewComment,
     UnresolvedReviewItem,
 )
+from code_review.providers.http_base import HttpXProvider
 from code_review.providers.bitbucket import BitbucketProvider
 from code_review.providers.bitbucket_server import BitbucketServerProvider
 from code_review.providers.gitea import GiteaProvider
@@ -48,6 +49,7 @@ __all__ = [
     "GiteaProvider",
     "GitHubProvider",
     "GitLabProvider",
+    "HttpXProvider",
     "InlineComment",
     "PRInfo",
     "ProviderCapabilities",

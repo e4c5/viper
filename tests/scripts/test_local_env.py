@@ -38,7 +38,7 @@ def test_parse_env_file_preserves_spaces_and_unquotes_values(tmp_path: Path) -> 
         "\n".join(
             [
                 f"SE_PASSWORD={se_password}",
-                'LLM_MODEL="gemini-2.5-flash"',
+                'LLM_MODEL="gemini-3.1"',
                 "export SCM_PROVIDER=bitbucket_server",
             ]
         ),
@@ -48,7 +48,7 @@ def test_parse_env_file_preserves_spaces_and_unquotes_values(tmp_path: Path) -> 
     parsed = module.parse_env_file(env_file)
 
     assert parsed["SE_PASSWORD"] == se_password
-    assert parsed["LLM_MODEL"] == "gemini-2.5-flash"
+    assert parsed["LLM_MODEL"] == "gemini-3.1"
     assert parsed["SCM_PROVIDER"] == "bitbucket_server"
 
 

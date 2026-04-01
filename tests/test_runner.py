@@ -15,7 +15,7 @@ from code_review.providers.base import (
 )
 from code_review.providers.bitbucket_server import BitbucketServerProvider
 from code_review.reply_dismissal_state import REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT
-from tests.conftest import runner_run_async_returning
+from tests.conftest import runner_run_async_returning, sample_unified_diff
 
 
 class MockProvider:
@@ -23,7 +23,7 @@ class MockProvider:
         return [FileInfo(path="foo.py", status="modified")]
 
     def get_pr_diff(self, owner, repo, pr_number):
-        return "diff --git a/foo.py b/foo.py"
+        return sample_unified_diff("foo.py")
 
     def get_file_content(self, owner, repo, ref, path):
         return "content"
@@ -81,7 +81,7 @@ def _base_review_provider(
     """Provider mock for tests that run the agent against a single modified file."""
     p = MagicMock()
     p.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
-    p.get_pr_diff.return_value = "diff"
+    p.get_pr_diff.return_value = sample_unified_diff("foo.py")
     p.get_file_content.return_value = "content"
     p.get_existing_review_comments.return_value = []
     p.post_review_comments = MagicMock()
@@ -104,15 +104,7 @@ def _final_adk_event(findings_json: str) -> MagicMock:
 def _adk_runner_single_event(findings_json: str) -> MagicMock:
     mock_event = _final_adk_event(findings_json)
     inst = MagicMock()
-    inst.run_async = runner_run_async_returning([mock_event])
-    return inst
-
-
-def _adk_runner_n_per_file_calls(findings_json: str, n: int) -> MagicMock:
-    mock_event = _final_adk_event(findings_json)
-    inst = MagicMock()
-    wrapper = runner_run_async_returning([mock_event])
-    inst.run_async.side_effect = [wrapper() for _ in range(n)]
+    inst.run_async = MagicMock(side_effect=runner_run_async_returning([mock_event]))
     return inst
 
 
@@ -345,7 +337,7 @@ def _patch_adk_runner(mock_runner_instance: MagicMock):
 
 
 def test_format_reply_dismissal_user_message_marks_original_and_triggering_comments():
-    from code_review.runner import _format_reply_dismissal_user_message
+    from code_review.orchestration_deps import _format_reply_dismissal_user_message
     from code_review.schemas.review_thread_dismissal import (
         ReviewThreadDismissalContext,
         ReviewThreadDismissalEntry,
@@ -385,11 +377,11 @@ def test_format_reply_dismissal_user_message_marks_original_and_triggering_comme
     assert "Comment id: 11" in msg
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_sends_anchored_diff_context(
     mock_get_scm_config,
     mock_get_provider,
@@ -506,9 +498,9 @@ def test_create_review_agent():
     assert agent.name == "code_review_agent"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_ignore_list_and_posts_net_new(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -528,10 +520,12 @@ def test_run_review_ignore_list_and_posts_net_new(
         mock_get_scm_config, mock_get_provider, mock_get_context_window, provider=provider
     )
 
-    findings_json = """[
-        {"path":"foo.py","line":1,"severity":"high","code":"x","message":"Duplicate finding."},
-        {"path":"foo.py","line":2,"severity":"medium","code":"y","message":"Net new finding."}
-    ]"""
+    findings_json = """{
+        "findings": [
+            {"path":"foo.py","line":1,"severity":"high","code":"x","message":"Duplicate finding."},
+            {"path":"foo.py","line":1,"severity":"medium","code":"y","message":"Net new finding."}
+        ]
+    }"""
 
     with _patch_adk_runner(_adk_runner_single_event(findings_json)):
         to_post = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
@@ -548,9 +542,9 @@ def test_run_review_ignore_list_and_posts_net_new(
     assert call_args[1]["head_sha"] == "abc123"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_raises_when_posting_without_head_sha(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -562,7 +556,10 @@ def test_run_review_raises_when_posting_without_head_sha(
         mock_get_scm_config, mock_get_provider, mock_get_context_window, provider=provider
     )
 
-    findings_json = '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
+    findings_json = (
+        '{"findings":[{"path":"foo.py","line":1,"severity":"medium","code":"x",'
+        '"message":"Fix."}]}'
+    )
 
     with _patch_adk_runner(_adk_runner_single_event(findings_json)):
         with pytest.raises(ValueError, match="head_sha is required when posting"):
@@ -570,9 +567,9 @@ def test_run_review_raises_when_posting_without_head_sha(
     provider.post_review_comments.assert_not_called()
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_skips_when_pr_has_skip_label(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -602,10 +599,10 @@ def test_run_review_skips_when_pr_has_skip_label(
     provider.get_existing_review_comments.assert_not_called()
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_skips_when_idempotency_marker_present(
     mock_get_scm_config,
     mock_get_provider,
@@ -613,7 +610,8 @@ def test_run_review_skips_when_idempotency_marker_present(
     mock_get_context_window,
 ):
     """When an existing marker has the same run id, run_review returns [] and does not post."""
-    from code_review.runner import _build_idempotency_key, run_review
+    from code_review.orchestration_deps import _build_idempotency_key
+    from code_review.runner import run_review
 
     scm_cfg = _scm_config()
     llm_cfg = _llm_config()
@@ -646,17 +644,17 @@ def test_run_review_skips_when_idempotency_marker_present(
     provider.post_pr_summary_comment.assert_not_called()
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
-def test_run_review_uses_file_by_file_mode_when_diff_exceeds_budget(
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
+def test_run_review_builds_multiple_batches_when_diff_exceeds_single_batch_budget(
     mock_get_scm_config,
     mock_get_provider,
     mock_get_llm_config,
     mock_get_context_window,
 ):
-    """When diff size exceeds budget, runner reviews files one-by-one with separate sessions."""
+    """Large diffs should be packed into multiple prepared batches for one workflow run."""
     from code_review.runner import run_review
 
     scm_cfg = _scm_config()
@@ -673,18 +671,36 @@ def test_run_review_uses_file_by_file_mode_when_diff_exceeds_budget(
         FileInfo(path="foo.py", status="modified"),
         FileInfo(path="bar.py", status="modified"),
     ]
-    provider.get_pr_diff.return_value = "x" * 10_000
+    provider.get_pr_diff.return_value = sample_unified_diff(
+        "foo.py",
+        before="\n".join(f"old_{i}" for i in range(80)) + "\n",
+        after="\n".join(f"new_{i}" for i in range(80)) + "\n",
+    ) + sample_unified_diff(
+        "bar.py",
+        before="\n".join(f"old_bar_{i}" for i in range(80)) + "\n",
+        after="\n".join(f"new_bar_{i}" for i in range(80)) + "\n",
+    )
     mock_get_provider.return_value = provider
     mock_get_context_window.return_value = 16
 
-    findings_json = '[{"path":"foo.py","line":1,"severity":"medium","code":"x","message":"Fix."}]'
-    mock_runner = _adk_runner_n_per_file_calls(findings_json, 2)
+    findings_json = (
+        '{"findings":[{"path":"foo.py","line":1,"severity":"medium","code":"x",'
+        '"message":"Fix."}]}'
+    )
+    mock_runner = _adk_runner_single_event(findings_json)
 
-    with _patch_adk_runner(mock_runner):
+    with (
+        patch("code_review.agent.workflows.create_sequential_batch_review_agent") as mock_workflow,
+        _patch_adk_runner(mock_runner),
+    ):
+        mock_workflow.return_value = MagicMock(name="batch_workflow_agent")
         result = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
 
     assert len(result) == 1
-    assert mock_runner.run_async.call_count == 2
+    assert mock_runner.run_async.call_count == 1
+    batches = mock_workflow.call_args.args[2]
+    assert len(batches) > 1
+    assert tuple(batches[0].paths) == ("foo.py",)
 
 
 def _review_decision_scm_config(**extra):
@@ -711,9 +727,9 @@ def _provider_with_review_decisions(
     return p
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_submits_request_changes_when_threshold_met(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -729,7 +745,8 @@ def test_run_review_submits_request_changes_when_threshold_met(
     )
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"high","code":"x","message":"Must fix."}]'
+        '{"findings":[{"path":"foo.py","line":1,"severity":"high","code":"x",'
+        '"message":"Must fix."}]}'
     )
 
     with _patch_adk_runner(_adk_runner_single_event(findings_json)):
@@ -739,9 +756,9 @@ def test_run_review_submits_request_changes_when_threshold_met(
     assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_continues_when_submit_review_decision_raises(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -759,7 +776,8 @@ def test_run_review_continues_when_submit_review_decision_raises(
     )
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"high","code":"x","message":"Must fix."}]'
+        '{"findings":[{"path":"foo.py","line":1,"severity":"high","code":"x",'
+        '"message":"Must fix."}]}'
     )
 
     with _patch_adk_runner(_adk_runner_single_event(findings_json)):
@@ -770,9 +788,9 @@ def test_run_review_continues_when_submit_review_decision_raises(
     provider.submit_review_decision.assert_called_once()
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_submits_approve_when_only_low_nit_open(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -787,10 +805,12 @@ def test_run_review_submits_approve_when_only_low_nit_open(
         provider=provider,
     )
 
-    findings_json = """[
-        {"path":"foo.py","line":1,"severity":"low","code":"x","message":"Optional"},
-        {"path":"foo.py","line":2,"severity":"nit","code":"y","message":"Style"}
-    ]"""
+    findings_json = """{
+        "findings": [
+            {"path":"foo.py","line":1,"severity":"low","code":"x","message":"Optional"},
+            {"path":"foo.py","line":2,"severity":"nit","code":"y","message":"Style"}
+        ]
+    }"""
 
     with _patch_adk_runner(_adk_runner_single_event(findings_json)):
         run_review("o", "r", 1, head_sha="abc123", dry_run=False)
@@ -799,9 +819,9 @@ def test_run_review_submits_approve_when_only_low_nit_open(
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_dry_run_does_not_submit_review_decision(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -817,7 +837,8 @@ def test_run_review_dry_run_does_not_submit_review_decision(
     )
 
     findings_json = (
-        '[{"path":"foo.py","line":1,"severity":"high","code":"x","message":"Must fix."}]'
+        '{"findings":[{"path":"foo.py","line":1,"severity":"high","code":"x",'
+        '"message":"Must fix."}]}'
     )
 
     with _patch_adk_runner(_adk_runner_single_event(findings_json)):
@@ -826,9 +847,9 @@ def test_run_review_dry_run_does_not_submit_review_decision(
     provider.submit_review_decision.assert_not_called()
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_request_changes_from_pre_existing_unresolved_high_comment(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -860,16 +881,16 @@ def test_run_review_request_changes_from_pre_existing_unresolved_high_comment(
         provider=provider,
     )
 
-    with _patch_adk_runner(_adk_runner_single_event("[]")):
+    with _patch_adk_runner(_adk_runner_single_event('{"findings":[]}')):
         run_review("o", "r", 1, head_sha="abc123", dry_run=False)
 
     provider.submit_review_decision.assert_called_once()
     assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_empty_incremental_scope_still_recomputes_review_decision(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -898,9 +919,9 @@ def test_run_review_empty_incremental_scope_still_recomputes_review_decision(
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_empty_scope_resolves_head_sha_before_submitting_review_decision(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -927,9 +948,9 @@ def test_run_review_empty_scope_resolves_head_sha_before_submitting_review_decis
 
 
 @patch("code_review.providers.bitbucket_server.httpx.Client")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_empty_incremental_scope_approves_when_bitbucket_suggestion_already_applied(
     mock_get_scm_config,
     mock_get_provider,
@@ -967,9 +988,9 @@ def test_run_review_empty_incremental_scope_approves_when_bitbucket_suggestion_a
 
 
 @patch("code_review.providers.bitbucket_server.httpx.Client")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_empty_incremental_scope_uses_comments_endpoint_state_for_bitbucket_gate(
     mock_get_scm_config,
     mock_get_provider,
@@ -1003,9 +1024,9 @@ def test_run_review_empty_incremental_scope_uses_comments_endpoint_state_for_bit
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_skips_agent_and_inline(
     mock_get_scm_config, mock_get_provider, mock_get_context_window
 ):
@@ -1037,10 +1058,10 @@ def test_run_review_decision_only_skips_agent_and_inline(
     assert provider.submit_review_decision.call_args.kwargs.get("head_sha") == "from-api-sha"
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_skips_when_skip_if_bot_not_blocking_and_reply(
     mock_get_scm_config,
     mock_get_provider,
@@ -1087,10 +1108,10 @@ def test_run_review_decision_only_skips_when_skip_if_bot_not_blocking_and_reply(
     provider.submit_review_decision.assert_not_called()
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_skip_opt_in_ignored_when_bot_blocking(
     mock_get_scm_config,
     mock_get_provider,
@@ -1134,10 +1155,10 @@ def test_run_review_decision_only_skip_opt_in_ignored_when_bot_blocking(
     provider.submit_review_decision.assert_called_once()
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_skip_opt_in_ignored_for_comment_deleted(
     mock_get_scm_config,
     mock_get_provider,
@@ -1183,7 +1204,7 @@ def test_run_review_decision_only_skip_opt_in_ignored_for_comment_deleted(
 
 def test_compute_quality_gate_review_outcome_matches_thresholds():
     """Shared outcome helper stays aligned with threshold semantics."""
-    from code_review.runner import _compute_quality_gate_review_outcome
+    from code_review.quality.gate import _compute_quality_gate_review_outcome
 
     provider = MagicMock()
     provider.get_unresolved_review_items_for_quality_gate = MagicMock(return_value=[])
@@ -1203,8 +1224,22 @@ def test_compute_quality_gate_review_outcome_matches_thresholds():
     assert "REQUEST_CHANGES" in out.submission_reason
 
 
+def test_compute_quality_gate_review_outcome_returns_none_when_unresolved_lookup_fails():
+    from code_review.quality.gate import _compute_quality_gate_review_outcome
+
+    provider = MagicMock()
+    provider.get_unresolved_review_items_for_quality_gate = MagicMock(
+        side_effect=RuntimeError("lookup failed")
+    )
+    cfg = _review_decision_scm_config()
+
+    out = _compute_quality_gate_review_outcome(provider, "o", "r", 1, [], cfg)
+
+    assert out is None
+
+
 def test_compute_quality_gate_review_outcome_excludes_stable_ids():
-    from code_review.runner import _compute_quality_gate_review_outcome
+    from code_review.quality.gate import _compute_quality_gate_review_outcome
 
     provider = MagicMock()
     provider.get_unresolved_review_items_for_quality_gate = MagicMock(
@@ -1244,10 +1279,8 @@ def test_compute_quality_gate_review_outcome_excludes_stable_ids():
 
 
 def test_omit_marker_pr_summary_omits_meets_expectations_when_gate_requests_changes():
-    from code_review.runner import (
-        QualityGateReviewOutcome,
-        _omit_marker_pr_summary_visible_text,
-    )
+    from code_review.orchestration_deps import _omit_marker_pr_summary_visible_text
+    from code_review.quality.outcome import QualityGateReviewOutcome
 
     cfg = _review_decision_scm_config()
     provider = MagicMock()
@@ -1272,10 +1305,8 @@ def test_omit_marker_pr_summary_omits_meets_expectations_when_gate_requests_chan
 
 
 def test_omit_marker_pr_summary_keeps_meets_expectations_when_gate_approves():
-    from code_review.runner import (
-        QualityGateReviewOutcome,
-        _omit_marker_pr_summary_visible_text,
-    )
+    from code_review.orchestration_deps import _omit_marker_pr_summary_visible_text
+    from code_review.quality.outcome import QualityGateReviewOutcome
 
     cfg = _review_decision_scm_config()
     provider = MagicMock()
@@ -1299,10 +1330,8 @@ def test_omit_marker_pr_summary_keeps_meets_expectations_when_gate_approves():
 
 
 def test_omit_marker_pr_summary_meets_expectations_when_review_decisions_disabled():
-    from code_review.runner import (
-        QualityGateReviewOutcome,
-        _omit_marker_pr_summary_visible_text,
-    )
+    from code_review.orchestration_deps import _omit_marker_pr_summary_visible_text
+    from code_review.quality.outcome import QualityGateReviewOutcome
 
     cfg = _scm_config(
         review_decision_enabled=False,
@@ -1330,11 +1359,11 @@ def test_omit_marker_pr_summary_meets_expectations_when_review_decisions_disable
     assert "needs work" not in text.lower()
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_skips_llm_when_scm_already_addressed(
     mock_get_scm_config,
     mock_get_provider,
@@ -1393,11 +1422,11 @@ def test_run_review_decision_only_reply_dismissal_skips_llm_when_scm_already_add
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_keeps_gate_when_persistence_fails(
     mock_get_scm_config,
     mock_get_provider,
@@ -1434,11 +1463,11 @@ def test_run_review_decision_only_reply_dismissal_keeps_gate_when_persistence_fa
     assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_agreed_excludes_thread(
     mock_get_scm_config,
     mock_get_provider,
@@ -1468,11 +1497,11 @@ def test_run_review_decision_only_reply_dismissal_agreed_excludes_thread(
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_agreed_posts_durable_reply_when_unresolvable(
     mock_get_scm_config,
     mock_get_provider,
@@ -1518,11 +1547,11 @@ def test_run_review_decision_only_reply_dismissal_agreed_posts_durable_reply_whe
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_agreed_posts_durable_reply_when_resolution_fails(
     mock_get_scm_config,
     mock_get_provider,
@@ -1559,11 +1588,11 @@ def test_run_review_decision_only_reply_dismissal_agreed_posts_durable_reply_whe
     assert provider.submit_review_decision.call_args.args[3] == "APPROVE"
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_disagreed_posts_reply(
     mock_get_scm_config,
     mock_get_provider,
@@ -1603,11 +1632,11 @@ def test_run_review_decision_only_reply_dismissal_disagreed_posts_reply(
     )
 
 
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_reply_dismissal_skips_when_trigger_already_has_bot_reply(
     mock_get_scm_config,
     mock_get_provider,
@@ -1658,12 +1687,12 @@ def test_run_review_decision_only_reply_dismissal_skips_when_trigger_already_has
     assert provider.submit_review_decision.call_args.args[3] == "REQUEST_CHANGES"
 
 
-@patch("code_review.runner.observability.record_reply_dismissal_outcome")
-@patch("code_review.runner.get_code_review_app_config")
-@patch("code_review.runner._run_reply_dismissal_llm")
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_provider")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.observability.record_reply_dismissal_outcome")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_run_review_decision_only_skips_entire_run_when_actor_is_bot(
     mock_get_scm_config,
     mock_get_provider,
@@ -1696,8 +1725,40 @@ def test_run_review_decision_only_skips_entire_run_when_actor_is_bot(
     mock_record_rd.assert_any_call("skipped_bot_author")
 
 
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
+def test_run_review_skips_review_decision_when_quality_gate_lookup_fails(
+    mock_get_scm_config, mock_get_provider, mock_get_context_window
+):
+    """Unresolved-item lookup failures must not be treated as an APPROVE-able empty gate."""
+    from code_review.runner import run_review
+
+    provider = _provider_with_review_decisions()
+    provider.get_unresolved_review_items_for_quality_gate.side_effect = RuntimeError("boom")
+    _wire_standard_runner_mocks(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        scm=_review_decision_scm_config(),
+        provider=provider,
+    )
+
+    findings_json = (
+        '{"findings":[{"path":"foo.py","line":1,"severity":"high","code":"x",'
+        '"message":"Must fix."}]}'
+    )
+
+    with _patch_adk_runner(_adk_runner_single_event(findings_json)):
+        posted = run_review("o", "r", 1, head_sha="abc123", dry_run=False)
+
+    assert len(posted) == 1
+    provider.post_review_comments.assert_called_once()
+    provider.submit_review_decision.assert_not_called()
+
+
 def test_reply_added_event_authored_by_bot_matches_login_and_id():
-    from code_review.runner import _reply_added_event_authored_by_bot
+    from code_review.orchestration_deps import _reply_added_event_authored_by_bot
     from code_review.schemas.review_decision_event import ReviewDecisionEventContext
 
     bot = BotAttributionIdentity(login="The-Bot", id_str="42")

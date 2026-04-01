@@ -10,6 +10,9 @@ from code_review.models import (
     get_configured_model,
     get_context_window,
     get_max_output_tokens,
+    get_model_metadata,
+    get_model_metadata_catalog,
+    get_model_token_costs,
 )
 
 
@@ -117,6 +120,143 @@ def test_get_context_window(mock_get_config):
 def test_get_max_output_tokens(mock_get_config):
     mock_get_config.return_value = MagicMock(max_output_tokens=2048, api_key=None)
     assert get_max_output_tokens() == 2048
+
+
+def test_get_model_metadata_catalog_returns_copy():
+    catalog = get_model_metadata_catalog()
+
+    assert ("openai", "gpt-4.1") in catalog
+    del catalog[("openai", "gpt-4.1")]
+
+    assert ("openai", "gpt-4.1") in get_model_metadata_catalog()
+
+
+def test_get_model_metadata_known_pair():
+    metadata = get_model_metadata("openai", "gpt-4.1-mini")
+
+    assert metadata is not None
+    assert metadata.context_window_tokens == 1_047_576
+    assert metadata.max_output_tokens_default == 32_768
+    assert metadata.input_cost_per_million_tokens == pytest.approx(0.40)
+    assert metadata.output_cost_per_million_tokens == pytest.approx(1.60)
+    assert metadata.source_url.startswith("https://")
+    assert metadata.verified_on == "2026-03-29"
+
+
+def test_get_model_metadata_refreshed_gemini_limits():
+    metadata = get_model_metadata("gemini", "gemini-3.1")
+
+    assert metadata is not None
+    assert metadata.context_window_tokens == 1_048_576
+    assert metadata.max_output_tokens_default == 65_536
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_configured_model_gemini_alias_resolves_to_runtime_model(mock_get_config):
+    mock_get_config.return_value = MagicMock(provider="gemini", model="gemini-3.1", api_key=None)
+
+    assert get_configured_model() == "gemini-3-flash-preview"
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_model_metadata_uses_config_when_args_omitted(mock_get_config):
+    mock_get_config.return_value = MagicMock(
+        provider="anthropic",
+        model="claude-3-5-sonnet-latest",
+        api_key=None,
+    )
+
+    metadata = get_model_metadata()
+
+    assert metadata is not None
+    assert metadata.provider == "anthropic"
+    assert metadata.model == "claude-3-5-sonnet-latest"
+
+
+def test_get_model_token_costs_known_pair():
+    assert get_model_token_costs("openai", "gpt-4o") == pytest.approx((2.50, 10.00))
+
+
+def test_get_model_token_costs_unknown_pair():
+    assert get_model_token_costs("custom", "unknown-model") == (None, None)
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_context_window_uses_metadata_fallback(mock_get_config, monkeypatch):
+    monkeypatch.delenv("LLM_CONTEXT_WINDOW", raising=False)
+    mock_get_config.return_value = MagicMock(
+        provider="openai",
+        model="gpt-4.1",
+        context_window=64_000,
+        api_key=None,
+    )
+
+    assert get_context_window() == 1_047_576
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_context_window_respects_explicit_env_override(mock_get_config, monkeypatch):
+    monkeypatch.setenv("LLM_CONTEXT_WINDOW", "777777")
+    mock_get_config.return_value = MagicMock(
+        provider="openai",
+        model="gpt-4.1",
+        context_window=777_777,
+        api_key=None,
+    )
+
+    assert get_context_window() == 777_777
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_context_window_unknown_model_falls_back_to_config(mock_get_config, monkeypatch):
+    monkeypatch.delenv("LLM_CONTEXT_WINDOW", raising=False)
+    mock_get_config.return_value = MagicMock(
+        provider="custom",
+        model="unknown-model",
+        context_window=123_456,
+        api_key=None,
+    )
+
+    assert get_context_window() == 123_456
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_max_output_tokens_uses_metadata_fallback(mock_get_config, monkeypatch):
+    monkeypatch.delenv("LLM_MAX_OUTPUT_TOKENS", raising=False)
+    mock_get_config.return_value = MagicMock(
+        provider="openai",
+        model="gpt-4.1-mini",
+        max_output_tokens=4096,
+        api_key=None,
+    )
+
+    assert get_max_output_tokens() == 32_768
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_max_output_tokens_respects_explicit_env_override(mock_get_config, monkeypatch):
+    monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "8192")
+    mock_get_config.return_value = MagicMock(
+        provider="openai",
+        model="gpt-4.1-mini",
+        max_output_tokens=8192,
+        api_key=None,
+    )
+
+    assert get_max_output_tokens() == 8192
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_max_output_tokens_unknown_model_falls_back_to_config(mock_get_config, monkeypatch):
+    monkeypatch.delenv("LLM_MAX_OUTPUT_TOKENS", raising=False)
+    mock_get_config.return_value = MagicMock(
+        provider="custom",
+        model="unknown-model",
+        max_output_tokens=3072,
+        api_key=None,
+    )
+
+    assert get_max_output_tokens() == 3072
 
 
 @patch("code_review.models.get_llm_config")

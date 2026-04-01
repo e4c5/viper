@@ -2,11 +2,11 @@
 
 import hashlib
 
+from code_review.comments.manager import _build_ignore_set
 from code_review.diff.fingerprint import (
     format_comment_body_with_marker,
     parse_marker_from_comment_body,
 )
-from code_review.runner import _build_ignore_set
 
 
 def test_ignore_set_includes_fingerprint_when_marker_present():

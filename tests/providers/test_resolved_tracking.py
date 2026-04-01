@@ -9,7 +9,7 @@ from code_review.providers.base import (
     ProviderInterface,
     ReviewComment,
 )
-from tests.conftest import runner_run_async_returning
+from tests.conftest import runner_run_async_returning, sample_unified_diff
 
 
 def test_review_comment_has_resolved():
@@ -46,10 +46,10 @@ class _ProviderWithCapabilities(ProviderInterface):
         repo: str,
         pr_number: int,
     ) -> str:
-        return "diff"
+        return sample_unified_diff("foo.py")
 
     def get_pr_diff_for_file(self, owner: str, repo: str, pr_number: int, path: str) -> str:
-        return "diff"
+        return sample_unified_diff(path or "foo.py")
 
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
         return "content"
@@ -115,10 +115,13 @@ def _run_with_single_stale_comment(
 
     # Patch provider factory and ADK Runner so run_review sees no findings (empty array).
     with (
-        patch("code_review.runner.get_provider", return_value=provider),
+        patch(
+            "code_review.orchestration.orchestrator.runner_mod.get_provider",
+            return_value=provider,
+        ),
         patch("google.adk.runners.Runner") as mock_runner_cls,
     ):
-        findings_json = "[]"
+        findings_json = '{"findings":[]}'
         mock_event = MagicMock()
         mock_event.is_final_response.return_value = True
         mock_event.content = MagicMock()
@@ -132,9 +135,9 @@ def _run_with_single_stale_comment(
     return provider, result
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_auto_resolve_stale_comments_when_capabilities_true(
     mock_get_scm_config, mock_get_llm_config, mock_get_context_window
 ):
@@ -152,9 +155,9 @@ def test_auto_resolve_stale_comments_when_capabilities_true(
     assert provider._resolved_ids == ["c-1"]
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_auto_resolve_not_called_when_capabilities_false(
     mock_get_scm_config, mock_get_llm_config, mock_get_context_window
 ):
@@ -175,9 +178,9 @@ def test_auto_resolve_not_called_when_capabilities_false(
     assert provider._resolved_ids == []
 
 
-@patch("code_review.runner.get_context_window")
-@patch("code_review.runner.get_llm_config")
-@patch("code_review.runner.get_scm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_auto_resolve_not_called_in_dry_run(
     mock_get_scm_config, mock_get_llm_config, mock_get_context_window
 ):

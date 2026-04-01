@@ -5,6 +5,7 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
+import code_review.providers.http_shortcuts as http_shortcuts
 
 from code_review.formatters.comment import (
     infer_severity_from_comment_body,
@@ -18,30 +19,23 @@ from code_review.providers.base import (
     InlineComment,
     PRInfo,
     ProviderCapabilities,
-    ProviderInterface,
     ReviewComment,
     ReviewDecision,
     UnresolvedReviewItem,
     _log_pr_info_warning,
     pr_info_from_api_dict,
 )
-from code_review.providers.http_shortcuts import (
-    http_delete,
-    http_get_json_or_text,
-    http_post_json,
-    http_put_json,
-)
+from code_review.providers.http_base import HttpXProvider
 from code_review.providers.review_decision_common import (
     delete_soft_fail,
     gitlab_note_with_submit_review_requested_changes,
 )
-from code_review.providers.safety import truncate_repo_content
+from code_review.providers.safety import MAX_REPO_FILE_BYTES, truncate_repo_content
 from code_review.schemas.review_thread_dismissal import (
     ReviewThreadDismissalContext,
     ReviewThreadDismissalEntry,
 )
 
-MAX_REPO_FILE_BYTES = 16 * 1024  # 16KB
 _COMPARE_FALLBACK_STATUSES = {404, 405, 422}
 logger = logging.getLogger(__name__)
 
@@ -156,15 +150,12 @@ def _gitlab_dismissal_context_for_discussion(
     )
 
 
-class GitLabProvider(ProviderInterface):
+class GitLabProvider(HttpXProvider):
     """GitLab API client for MR diff, file content, and discussion comments."""
 
-    def __init__(self, base_url: str, token: str, timeout: float = 30.0):
-        self._base_url = base_url.rstrip("/")
-        self._token = token
-        self._timeout = timeout
+    _httpx_module = http_shortcuts.httpx
 
-    def _headers(self) -> dict[str, str]:
+    def _auth_header(self) -> dict[str, str]:
         return {"PRIVATE-TOKEN": self._token}
 
     def _path(self, owner: str, repo: str, *parts: str) -> str:
@@ -177,33 +168,24 @@ class GitLabProvider(ProviderInterface):
         """List all MR discussions (GitLab paginates; small pages omit later threads)."""
         base_path = self._path(owner, repo, "merge_requests", str(pr_number), "discussions")
         combined: list[dict[str, Any]] = []
-        page = 1
-        per_page = 100
-        max_pages = 500
-        for _ in range(max_pages):
-            url = f"{base_path}?per_page={per_page}&page={page}"
-            try:
-                data = self._get(url)
-            except Exception as e:
-                logger.warning(
-                    "GitLab MR discussions fetch failed owner=%s repo=%s pr_number=%s page=%s: %s",
-                    owner,
-                    repo,
-                    pr_number,
-                    page,
-                    e,
-                )
-                break
-            if not isinstance(data, list):
-                break
-            if not data:
-                break
-            for item in data:
-                if isinstance(item, dict):
-                    combined.append(item)
-            if len(data) < per_page:
-                break
-            page += 1
+        try:
+            page_iter = self._paginate_list(base_path, mode="page", page_size=100, max_pages=500)
+            for data in page_iter:
+                if not isinstance(data, list):
+                    break
+                if not data:
+                    break
+                for item in data:
+                    if isinstance(item, dict):
+                        combined.append(item)
+        except Exception as e:
+            logger.warning(
+                "GitLab MR discussions fetch failed owner=%s repo=%s pr_number=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
         return combined
 
     def _get_mr_reviews_paginated(
@@ -212,41 +194,24 @@ class GitLabProvider(ProviderInterface):
         """List all MR reviews (paginated). ``None`` if any page fails or response is not a list."""
         base_path = self._path(owner, repo, "merge_requests", str(pr_number), "reviews")
         combined: list[dict[str, Any]] = []
-        page = 1
-        per_page = 100
-        max_pages = 500
-        for _ in range(max_pages):
-            url = f"{base_path}?per_page={per_page}&page={page}"
-            try:
-                data = self._get(url)
-            except Exception as e:
-                logger.warning(
-                    "GitLab MR reviews fetch failed owner=%s repo=%s pr_number=%s page=%s: %s",
-                    owner,
-                    repo,
-                    pr_number,
-                    page,
-                    e,
-                )
-                return None
-            if not isinstance(data, list):
-                return None
-            for item in data:
-                if isinstance(item, dict):
-                    combined.append(item)
-            if len(data) < per_page:
-                break
-            page += 1
+        try:
+            page_iter = self._paginate_list(base_path, mode="page", page_size=100, max_pages=500)
+            for data in page_iter:
+                if not isinstance(data, list):
+                    return None
+                for item in data:
+                    if isinstance(item, dict):
+                        combined.append(item)
+        except Exception as e:
+            logger.warning(
+                "GitLab MR reviews fetch failed owner=%s repo=%s pr_number=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
         return combined
-
-    def _get(self, path: str) -> Any:
-        return http_get_json_or_text(path, headers=self._headers(), timeout=self._timeout)
-
-    def _post(self, path: str, json: dict) -> Any:
-        return http_post_json(path, json, headers=self._headers(), timeout=self._timeout)
-
-    def _put(self, path: str, json: dict) -> Any:
-        return http_put_json(path, json, headers=self._headers(), timeout=self._timeout)
 
     def _incremental_compare_path(
         self, owner: str, repo: str, base_sha: str, head_sha: str
@@ -256,9 +221,6 @@ class GitLabProvider(ProviderInterface):
             f"{path}?from={quote(base_sha, safe='')}"
             f"&to={quote(head_sha, safe='')}&straight=true"
         )
-
-    def _delete(self, path: str) -> None:
-        http_delete(path, headers=self._headers(), timeout=self._timeout)
 
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff by concatenating MR diffs."""
@@ -281,7 +243,7 @@ class GitLabProvider(ProviderInterface):
                 parts.append(diff)
         return "\n".join(parts)
 
-    def get_incremental_pr_diff(
+    def _get_incremental_pr_diff(
         self,
         owner: str,
         repo: str,
@@ -290,8 +252,6 @@ class GitLabProvider(ProviderInterface):
         head_sha: str,
     ) -> str:
         """Return unified diff for the incremental compare range ``base_sha..head_sha``."""
-        if not base_sha or not head_sha or base_sha == head_sha:
-            return self.get_pr_diff(owner, repo, pr_number)
         try:
             data = self._get(self._incremental_compare_path(owner, repo, base_sha, head_sha))
         except httpx.HTTPStatusError as exc:
@@ -318,11 +278,8 @@ class GitLabProvider(ProviderInterface):
         proj = _project_id(owner, repo)
         encoded_path = quote(path, safe="")
         url = f"{self._base_url}/projects/{proj}/repository/files/{encoded_path}/raw"
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.get(url, headers=self._headers(), params={"ref": ref})
-            r.raise_for_status()
-            raw = r.content.decode("utf-8", errors="replace")
-            return truncate_repo_content(raw, max_bytes=MAX_REPO_FILE_BYTES)
+        raw = self._get_bytes(url, params={"ref": ref}).decode("utf-8", errors="replace")
+        return truncate_repo_content(raw, max_bytes=MAX_REPO_FILE_BYTES)
 
     def _additions_deletions_from_diff(self, d: dict) -> tuple[int, int]:
         """Get (additions, deletions) from API fields or by parsing diff text."""
@@ -376,7 +333,7 @@ class GitLabProvider(ProviderInterface):
             )
         return result
 
-    def get_incremental_pr_files(
+    def _get_incremental_pr_files(
         self,
         owner: str,
         repo: str,
@@ -385,8 +342,6 @@ class GitLabProvider(ProviderInterface):
         head_sha: str,
     ) -> list[FileInfo]:
         """Return files changed in the incremental compare range ``base_sha..head_sha``."""
-        if not base_sha or not head_sha or base_sha == head_sha:
-            return self.get_pr_files(owner, repo, pr_number)
         try:
             data = self._get(self._incremental_compare_path(owner, repo, base_sha, head_sha))
         except httpx.HTTPStatusError as exc:
@@ -564,11 +519,23 @@ class GitLabProvider(ProviderInterface):
     ) -> None:
         discussion_id = (thread_context.thread_id or "").strip()
         if not discussion_id:
-            ctx = self.get_review_thread_dismissal_context(owner, repo, pr_number, triggered_comment_id)
+            ctx = self.get_review_thread_dismissal_context(
+                owner,
+                repo,
+                pr_number,
+                triggered_comment_id,
+            )
             discussion_id = (ctx.thread_id or "").strip() if ctx is not None else ""
         if not discussion_id:
             raise ValueError("GitLab discussion id is required to resolve the thread")
-        path = self._path(owner, repo, "merge_requests", str(pr_number), "discussions", discussion_id)
+        path = self._path(
+            owner,
+            repo,
+            "merge_requests",
+            str(pr_number),
+            "discussions",
+            discussion_id,
+        )
         self._put(path, {"resolved": True})
 
     def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
@@ -652,33 +619,26 @@ class GitLabProvider(ProviderInterface):
         """List MR commits (GitLab: GET .../merge_requests/:iid/commits), paginated."""
         base_path = self._path(owner, repo, "merge_requests", str(pr_number), "commits")
         out: list[str] = []
-        page = 1
-        per_page = 100
-        while True:
-            path = f"{base_path}?per_page={per_page}&page={page}"
-            try:
-                data = self._get(path)
-            except Exception as e:
-                logger.warning(
-                    "get_pr_commit_messages failed owner=%s repo=%s pr_number=%s: %s",
-                    owner,
-                    repo,
-                    pr_number,
-                    e,
+        try:
+            page_iter = self._paginate_list(base_path, mode="page", page_size=100, max_pages=500)
+            for data in page_iter:
+                if not isinstance(data, list):
+                    break
+                out.extend(
+                    msg
+                    for item in data
+                    if isinstance(item, dict)
+                    for msg in [(item.get("message") or item.get("title") or "").strip()]
+                    if msg
                 )
-                break
-            if not isinstance(data, list):
-                break
-            out.extend(
-                msg
-                for item in data
-                if isinstance(item, dict)
-                for msg in [(item.get("message") or item.get("title") or "").strip()]
-                if msg
+        except Exception as e:
+            logger.warning(
+                "get_pr_commit_messages failed owner=%s repo=%s pr_number=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
             )
-            if len(data) < per_page:
-                break
-            page += 1
         return out
 
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:

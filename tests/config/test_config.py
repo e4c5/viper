@@ -13,7 +13,7 @@ from code_review.config import (
     get_scm_config,
     reset_config_cache,
 )
-from code_review.runner import ReviewOrchestrator
+from code_review.orchestration.orchestrator import ReviewOrchestrator
 
 
 def test_scm_config_invalid_url_raises():
@@ -202,6 +202,18 @@ def test_code_review_app_reply_dismissal_enabled_from_env():
     with patch.dict(os.environ, {"CODE_REVIEW_REPLY_DISMISSAL_ENABLED": "true"}, clear=True):
         cfg = CodeReviewAppConfig()
         assert cfg.reply_dismissal_enabled is True
+
+
+def test_code_review_app_disable_idempotency_from_env():
+    with patch.dict(os.environ, {"CODE_REVIEW_DISABLE_IDEMPOTENCY": "true"}, clear=True):
+        cfg = CodeReviewAppConfig()
+        assert cfg.disable_idempotency is True
+
+
+def test_code_review_app_log_prompts_from_env():
+    with patch.dict(os.environ, {"CODE_REVIEW_LOG_PROMPTS": "true"}, clear=True):
+        cfg = CodeReviewAppConfig()
+        assert cfg.log_prompts is True
 
 
 def test_code_review_app_reply_dismissal_enabled_by_default():
