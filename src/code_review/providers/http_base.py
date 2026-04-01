@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from abc import abstractmethod
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import httpx
@@ -22,6 +23,14 @@ PageToken = str | int | None
 FetchPage = Callable[[str, dict[str, Any] | None], Any]
 NextPage = Callable[[Any, PageToken], PageToken]
 RepeatHook = Callable[[PageToken], None]
+
+
+@dataclass
+class _PaginationState:
+    path: str
+    params: dict[str, Any]
+    token: PageToken
+    seen_tokens: set[str] = field(default_factory=set)
 
 
 class HttpXProvider(ProviderInterface):
@@ -198,6 +207,139 @@ class HttpXProvider(ProviderInterface):
         nxt = data.get("next")
         return nxt.strip() if isinstance(nxt, str) and nxt.strip() else None
 
+    @staticmethod
+    def _init_pagination_state(
+        path: str,
+        params: dict[str, Any] | None,
+        mode: PaginationMode,
+        page_size: int | None,
+    ) -> _PaginationState:
+        current_params = dict(params or {})
+        if mode == "page":
+            token = int(current_params.get("page", 1) or 1)
+            current_params["page"] = token
+            if page_size is not None:
+                current_params.setdefault("per_page", page_size)
+            return _PaginationState(path=path, params=current_params, token=token)
+        if mode == "start":
+            token = int(current_params.get("start", 0) or 0)
+            current_params["start"] = token
+            if page_size is not None:
+                current_params.setdefault("limit", page_size)
+            return _PaginationState(path=path, params=current_params, token=token)
+        return _PaginationState(path=path, params=current_params, token=path)
+
+    @staticmethod
+    def _stop_on_repeat(token: PageToken, on_repeat: RepeatHook | None) -> bool:
+        if on_repeat is not None:
+            on_repeat(token)
+        return False
+
+    def _load_paginated_data(
+        self,
+        fetch: FetchPage,
+        state: _PaginationState,
+        mode: PaginationMode,
+        on_repeat: RepeatHook | None,
+    ) -> tuple[Any, bool]:
+        if mode != "next":
+            return fetch(state.path, dict(state.params)), True
+
+        token_str = str(state.token)
+        if token_str in state.seen_tokens:
+            return None, self._stop_on_repeat(state.token, on_repeat)
+
+        state.seen_tokens.add(token_str)
+        params_arg = dict(state.params) if state.params else None
+        data = fetch(state.path, params_arg)
+        state.params = {}
+        return data, True
+
+    @staticmethod
+    def _default_page_next_token(
+        data: Any,
+        current_token: PageToken,
+        page_size: int | None,
+    ) -> int | None:
+        if not isinstance(data, list) or page_size is None or len(data) < page_size:
+            return None
+        return int(current_token) + 1
+
+    def _advance_page_mode(
+        self,
+        state: _PaginationState,
+        data: Any,
+        page_size: int | None,
+        next_page: NextPage | None,
+        on_repeat: RepeatHook | None,
+    ) -> bool:
+        next_token = (
+            next_page(data, state.token)
+            if next_page is not None
+            else self._default_page_next_token(data, state.token, page_size)
+        )
+        if next_token is None:
+            return False
+        if next_token == state.token:
+            return self._stop_on_repeat(state.token, on_repeat)
+        state.token = next_token
+        state.params["page"] = next_token
+        return True
+
+    def _advance_start_mode(
+        self,
+        state: _PaginationState,
+        data: Any,
+        next_page: NextPage | None,
+        on_repeat: RepeatHook | None,
+    ) -> bool:
+        if next_page is None:
+            raise ValueError("start pagination requires a next_page callback")
+        next_token = next_page(data, state.token)
+        if next_token is None:
+            return False
+        if next_token == state.token:
+            return self._stop_on_repeat(state.token, on_repeat)
+        state.token = next_token
+        state.params["start"] = next_token
+        return True
+
+    def _advance_next_mode(
+        self,
+        state: _PaginationState,
+        data: Any,
+        next_page: NextPage | None,
+    ) -> bool:
+        next_token = (
+            next_page(data, state.token)
+            if next_page is not None
+            else self._next_page_url(data)
+        )
+        if next_token is None:
+            return False
+        next_url = str(next_token).strip()
+        if not next_url:
+            return False
+        state.path = next_url
+        state.token = next_url
+        return True
+
+    def _advance_pagination(
+        self,
+        state: _PaginationState,
+        data: Any,
+        *,
+        mode: PaginationMode,
+        page_size: int | None,
+        next_page: NextPage | None,
+        on_repeat: RepeatHook | None,
+    ) -> bool:
+        if mode == "page":
+            return self._advance_page_mode(state, data, page_size, next_page, on_repeat)
+        if mode == "start":
+            return self._advance_start_mode(state, data, next_page, on_repeat)
+        return self._advance_next_mode(state, data, next_page)
+
     def _paginate_list(
         self,
         path: str,
@@ -214,81 +356,24 @@ class HttpXProvider(ProviderInterface):
         """Yield paginated API pages while centralizing page-token progression."""
 
         fetch = fetch_page or self._get
-        current_path = path
-        current_params = dict(params or {})
-        current_token: PageToken
-
-        if mode == "page":
-            current_token = int(current_params.get("page", 1) or 1)
-            current_params["page"] = current_token
-            if page_size is not None:
-                current_params.setdefault("per_page", page_size)
-        elif mode == "start":
-            current_token = int(current_params.get("start", 0) or 0)
-            current_params["start"] = current_token
-            if page_size is not None:
-                current_params.setdefault("limit", page_size)
-        else:
-            current_token = current_path
-
-        seen_tokens: set[str] = set()
+        state = self._init_pagination_state(path, params, mode, page_size)
         data = initial_data
         for _ in range(max_pages):
             if data is None:
-                if mode == "next":
-                    token_str = str(current_token)
-                    if token_str in seen_tokens:
-                        if on_repeat is not None:
-                            on_repeat(current_token)
-                        break
-                    seen_tokens.add(token_str)
-                    params_arg = dict(current_params) if current_params else None
-                    data = fetch(current_path, params_arg)
-                    current_params = {}
-                else:
-                    data = fetch(current_path, dict(current_params))
+                data, should_continue = self._load_paginated_data(fetch, state, mode, on_repeat)
+                if not should_continue:
+                    break
 
             yield data
 
-            if mode == "page":
-                if next_page is not None:
-                    next_token = next_page(data, current_token)
-                else:
-                    if not isinstance(data, list) or page_size is None or len(data) < page_size:
-                        break
-                    next_token = int(current_token) + 1
-                if next_token is None:
-                    break
-                if next_token == current_token:
-                    if on_repeat is not None:
-                        on_repeat(current_token)
-                    break
-                current_token = next_token
-                current_params["page"] = current_token
-            elif mode == "start":
-                if next_page is None:
-                    raise ValueError("start pagination requires a next_page callback")
-                next_token = next_page(data, current_token)
-                if next_token is None:
-                    break
-                if next_token == current_token:
-                    if on_repeat is not None:
-                        on_repeat(current_token)
-                    break
-                current_token = next_token
-                current_params["start"] = current_token
-            else:
-                next_token = (
-                    next_page(data, current_token)
-                    if next_page is not None
-                    else self._next_page_url(data)
-                )
-                if next_token is None:
-                    break
-                next_url = str(next_token).strip()
-                if not next_url:
-                    break
-                current_path = next_url
-                current_token = current_path
+            if not self._advance_pagination(
+                state,
+                data,
+                mode=mode,
+                page_size=page_size,
+                next_page=next_page,
+                on_repeat=on_repeat,
+            ):
+                break
 
             data = None
