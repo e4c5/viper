@@ -21,3 +21,17 @@ class ContextReference:
 
     display: str
     """Human-readable label for logs and distillation."""
+
+
+@dataclass(frozen=True)
+class ExternalCredentials:
+    """Resolved external API endpoints and credentials used for context fetching."""
+
+    github_api: str = ""
+    github_token: str = ""
+    gitlab_api: str = ""
+    gitlab_token: str = ""
+    jira_email: str = ""
+    jira_token: str = ""
+    confluence_email: str = ""
+    confluence_token: str = ""

@@ -8,7 +8,7 @@ import pytest
 import code_review.context.pipeline as pipeline_module
 from code_review.context.errors import ContextAwareFatalError
 from code_review.context.pipeline import build_context_brief_for_pr
-from code_review.context.types import ContextReference, ReferenceType
+from code_review.context.types import ContextReference, ExternalCredentials, ReferenceType
 
 
 @pytest.fixture(autouse=True)
@@ -92,6 +92,35 @@ def _make_fetched_doc(external_id="org/repo#1", body="Issue body text", title="I
         metadata={},
         version="1",
         external_updated_at=None,
+    )
+
+
+def test_get_external_credentials_builds_single_value_object():
+    ctx = _make_ctx(gitlab_issues_enabled=True, jira_enabled=True, confluence_enabled=True)
+    ctx.github_api_url = "https://api.github.example.com"
+    ctx.github_token = MagicMock()
+    ctx.github_token.get_secret_value.return_value = "gh-token"
+    ctx.gitlab_api_url = "https://gitlab.example.com/api/v4"
+    ctx.gitlab_token = MagicMock()
+    ctx.gitlab_token.get_secret_value.return_value = "gl-token"
+    ctx.jira_email = "jira@example.com"
+    ctx.jira_token = MagicMock()
+    ctx.jira_token.get_secret_value.return_value = "jira-token"
+    ctx.confluence_email = "conf@example.com"
+    ctx.confluence_token = MagicMock()
+    ctx.confluence_token.get_secret_value.return_value = "conf-token"
+
+    creds = pipeline_module._get_external_credentials(_make_scm(provider="gitea"), ctx)
+
+    assert creds == ExternalCredentials(
+        github_api="https://api.github.example.com",
+        github_token="gh-token",
+        gitlab_api="https://gitlab.example.com/api/v4",
+        gitlab_token="gl-token",
+        jira_email="jira@example.com",
+        jira_token="jira-token",
+        confluence_email="conf@example.com",
+        confluence_token="conf-token",
     )
 
 
