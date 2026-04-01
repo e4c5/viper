@@ -319,9 +319,14 @@ class BitbucketServerProvider(HttpXProvider):
         base_sha: str,
         head_sha: str,
     ) -> str:
-        """Return unified diff for the incremental compare range ``base_sha..head_sha``."""
+        """Return unified diff for the incremental compare range ``base_sha..head_sha``.
+
+        Bitbucket Server's compare API is directional: ``from`` means the newer tip and
+        ``to`` means the older/base commit for the "changes introduced since base" view.
+        Using ``from=base``/``to=head`` can produce an empty diff for a normal PR update.
+        """
         path = self._path(owner, repo, "compare", "diff")
-        return self._get_unified_diff(path, params={"from": base_sha, "to": head_sha})
+        return self._get_unified_diff(path, params={"from": head_sha, "to": base_sha})
 
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
         """Return file content at ref (raw endpoint with at=ref)."""
