@@ -59,12 +59,16 @@ def test_get_pr_diff():
 
 def test_get_incremental_pr_diff_uses_compare_endpoint():
     client = MagicMock()
+    repo = MagicMock()
+    repo.compare.return_value = SimpleNamespace(files=[_fake_file("foo.py")])
+    client.get_repo.return_value = repo
     client.request_text.return_value = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py"
     p = GitHubProvider("https://api.github.com", "tok")
     with patch.object(GitHubProvider, "_client", return_value=client):
         diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
 
     assert "diff --git" in diff
+    repo.compare.assert_called_once_with("base123", "head456")
     client.request_text.assert_called_once_with(
         "GET",
         "/repos/owner/repo/compare/base123...head456",
@@ -74,18 +78,41 @@ def test_get_incremental_pr_diff_uses_compare_endpoint():
 
 def test_get_incremental_pr_diff_falls_back_to_full_pr_diff_on_compare_error():
     client = MagicMock()
-    client.request_text.side_effect = [
-        GithubException(404, {"message": "compare failed"}),
-        "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py",
-    ]
+    repo = MagicMock()
+    repo.compare.side_effect = GithubException(404, {"message": "compare failed"})
+    client.get_repo.return_value = repo
+    client.request_text.return_value = "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
     p = GitHubProvider("https://api.github.com", "tok")
     with patch.object(GitHubProvider, "_client", return_value=client):
         diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
 
     assert "diff --git a/full.py b/full.py" in diff
-    calls = client.request_text.call_args_list
-    assert calls[0].args[1] == "/repos/owner/repo/compare/base123...head456"
-    assert calls[1].args[1] == "/repos/owner/repo/pulls/1"
+    client.request_text.assert_called_once_with(
+        "GET",
+        "/repos/owner/repo/pulls/1",
+        headers={"Accept": "application/vnd.github.v3.diff"},
+    )
+
+
+def test_get_incremental_pr_diff_falls_back_to_full_pr_diff_when_compare_files_truncate():
+    client = MagicMock()
+    repo = MagicMock()
+    repo.compare.return_value = SimpleNamespace(
+        files=[_fake_file(f"file_{index}.py") for index in range(300)]
+    )
+    client.get_repo.return_value = repo
+    client.request_text.return_value = "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
+    p = GitHubProvider("https://api.github.com", "tok")
+
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
+
+    assert "diff --git a/full.py b/full.py" in diff
+    client.request_text.assert_called_once_with(
+        "GET",
+        "/repos/owner/repo/pulls/1",
+        headers={"Accept": "application/vnd.github.v3.diff"},
+    )
 
 
 def test_get_file_content():
@@ -199,6 +226,25 @@ def test_get_incremental_pr_files_fall_back_to_full_pr_files_on_compare_error():
     pull.get_files.return_value = [_fake_file("full.py", status="modified", additions=2, deletions=1)]
     client.get_pull.return_value = pull
     p = GitHubProvider("https://api.github.com", "tok")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        files = p.get_incremental_pr_files("owner", "repo", 1, "base123", "head456")
+
+    assert len(files) == 1
+    assert files[0].path == "full.py"
+
+
+def test_get_incremental_pr_files_fall_back_to_full_pr_files_when_compare_files_truncate():
+    client = MagicMock()
+    repo = MagicMock()
+    repo.compare.return_value = SimpleNamespace(
+        files=[_fake_file(f"file_{index}.py", status="modified") for index in range(300)]
+    )
+    client.get_repo.return_value = repo
+    pull = MagicMock()
+    pull.get_files.return_value = [_fake_file("full.py", status="modified", additions=2, deletions=1)]
+    client.get_pull.return_value = pull
+    p = GitHubProvider("https://api.github.com", "tok")
+
     with patch.object(GitHubProvider, "_client", return_value=client):
         files = p.get_incremental_pr_files("owner", "repo", 1, "base123", "head456")
 

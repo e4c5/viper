@@ -40,6 +40,8 @@ from code_review.schemas.review_thread_dismissal import (
 
 logger = logging.getLogger(__name__)
 
+_GITHUB_COMPARE_MAX_FILES = 300
+
 
 class GitHubProvider(ProviderInterface):
     """GitHub API client for PR diff, file content, and review comments."""
@@ -72,6 +74,51 @@ class GitHubProvider(ProviderInterface):
             path,
             headers={"Accept": "application/vnd.github.v3.diff"},
         )
+
+    @staticmethod
+    def _comparison_file_list(comparison: Any) -> list[Any]:
+        return list(getattr(comparison, "files", None) or [])
+
+    @staticmethod
+    def _comparison_files_truncated(comparison: Any) -> bool:
+        files = GitHubProvider._comparison_file_list(comparison)
+        if len(files) >= _GITHUB_COMPARE_MAX_FILES:
+            return True
+        raw_data = getattr(comparison, "raw_data", None)
+        if isinstance(raw_data, dict):
+            raw_files = raw_data.get("files")
+            if isinstance(raw_files, list) and len(raw_files) >= _GITHUB_COMPARE_MAX_FILES:
+                return True
+        return False
+
+    def _get_incremental_compare(self, owner: str, repo: str, pr_number: int, base_sha: str, head_sha: str) -> Any | None:
+        try:
+            comparison = self._client().get_repo(owner, repo).compare(base_sha, head_sha)
+        except GithubException as e:
+            logger.warning(
+                "GitHub incremental compare metadata failed owner=%s repo=%s pr=%s "
+                "base=%s head=%s: %s; falling back to full PR review",
+                owner,
+                repo,
+                pr_number,
+                base_sha,
+                head_sha,
+                e,
+            )
+            return None
+        if self._comparison_files_truncated(comparison):
+            logger.warning(
+                "GitHub incremental compare metadata hit the %s-file compare limit "
+                "owner=%s repo=%s pr=%s base=%s head=%s; falling back to full PR review",
+                _GITHUB_COMPARE_MAX_FILES,
+                owner,
+                repo,
+                pr_number,
+                base_sha,
+                head_sha,
+            )
+            return None
+        return comparison
 
     def _graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
         body = self._client().graphql_query(query, variables)
@@ -448,6 +495,9 @@ class GitHubProvider(ProviderInterface):
         head_sha: str,
     ) -> str:
         """Return unified diff for the incremental compare range ``base_sha...head_sha``."""
+        comparison = self._get_incremental_compare(owner, repo, pr_number, base_sha, head_sha)
+        if comparison is None:
+            return self.get_pr_diff(owner, repo, pr_number)
         path = f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}"
         try:
             return self._get_diff(path)
@@ -572,21 +622,10 @@ class GitHubProvider(ProviderInterface):
         head_sha: str,
     ) -> list[FileInfo]:
         """Return files changed in the incremental compare range ``base_sha...head_sha``."""
-        try:
-            comparison = self._client().get_repo(owner, repo).compare(base_sha, head_sha)
-        except GithubException as e:
-            logger.warning(
-                "GitHub incremental compare files failed owner=%s repo=%s pr=%s "
-                "base=%s head=%s: %s; falling back to full PR files",
-                owner,
-                repo,
-                pr_number,
-                base_sha,
-                head_sha,
-                e,
-            )
+        comparison = self._get_incremental_compare(owner, repo, pr_number, base_sha, head_sha)
+        if comparison is None:
             return self.get_pr_files(owner, repo, pr_number)
-        files = comparison.files or []
+        files = self._comparison_file_list(comparison)
         return [self._github_file_info(item) for item in files]
 
     def post_review_comments(
