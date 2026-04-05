@@ -4,7 +4,6 @@ import logging
 import os
 from typing import Any, Literal
 
-import httpx
 from github.GithubException import GithubException
 
 from code_review.formatters.comment import (
@@ -20,17 +19,18 @@ from code_review.providers.base import (
     FileInfo,
     InlineComment,
     PRInfo,
+    ProviderInterface,
     ProviderCapabilities,
     ReviewComment,
     ReviewDecision,
     UnresolvedReviewItem,
     _log_pr_info_warning,
     _log_pr_commit_messages_warning,
+    unified_diff_for_path,
 )
 from code_review.providers.bot_blocking_common import (
     blocking_state_from_token_and_github_style_review_list,
 )
-from code_review.providers.http_base import HttpXProvider
 from code_review.providers.review_decision_common import github_style_pull_review_json
 from code_review.providers.safety import MAX_REPO_FILE_BYTES, truncate_repo_content
 from code_review.schemas.review_thread_dismissal import (
@@ -38,18 +38,16 @@ from code_review.schemas.review_thread_dismissal import (
     ReviewThreadDismissalEntry,
 )
 
-DEFAULT_BASE_URL = "https://api.github.com"
-JSON_MEDIA_TYPE = "application/json"
 logger = logging.getLogger(__name__)
 
 
-class GitHubProvider(HttpXProvider):
+class GitHubProvider(ProviderInterface):
     """GitHub API client for PR diff, file content, and review comments."""
 
-    _httpx_module = httpx
-
     def __init__(self, base_url: str, token: str, timeout: float = 30.0):
-        super().__init__(base_url, token, timeout)
+        self._base_url = base_url.rstrip("/")
+        self._token = token
+        self._timeout = timeout
         self._github_client: GitHubApiClient | None = None
 
     def _client(self) -> GitHubApiClient:
@@ -61,11 +59,11 @@ class GitHubProvider(HttpXProvider):
             )
         return self._github_client
 
-    def _auth_header(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._token}"} if self._token else {}
-
-    def _default_headers(self) -> dict[str, str]:
-        return {"Accept": "application/vnd.github+json"}
+    @staticmethod
+    def _sha_guard_passes(base_sha: str, head_sha: str) -> bool:
+        base = (base_sha or "").strip()
+        head = (head_sha or "").strip()
+        return bool(base and head and base != head)
 
     def _get_diff(self, path: str) -> str:
         """GET with Accept application/vnd.github.v3.diff for unified diff."""
@@ -429,6 +427,18 @@ class GitHubProvider(HttpXProvider):
         path = f"/repos/{owner}/{repo}/pulls/{pr_number}"
         return self._get_diff(path)
 
+    def get_incremental_pr_diff(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> str:
+        if not self._sha_guard_passes(base_sha, head_sha):
+            return self.get_pr_diff(owner, repo, pr_number)
+        return self._get_incremental_pr_diff(owner, repo, pr_number, base_sha, head_sha)
+
     def _get_incremental_pr_diff(
         self,
         owner: str,
@@ -538,8 +548,20 @@ class GitHubProvider(HttpXProvider):
         if match is not None:
             return match
         if any(self._github_pr_file_matches_path(item, wanted_path) for item in data):
-            return super().get_pr_diff_for_file(owner, repo, pr_number, path)
+            return unified_diff_for_path(self.get_pr_diff(owner, repo, pr_number), path)
         return ""
+
+    def get_incremental_pr_files(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> list[FileInfo]:
+        if not self._sha_guard_passes(base_sha, head_sha):
+            return self.get_pr_files(owner, repo, pr_number)
+        return self._get_incremental_pr_files(owner, repo, pr_number, base_sha, head_sha)
 
     def _get_incremental_pr_files(
         self,
@@ -740,24 +762,51 @@ class GitHubProvider(HttpXProvider):
         except (TypeError, ValueError):
             return 0
 
+    @staticmethod
+    def _github_comment_database_id(comment: dict[str, Any]) -> int:
+        try:
+            return int(comment.get("databaseId") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _github_thread_id(node: dict[str, Any]) -> str:
+        return str(node.get("id") or "")
+
+    @staticmethod
+    def _github_thread_comments_wrapper(node: dict[str, Any]) -> dict[str, Any] | None:
+        comments = node.get("comments")
+        return comments if isinstance(comments, dict) else None
+
+    def _github_thread_contains_comment_id(
+        self, comments: list[dict[str, Any]], want_id: int
+    ) -> bool:
+        return any(self._github_comment_database_id(comment) == want_id for comment in comments)
+
+    def _github_dismissal_context_from_thread_node(
+        self, node: dict[str, Any], want_id: int
+    ) -> ReviewThreadDismissalContext | None:
+        tid = self._github_thread_id(node)
+        if not tid:
+            return None
+        expanded = self._github_expand_thread_comments(
+            tid,
+            self._github_thread_comments_wrapper(node),
+            gate_mode=False,
+        )
+        if not self._github_thread_contains_comment_id(expanded, want_id):
+            return None
+        return self._github_build_dismissal_context_from_comment_nodes(tid, expanded)
+
     def _github_dismissal_context_in_thread_nodes(
         self, nodes: list[Any], want_id: int
     ) -> ReviewThreadDismissalContext | None:
         for node in nodes:
             if not isinstance(node, dict):
                 continue
-            tid = str(node.get("id") or "")
-            if not tid:
-                continue
-            cw = node.get("comments") if isinstance(node.get("comments"), dict) else None
-            expanded = self._github_expand_thread_comments(tid, cw, gate_mode=False)
-            for c in expanded:
-                if not isinstance(c, dict):
-                    continue
-                if int(c.get("databaseId") or 0) == want_id:
-                    return self._github_build_dismissal_context_from_comment_nodes(
-                        tid, expanded
-                    )
+            hit = self._github_dismissal_context_from_thread_node(node, want_id)
+            if hit is not None:
+                return hit
         return None
 
     def get_review_thread_dismissal_context(
