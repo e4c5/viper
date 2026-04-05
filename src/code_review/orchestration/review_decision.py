@@ -90,7 +90,12 @@ class ReviewDecisionHandler:
         provider,
         run_observability: ReviewRunObservability,
     ) -> list[FindingV1] | None:
-        """Skip review-decision-only runs triggered by the bot's own comment activity."""
+        """Skip bot-authored comment events as a provider-neutral fallback.
+
+        GitHub App webhook parsing should drop obvious bot-authored comment events before
+        scheduling work, but non-GitHub integrations and direct runner entry points still
+        rely on this late guard.
+        """
         ctx = self.event_context
         if ctx is None:
             return None
