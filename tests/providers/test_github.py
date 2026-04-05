@@ -336,9 +336,9 @@ def test_capabilities_support_review_decisions():
     assert caps.supports_review_decisions is True
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_unresolved_review_items_uses_graphql_threads(mock_client):
+def test_get_unresolved_review_items_uses_graphql_threads():
     """Unresolved quality gate uses reviewThreads; skips resolved and outdated."""
+    client = MagicMock()
     gql = {
         "data": {
             "repository": {
@@ -397,19 +397,18 @@ def test_get_unresolved_review_items_uses_graphql_threads(mock_client):
             }
         }
     }
-    mock_post = MagicMock()
-    mock_post.raise_for_status = MagicMock()
-    mock_post.json.return_value = gql
-    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+    client.graphql_query.return_value = gql
 
     p = GitHubProvider("https://api.github.com", "tok")
-    items = p.get_unresolved_review_items_for_quality_gate("owner", "repo", 7)
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        items = p.get_unresolved_review_items_for_quality_gate("owner", "repo", 7)
     assert len(items) == 1
     assert items[0].kind == "discussion_thread"
     assert items[0].inferred_severity == "high"
     assert items[0].path == "a.py"
-    post_url = mock_client.return_value.__enter__.return_value.post.call_args[0][0]
-    assert post_url == "https://api.github.com/graphql"
+    call = client.graphql_query.call_args
+    assert call.args[0] == GitHubProvider._REVIEW_THREADS_GQL
+    assert call.args[1] == {"owner": "owner", "name": "repo", "number": 7, "cursor": None}
 
 
 @patch.object(GitHubProvider, "_graphql")
@@ -431,19 +430,16 @@ def test_unresolved_review_threads_stops_on_repeated_end_cursor(mock_graphql):
     assert mock_graphql.call_count == 2
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_unresolved_review_items_graphql_failure_returns_empty(mock_client):
+def test_get_unresolved_review_items_graphql_failure_returns_empty():
     """GraphQL failure must not reclassify all REST review comments as unresolved."""
-    mock_post = MagicMock()
-    mock_post.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "err", request=MagicMock(), response=MagicMock(status_code=500)
-    )
-    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
+    client = MagicMock()
+    client.graphql_query.side_effect = GithubException(500, {"message": "err"})
 
     p = GitHubProvider("https://api.github.com", "tok")
-    items = p.get_unresolved_review_items_for_quality_gate("o", "r", 1)
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        items = p.get_unresolved_review_items_for_quality_gate("o", "r", 1)
     assert items == []
-    mock_client.return_value.__enter__.return_value.get.assert_not_called()
+    client.get_pull.assert_not_called()
 
 
 @patch("code_review.providers.github.GitHubProvider._graphql")

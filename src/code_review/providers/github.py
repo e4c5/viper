@@ -1,6 +1,5 @@
 """GitHub API provider (for local testing without Gitea)."""
 
-import json
 import logging
 import os
 from typing import Any, Literal
@@ -76,31 +75,10 @@ class GitHubProvider(HttpXProvider):
             headers={"Accept": "application/vnd.github.v3.diff"},
         )
 
-    def _graphql_endpoint(self) -> str:
-        u = self._base_url.rstrip("/")
-        if "api.github.com" in u:
-            return "https://api.github.com/graphql"
-        if u.endswith("/api/v3"):
-            return u[: -len("/api/v3")] + "/api/graphql"
-        return f"{u}/api/graphql"
-
-    def _graphql_headers(self) -> dict[str, str]:
-        h = {"Content-Type": JSON_MEDIA_TYPE, "Accept": JSON_MEDIA_TYPE}
-        if self._token:
-            h["Authorization"] = f"Bearer {self._token}"
-        return h
-
     def _graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
-        url = self._graphql_endpoint()
-        payload = {"query": query, "variables": variables}
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.post(url, headers=self._graphql_headers(), json=payload)
-            r.raise_for_status()
-            body = r.json()
+        body = self._client().graphql_query(query, variables)
         if not isinstance(body, dict):
             raise RuntimeError("GitHub GraphQL: invalid JSON body")
-        if body.get("errors"):
-            raise RuntimeError(f"GitHub GraphQL errors: {body['errors']}")
         data = body.get("data")
         return data if isinstance(data, dict) else {}
 
@@ -435,7 +413,7 @@ class GitHubProvider(HttpXProvider):
         """Use GraphQL review threads (resolved / outdated). On GraphQL failure, return []."""
         try:
             return self._unresolved_review_threads_graphql(owner, repo, pr_number)
-        except (httpx.HTTPError, json.JSONDecodeError, RuntimeError) as e:
+        except (GithubException, RuntimeError) as e:
             logger.warning(
                 "GitHub GraphQL reviewThreads failed owner=%s repo=%s pr=%s: %s; "
                 "skipping unresolved aggregation (REST comments lack resolution state).",

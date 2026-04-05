@@ -69,6 +69,10 @@ class GitHubApiClient:
             return data.decode("utf-8", errors="replace")
         return str(data)
 
+    def graphql_query(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        _, data = self._github.requester.graphql_query(query, variables)
+        return data
+
     def create_pull_review(
         self,
         owner: str,
