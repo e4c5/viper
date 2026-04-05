@@ -1,8 +1,11 @@
 """Unit tests for context fetchers (mocked HTTP via httpx)."""
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from github.GithubException import GithubException, UnknownObjectException
 
 from code_review.context.errors import ContextAwareAuthError, ContextAwareFatalError
 from code_review.context.fetchers import (
@@ -35,22 +38,30 @@ def _patch_client(response):
     return patch("httpx.Client", return_value=client_mock)
 
 
+def _patch_github_client(*, issue=None, side_effect=None):
+    client = MagicMock()
+    client.get_issue.return_value = issue
+    if side_effect is not None:
+        client.get_issue.side_effect = side_effect
+    return patch("code_review.context.fetchers._build_github_api_client", return_value=client)
+
+
 # ---------------------------------------------------------------------------
 # fetch_github_issue
 # ---------------------------------------------------------------------------
 
 
 def test_fetch_github_issue_happy_path():
-    data = {
-        "title": "Bug: crash on login",
-        "body": "Steps to reproduce…",
-        "state": "open",
-        "labels": [{"name": "bug"}, {"name": "urgent"}],
-        "html_url": "https://github.com/org/repo/issues/42",
-        "id": 1234,
-        "updated_at": "2024-01-01T00:00:00Z",
-    }
-    with _patch_client(_mock_httpx_response(200, data)):
+    issue = MagicMock(
+        title="Bug: crash on login",
+        body="Steps to reproduce…",
+        state="open",
+        labels=[SimpleNamespace(name="bug"), SimpleNamespace(name="urgent")],
+        html_url="https://github.com/org/repo/issues/42",
+        id=1234,
+        updated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    with _patch_github_client(issue=issue):
         doc = fetch_github_issue("https://api.github.com", "tok", "org", "repo", "42")
     assert doc is not None
     assert doc.title == "Bug: crash on login"
@@ -60,25 +71,33 @@ def test_fetch_github_issue_happy_path():
 
 
 def test_fetch_github_issue_404_returns_none():
-    with _patch_client(_mock_httpx_response(404)):
+    with _patch_github_client(
+        side_effect=UnknownObjectException(404, {"message": "Not Found"}, None)
+    ):
         doc = fetch_github_issue("https://api.github.com", "tok", "org", "repo", "99")
     assert doc is None
 
 
 def test_fetch_github_issue_401_raises_auth_error():
-    with _patch_client(_mock_httpx_response(401, text="Unauthorized")):
+    with _patch_github_client(
+        side_effect=GithubException(401, {"message": "Unauthorized"})
+    ):
         with pytest.raises(ContextAwareAuthError):
             fetch_github_issue("https://api.github.com", "bad-tok", "org", "repo", "1")
 
 
 def test_fetch_github_issue_403_raises_auth_error():
-    with _patch_client(_mock_httpx_response(403, text="Forbidden")):
+    with _patch_github_client(
+        side_effect=GithubException(403, {"message": "Forbidden"})
+    ):
         with pytest.raises(ContextAwareAuthError):
             fetch_github_issue("https://api.github.com", "tok", "org", "repo", "1")
 
 
 def test_fetch_github_issue_500_raises_fatal():
-    with _patch_client(_mock_httpx_response(500, text="Internal Server Error")):
+    with _patch_github_client(
+        side_effect=GithubException(500, {"message": "Internal Server Error"})
+    ):
         with pytest.raises(ContextAwareFatalError):
             fetch_github_issue("https://api.github.com", "tok", "org", "repo", "1")
 

@@ -1,13 +1,41 @@
-"""Tests for GitHub provider (mocked HTTP)."""
+"""Tests for GitHub provider."""
 
-import base64
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import httpx
+from github.GithubException import GithubException
 
 from code_review.providers import get_provider
 from code_review.providers.base import InlineComment
 from code_review.providers.github import GitHubProvider
+
+
+def _fake_file(
+    filename: str,
+    *,
+    status: str = "modified",
+    additions: int = 0,
+    deletions: int = 0,
+    patch: str = "",
+    previous_filename: str = "",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        filename=filename,
+        status=status,
+        additions=additions,
+        deletions=deletions,
+        patch=patch,
+        previous_filename=previous_filename,
+    )
+
+
+def _fake_comment(comment_id: int, path: str, line: int, body: str) -> SimpleNamespace:
+    return SimpleNamespace(id=comment_id, path=path, line=line, body=body)
+
+
+def _fake_review(review_id: int, state: str, login: str) -> SimpleNamespace:
+    return SimpleNamespace(id=review_id, state=state, user=SimpleNamespace(login=login))
 
 
 def test_get_provider_github():
@@ -15,99 +43,88 @@ def test_get_provider_github():
     assert isinstance(p, GitHubProvider)
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_pr_diff(mock_client):
-    mock_resp = MagicMock()
-    mock_resp.text = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py"
-    mock_resp.headers = {}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
-
+def test_get_pr_diff():
+    client = MagicMock()
+    client.request_text.return_value = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py"
     p = GitHubProvider("https://api.github.com", "tok")
-    diff = p.get_pr_diff("owner", "repo", 1)
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        diff = p.get_pr_diff("owner", "repo", 1)
     assert "diff --git" in diff
-    call = mock_client.return_value.__enter__.return_value.get.call_args
-    assert call[1]["headers"].get("Accept") == "application/vnd.github.v3.diff"
-
-
-@patch("code_review.providers.github.httpx.Client")
-def test_get_incremental_pr_diff_uses_compare_endpoint(mock_client):
-    mock_resp = MagicMock()
-    mock_resp.text = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py"
-    mock_resp.headers = {}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
-
-    p = GitHubProvider("https://api.github.com", "tok")
-    diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
-
-    assert "diff --git" in diff
-    call = mock_client.return_value.__enter__.return_value.get.call_args
-    assert "/compare/base123...head456" in call[0][0]
-    assert call[1]["headers"].get("Accept") == "application/vnd.github.v3.diff"
-
-
-@patch("code_review.providers.github.httpx.Client")
-def test_get_incremental_pr_diff_falls_back_to_full_pr_diff_on_compare_error(mock_client):
-    compare_err = httpx.HTTPStatusError(
-        "compare failed",
-        request=MagicMock(),
-        response=MagicMock(status_code=404),
+    client.request_text.assert_called_once_with(
+        "GET",
+        "/repos/owner/repo/pulls/1",
+        headers={"Accept": "application/vnd.github.v3.diff"},
     )
-    full_pr_resp = MagicMock()
-    full_pr_resp.text = "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
-    full_pr_resp.headers = {}
-    mock_client.return_value.__enter__.return_value.get.side_effect = [compare_err, full_pr_resp]
 
+
+def test_get_incremental_pr_diff_uses_compare_endpoint():
+    client = MagicMock()
+    client.request_text.return_value = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py"
     p = GitHubProvider("https://api.github.com", "tok")
-    diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
+
+    assert "diff --git" in diff
+    client.request_text.assert_called_once_with(
+        "GET",
+        "/repos/owner/repo/compare/base123...head456",
+        headers={"Accept": "application/vnd.github.v3.diff"},
+    )
+
+
+def test_get_incremental_pr_diff_falls_back_to_full_pr_diff_on_compare_error():
+    client = MagicMock()
+    client.request_text.side_effect = [
+        GithubException(404, {"message": "compare failed"}),
+        "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py",
+    ]
+    p = GitHubProvider("https://api.github.com", "tok")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
 
     assert "diff --git a/full.py b/full.py" in diff
-    calls = mock_client.return_value.__enter__.return_value.get.call_args_list
-    assert "/compare/base123...head456" in calls[0][0][0]
-    assert "/pulls/1" in calls[1][0][0]
+    calls = client.request_text.call_args_list
+    assert calls[0].args[1] == "/repos/owner/repo/compare/base123...head456"
+    assert calls[1].args[1] == "/repos/owner/repo/pulls/1"
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_file_content(mock_client):
-    content_b64 = base64.b64encode(b"print('hello')").decode()
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = {"content": content_b64, "encoding": "base64"}
-    mock_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
-
+def test_get_file_content():
+    client = MagicMock()
+    repo = MagicMock()
+    repo.get_contents.return_value = SimpleNamespace(decoded_content=b"print('hello')")
+    client.get_repo.return_value = repo
     p = GitHubProvider("https://api.github.com", "tok")
-    content = p.get_file_content("owner", "repo", "main", "foo.py")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        content = p.get_file_content("owner", "repo", "main", "foo.py")
     assert content == "print('hello')"
+    repo.get_contents.assert_called_once_with("foo.py", ref="main")
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_pr_commit_messages(mock_client):
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = [
-        {"commit": {"message": "first\n\nbody"}},
-        {"commit": {"message": "second line"}},
+def test_get_pr_commit_messages():
+    client = MagicMock()
+    pull = MagicMock()
+    pull.get_commits.return_value = [
+        SimpleNamespace(commit=SimpleNamespace(message="first\n\nbody"), raw_data={}),
+        SimpleNamespace(commit=SimpleNamespace(message="second line"), raw_data={}),
     ]
-    mock_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
-
+    client.get_pull.return_value = pull
     p = GitHubProvider("https://api.github.com", "tok")
-    msgs = p.get_pr_commit_messages("owner", "repo", 3)
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        msgs = p.get_pr_commit_messages("owner", "repo", 3)
     assert msgs == ["first\n\nbody", "second line"]
-    call = mock_client.return_value.__enter__.return_value.get.call_args
-    assert "/pulls/3/commits" in call[0][0]
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_pr_files(mock_client):
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = [
-        {"filename": "foo.py", "status": "modified", "additions": 5, "deletions": 2},
-        {"filename": "bar.go", "status": "added", "additions": 10, "deletions": 0},
+def test_get_pr_files():
+    client = MagicMock()
+    pull = MagicMock()
+    pull.get_files.return_value = [
+        _fake_file("foo.py", status="modified", additions=5, deletions=2),
+        _fake_file("bar.go", status="added", additions=10, deletions=0),
     ]
-    mock_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
-
+    client.get_pull.return_value = pull
     p = GitHubProvider("https://api.github.com", "tok")
-    files = p.get_pr_files("owner", "repo", 1)
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        files = p.get_pr_files("owner", "repo", 1)
     assert len(files) == 2
     assert files[0].path == "foo.py"
     assert files[0].status == "modified"
@@ -115,36 +132,30 @@ def test_get_pr_files(mock_client):
     assert files[1].status == "added"
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_pr_diff_for_file_uses_patch_from_matching_file(mock_client):
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = [
-        {
-            "filename": "src/Foo.java",
-            "status": "modified",
-            "patch": "@@ -4,2 +4,2 @@\n-old\n+new",
-        }
+def test_get_pr_diff_for_file_uses_patch_from_matching_file():
+    client = MagicMock()
+    pull = MagicMock()
+    pull.get_files.return_value = [
+        _fake_file(
+            "src/Foo.java",
+            status="modified",
+            patch="@@ -4,2 +4,2 @@\n-old\n+new",
+        )
     ]
-    mock_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
-
+    client.get_pull.return_value = pull
     p = GitHubProvider("https://api.github.com", "tok")
-    diff = p.get_pr_diff_for_file("owner", "repo", 1, "src/Foo.java")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        diff = p.get_pr_diff_for_file("owner", "repo", 1, "src/Foo.java")
 
     assert "diff --git a/src/Foo.java b/src/Foo.java" in diff
     assert "@@ -4,2 +4,2 @@" in diff
-    call = mock_client.return_value.__enter__.return_value.get.call_args
-    assert "/pulls/1/files" in call[0][0]
-    assert call[1]["params"] == {"per_page": 100, "page": 1}
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_pr_diff_for_file_falls_back_to_full_diff_when_github_omits_patch(mock_client):
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = [{"filename": "src/Foo.java", "status": "modified"}]
-    mock_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
-
+def test_get_pr_diff_for_file_falls_back_to_full_diff_when_github_omits_patch():
+    client = MagicMock()
+    pull = MagicMock()
+    pull.get_files.return_value = [_fake_file("src/Foo.java", status="modified")]
+    client.get_pull.return_value = pull
     full_diff = (
         "diff --git a/src/Foo.java b/src/Foo.java\n"
         "--- a/src/Foo.java\n"
@@ -154,126 +165,102 @@ def test_get_pr_diff_for_file_falls_back_to_full_diff_when_github_omits_patch(mo
         "+new\n"
     )
     p = GitHubProvider("https://api.github.com", "tok")
-    with patch.object(GitHubProvider, "get_pr_diff", return_value=full_diff) as mock_get_pr_diff:
-        diff = p.get_pr_diff_for_file("owner", "repo", 1, "src/Foo.java")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        with patch.object(GitHubProvider, "get_pr_diff", return_value=full_diff) as mock_get_pr_diff:
+            diff = p.get_pr_diff_for_file("owner", "repo", 1, "src/Foo.java")
 
     assert "diff --git a/src/Foo.java b/src/Foo.java" in diff
     assert "+new" in diff
     mock_get_pr_diff.assert_called_once_with("owner", "repo", 1)
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_incremental_pr_files_uses_compare_endpoint(mock_client):
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = {
-        "files": [
-            {"filename": "foo.py", "status": "modified", "additions": 1, "deletions": 0}
-        ]
-    }
-    mock_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
-
+def test_get_incremental_pr_files_uses_compare_endpoint():
+    client = MagicMock()
+    repo = MagicMock()
+    repo.compare.return_value = SimpleNamespace(
+        files=[_fake_file("foo.py", status="modified", additions=1, deletions=0)]
+    )
+    client.get_repo.return_value = repo
     p = GitHubProvider("https://api.github.com", "tok")
-    files = p.get_incremental_pr_files("owner", "repo", 1, "base123", "head456")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        files = p.get_incremental_pr_files("owner", "repo", 1, "base123", "head456")
 
     assert len(files) == 1
     assert files[0].path == "foo.py"
-    call = mock_client.return_value.__enter__.return_value.get.call_args
-    assert "/compare/base123...head456" in call[0][0]
+    repo.compare.assert_called_once_with("base123", "head456")
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_incremental_pr_files_fall_back_to_full_pr_files_on_compare_error(mock_client):
-    compare_err = httpx.HTTPStatusError(
-        "compare failed",
-        request=MagicMock(),
-        response=MagicMock(status_code=404),
-    )
-    full_pr_resp = MagicMock()
-    full_pr_resp.json.return_value = [
-        {"filename": "full.py", "status": "modified", "additions": 2, "deletions": 1}
-    ]
-    full_pr_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.side_effect = [compare_err, full_pr_resp]
-
+def test_get_incremental_pr_files_fall_back_to_full_pr_files_on_compare_error():
+    client = MagicMock()
+    repo = MagicMock()
+    repo.compare.side_effect = GithubException(404, {"message": "compare failed"})
+    client.get_repo.return_value = repo
+    pull = MagicMock()
+    pull.get_files.return_value = [_fake_file("full.py", status="modified", additions=2, deletions=1)]
+    client.get_pull.return_value = pull
     p = GitHubProvider("https://api.github.com", "tok")
-    files = p.get_incremental_pr_files("owner", "repo", 1, "base123", "head456")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        files = p.get_incremental_pr_files("owner", "repo", 1, "base123", "head456")
 
     assert len(files) == 1
     assert files[0].path == "full.py"
-    calls = mock_client.return_value.__enter__.return_value.get.call_args_list
-    assert "/compare/base123...head456" in calls[0][0][0]
-    assert "/pulls/1/files" in calls[1][0][0]
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_post_review_comments(mock_client):
-    mock_post = MagicMock()
-    mock_post.raise_for_status = MagicMock()
-    mock_post.content = b""
-    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
-
+def test_post_review_comments():
+    client = MagicMock()
     p = GitHubProvider("https://api.github.com", "tok")
-    p.post_review_comments(
-        "owner",
-        "repo",
-        1,
-        [InlineComment(path="foo.py", line=10, body="[High] Bug here")],
-        head_sha="abc123",
-    )
-    call_args = mock_client.return_value.__enter__.return_value.post.call_args
-    assert "/reviews" in call_args[0][0]
-    payload = call_args[1]["json"]
-    assert "comments" in payload
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        p.post_review_comments(
+            "owner",
+            "repo",
+            1,
+            [InlineComment(path="foo.py", line=10, body="[High] Bug here")],
+            head_sha="abc123",
+        )
+    payload = client.create_pull_review.call_args.kwargs
     assert payload["comments"] == [
         {"path": "foo.py", "line": 10, "side": "RIGHT", "body": "[High] Bug here"}
     ]
-    assert payload["commit_id"] == "abc123"
     assert payload["event"] == "COMMENT"
+    assert payload["body"] == "Code review comments"
+    assert payload["head_sha"] == "abc123"
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_post_review_comments_with_suggested_patch(mock_client):
-    mock_post = MagicMock()
-    mock_post.raise_for_status = MagicMock()
-    mock_post.content = b""
-    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
-
+def test_post_review_comments_with_suggested_patch():
+    client = MagicMock()
     p = GitHubProvider("https://api.github.com", "tok")
-    p.post_review_comments(
-        "owner",
-        "repo",
-        1,
-        [
-            InlineComment(
-                path="foo.py",
-                line=10,
-                body="[Medium] Consider refactor.",
-                suggested_patch="replacement_code();",
-            )
-        ],
-        head_sha="abc123",
-    )
-    call_args = mock_client.return_value.__enter__.return_value.post.call_args
-    payload = call_args[1]["json"]
-    comment_body = payload["comments"][0]["body"]
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        p.post_review_comments(
+            "owner",
+            "repo",
+            1,
+            [
+                InlineComment(
+                    path="foo.py",
+                    line=10,
+                    body="[Medium] Consider refactor.",
+                    suggested_patch="replacement_code();",
+                )
+            ],
+            head_sha="abc123",
+        )
+    comment_body = client.create_pull_review.call_args.kwargs["comments"][0]["body"]
     assert "[Medium] Consider refactor." in comment_body
     assert "```suggestion" in comment_body
     assert "replacement_code();" in comment_body
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_existing_review_comments(mock_client):
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = [
-        {"id": 1, "path": "foo.py", "line": 10, "body": "[High] Bug"},
-        {"id": 2, "path": "bar.py", "line": 5, "body": "[Low] Nit"},
+def test_get_existing_review_comments():
+    client = MagicMock()
+    pull = MagicMock()
+    pull.get_review_comments.return_value = [
+        _fake_comment(1, "foo.py", 10, "[High] Bug"),
+        _fake_comment(2, "bar.py", 5, "[Low] Nit"),
     ]
-    mock_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
-
+    client.get_pull.return_value = pull
     p = GitHubProvider("https://api.github.com", "tok")
-    comments = p.get_existing_review_comments("owner", "repo", 1)
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        comments = p.get_existing_review_comments("owner", "repo", 1)
     assert len(comments) == 2
     assert comments[0].id == "1"
     assert comments[0].path == "foo.py"
@@ -283,79 +270,64 @@ def test_get_existing_review_comments(mock_client):
     assert comments[0].resolved is False
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_post_pr_summary_comment(mock_client):
-    mock_post = MagicMock()
-    mock_post.raise_for_status = MagicMock()
-    mock_post.json.return_value = {"id": 1}
-    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
-
+def test_post_pr_summary_comment():
+    client = MagicMock()
+    issue = MagicMock()
+    client.get_issue.return_value = issue
     p = GitHubProvider("https://api.github.com", "tok")
-    p.post_pr_summary_comment("owner", "repo", 1, "Summary body")
-    call_args = mock_client.return_value.__enter__.return_value.post.call_args
-    assert "/issues/1/comments" in call_args[0][0]
-    assert call_args[1]["json"] == {"body": "Summary body"}
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        p.post_pr_summary_comment("owner", "repo", 1, "Summary body")
+    issue.create_comment.assert_called_once_with("Summary body")
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_submit_review_decision(mock_client):
-    mock_post = MagicMock()
-    mock_post.raise_for_status = MagicMock()
-    mock_post.content = b""
-    mock_client.return_value.__enter__.return_value.post.return_value = mock_post
-
+def test_submit_review_decision():
+    client = MagicMock()
     p = GitHubProvider("https://api.github.com", "tok")
-    p.submit_review_decision(
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        p.submit_review_decision(
+            "owner",
+            "repo",
+            1,
+            "REQUEST_CHANGES",
+            body="Automated threshold decision",
+            head_sha="abc123",
+        )
+    client.create_pull_review.assert_called_once_with(
         "owner",
         "repo",
         1,
-        "REQUEST_CHANGES",
+        event="REQUEST_CHANGES",
         body="Automated threshold decision",
         head_sha="abc123",
     )
-    call_args = mock_client.return_value.__enter__.return_value.post.call_args
-    assert "/repos/owner/repo/pulls/1/reviews" in call_args[0][0]
-    assert call_args[1]["json"]["event"] == "REQUEST_CHANGES"
-    assert call_args[1]["json"]["body"] == "Automated threshold decision"
-    assert call_args[1]["json"]["commit_id"] == "abc123"
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_bot_blocking_state_unknown_when_list_reviews_fails(mock_client):
+def test_get_bot_blocking_state_unknown_when_list_reviews_fails():
     """Failed reviews listing must not be treated as empty (NOT_BLOCKING)."""
-    ok_user = MagicMock()
-    ok_user.headers = {"content-type": "application/json"}
-    ok_user.json.return_value = {"login": "thebot"}
-    ok_user.raise_for_status = MagicMock()
+    client = MagicMock()
+    client.get_authenticated_user.return_value = SimpleNamespace(login="thebot")
+    client.get_pull.return_value.get_reviews.side_effect = RuntimeError("boom")
+    p = GitHubProvider("https://api.github.com", "tok")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        assert p.get_bot_blocking_state("owner", "repo", 1) == "UNKNOWN"
 
-    bad = MagicMock()
-    bad.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "err",
-        request=MagicMock(),
-        response=MagicMock(status_code=503),
+
+def test_get_pr_info():
+    client = MagicMock()
+    client.get_pull.return_value = SimpleNamespace(
+        title="Fix bug",
+        body="PR body",
+        labels=[SimpleNamespace(name="skip-review"), SimpleNamespace(name="bug")],
+        head=SimpleNamespace(sha="abc123"),
     )
-
-    mock_client.return_value.__enter__.return_value.get.side_effect = [ok_user, bad]
-
     p = GitHubProvider("https://api.github.com", "tok")
-    assert p.get_bot_blocking_state("owner", "repo", 1) == "UNKNOWN"
-
-
-@patch("code_review.providers.github.httpx.Client")
-def test_get_pr_info(mock_client):
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = {
-        "title": "Fix bug",
-        "labels": [{"name": "skip-review"}, {"name": "bug"}],
-    }
-    mock_resp.headers = {"content-type": "application/json"}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
-
-    p = GitHubProvider("https://api.github.com", "tok")
-    info = p.get_pr_info("owner", "repo", 1)
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        info = p.get_pr_info("owner", "repo", 1)
     assert info is not None
     assert info.title == "Fix bug"
     assert "skip-review" in info.labels
+    assert info.description == "PR body"
+    assert info.head_sha == "abc123"
 
 
 def test_capabilities_support_review_decisions():
@@ -583,27 +555,40 @@ def test_get_review_thread_dismissal_context_fetches_extra_comment_pages(mock_gq
     assert ctx.entries[-1].comment_id == "9999"
 
 
-@patch("code_review.providers.github.httpx.Client")
-def test_get_bot_attribution_identity_github(mock_client):
-    mock_resp = MagicMock()
-    mock_resp.headers = {"content-type": "application/json"}
-    mock_resp.json.return_value = {"login": "MyBot", "id": 42}
-    mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
-
+def test_get_bot_attribution_identity_github():
+    client = MagicMock()
+    client.get_authenticated_user.return_value = SimpleNamespace(login="MyBot", id=42)
     p = GitHubProvider("https://api.github.com", "tok")
-    bid = p.get_bot_attribution_identity("o", "r", 1)
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        bid = p.get_bot_attribution_identity("o", "r", 1)
     assert bid.login == "mybot"
     assert bid.id_str == "42"
 
 
-@patch.object(GitHubProvider, "_post")
-def test_post_review_thread_reply_github(mock_post):
+def test_post_review_thread_reply_github():
+    client = MagicMock()
     p = GitHubProvider("https://api.github.com", "tok")
-    p.post_review_thread_reply("o", "r", 1, "99", "hello")
-    mock_post.assert_called_once_with(
-        "/repos/o/r/pulls/1/comments",
-        {"body": "hello", "in_reply_to": 99},
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        p.post_review_thread_reply("o", "r", 1, "99", "hello")
+    client.reply_to_review_comment.assert_called_once_with(
+        "o",
+        "r",
+        1,
+        99,
+        "hello",
     )
+
+
+def test_update_pr_description_edits_body_and_optional_title():
+    client = MagicMock()
+    pull = MagicMock()
+    client.get_pull.return_value = pull
+    p = GitHubProvider("https://api.github.com", "tok")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        p.update_pr_description("o", "r", 1, "new body")
+        p.update_pr_description("o", "r", 1, "other body", title="new title")
+    assert pull.edit.call_args_list[0].kwargs == {"body": "new body"}
+    assert pull.edit.call_args_list[1].kwargs == {"title": "new title", "body": "other body"}
 
 
 @patch.object(GitHubProvider, "_graphql")

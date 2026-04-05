@@ -6,13 +6,16 @@ import html
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
 import httpx
+from github.GithubException import GithubException, UnknownObjectException
 
 from code_review.context.errors import ContextAwareAuthError, ContextAwareFatalError
 from code_review.context.types import ContextReference, ReferenceType
+from code_review.github_client import GitHubApiClient
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,30 @@ def _raise_auth(method: str, url: str, status: int, body: str) -> None:
         )
 
 
+def _build_github_api_client(api_base: str, token: str, timeout: float) -> GitHubApiClient:
+    return GitHubApiClient(api_base, token, timeout=timeout)
+
+
+def _github_issue_updated_at(issue: Any) -> str | None:
+    updated = getattr(issue, "updated_at", None)
+    if isinstance(updated, str):
+        return updated
+    if isinstance(updated, datetime):
+        return updated.isoformat().replace("+00:00", "Z")
+    return None
+
+
+def _github_exception_body(exc: GithubException) -> str:
+    data = exc.data
+    if isinstance(data, str):
+        return data
+    if isinstance(data, dict):
+        message = data.get("message")
+        if isinstance(message, str) and message:
+            return message
+    return str(exc)
+
+
 def fetch_github_issue(
     api_base: str,
     token: str,
@@ -82,30 +109,34 @@ def fetch_github_issue(
     timeout: float = 30.0,
 ) -> FetchedDocument | None:
     path = f"{api_base.rstrip('/')}/repos/{owner}/{repo}/issues/{issue_number}"
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "Authorization": f"Bearer {token}",
-    }
-    with httpx.Client(timeout=timeout) as client:
-        r = client.get(path, headers=headers)
-        if r.status_code == 404:
-            logger.warning("GitHub issue not found: %s/%s#%s", owner, repo, issue_number)
-            return None
-        if r.status_code != 200:
-            _raise_auth("GET", path, r.status_code, r.text)
-            raise ContextAwareFatalError(f"GitHub issue fetch failed ({r.status_code}): {path}")
-        data = r.json()
+    client = _build_github_api_client(api_base, token, timeout)
+    try:
+        issue = client.get_issue(owner, repo, issue_number)
+    except UnknownObjectException:
+        logger.warning("GitHub issue not found: %s/%s#%s", owner, repo, issue_number)
+        return None
+    except GithubException as exc:
+        status = exc.status or 0
+        body = _github_exception_body(exc)
+        _raise_auth("GET", path, status, body)
+        raise ContextAwareFatalError(f"GitHub issue fetch failed ({status}): {path}") from exc
+
     labels = [
-        (lb.get("name") if isinstance(lb, dict) else str(lb)) for lb in (data.get("labels") or [])
+        str(getattr(label, "name", label) or "")
+        for label in (getattr(issue, "labels", None) or [])
+    ]
+    labels = [
+        label
+        for label in labels
+        if label
     ]
     meta = {
-        "state": data.get("state"),
+        "state": getattr(issue, "state", None),
         "labels": labels,
-        "html_url": data.get("html_url"),
+        "html_url": getattr(issue, "html_url", None),
     }
-    title = (data.get("title") or "").strip()
-    body_raw = (data.get("body") or "").strip()
-    updated = data.get("updated_at")
+    title = str(getattr(issue, "title", "") or "").strip()
+    body_raw = str(getattr(issue, "body", "") or "").strip()
     lines = [f"Title: {title}", f"State: {meta.get('state')}", f"Labels: {', '.join(labels)}"]
     _append_body(lines, body_raw)
     return FetchedDocument(
@@ -113,8 +144,8 @@ def fetch_github_issue(
         title=title,
         body="\n".join(lines),
         metadata=meta,
-        version=str(data.get("id", "")),
-        external_updated_at=updated if isinstance(updated, str) else None,
+        version=str(getattr(issue, "id", "") or ""),
+        external_updated_at=_github_issue_updated_at(issue),
     )
 
 
