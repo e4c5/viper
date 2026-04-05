@@ -437,6 +437,16 @@ class StandardReviewHandler:
             existing,
             full_diff=full_diff,
         )
+        if not self.dry_run:
+            try:
+                from code_review.agent.summary_agent import create_summary_agent, generate_pr_summary
+                summary_agent = create_summary_agent()
+                summary_text = generate_pr_summary(
+                    summary_agent, pr_info_for_metadata, all_findings, paths
+                )
+                CommentPoster(provider, self.pr_ctx).post_pr_summary(summary_text)
+            except Exception as e:
+                logger.warning("Failed to generate/post PR summary: %s", e)
         self.log_post_counts(self.dry_run, len(to_post), successful_post_count)
         return self._result_builder(
             run_observability,

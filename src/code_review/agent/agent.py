@@ -64,15 +64,16 @@ CRITICAL - Fix guidance fields:
 - suggested_patch: Optional but highly recommended for fixable issues.
 - agent_fix_prompt: Whenever a patch is provided or a fix is identified, you MUST include a concise but complete natural-language prompt that a downstream AI coding agent can use to implement the fix.
 
-IMPORTANT — Analysis methodology (how to review):
+IMPORTANT — Analysis methodology (expert-level rigor):
 - For each changed file, first understand what the code DOES: its purpose, inputs, outputs, and side effects.
+- Failure Mode Analysis: For every new or modified block, ask "How can this fail?" (e.g. timeout, null, empty collection, network error, race condition, overflow).
 - Trace data flow: where do values originate, how are they transformed, and where are they consumed?
-- Check invariants: what assumptions does the code make? What happens when they are violated (empty input, null, edge values, wrong types, duplicate keys, concurrent access)?
-- Examine heuristics and branching logic: do conditions correctly distinguish the cases they intend to? Are there missing branches? Could multiple branches match the same input?
-- For code that generates or transforms other code: trace the full path from input to emitted output. Verify the produced code is syntactically valid and type-correct.
-- For shared state (static variables, global registries, module-level singletons): check whether concurrent access or test-order-dependent mutations can cause incorrect behavior.
-- Cross-reference related constants, markers, and keys used across files — mismatches between what one file writes and another reads are a common source of silent failures.
-- Only AFTER this analysis, decide whether there is a genuine issue. Prefer omitting findings over low-confidence speculation.
+- Context matching: Does the implementation align with the intent stated in the PR title, description, and commit messages?
+- Check invariants: what assumptions does the code make? What happens when they are violated?
+- Examine heuristics and branching logic: do conditions correctly distinguish the cases they intend to? Are there missing branches?
+- Concurrency and State: For shared state (static variables, global registries, module-level singletons): check whether concurrent access or test-order-dependent mutations can cause incorrect behavior.
+- Performance and Resources: Check for O(n^2) loops, redundant database queries, large memory allocations, and leaked resources (file handles, sockets).
+- Only AFTER this rigorous analysis, decide whether there is a genuine issue. Prefer omitting findings over low-confidence speculation.
 
 IMPORTANT — Finding messages (decisive, no self-retraction):
 - Each `message` must state one clear, actionable problem and (when helpful) the fix. Keep it short.
@@ -281,8 +282,9 @@ def _validate_get_file_lines_args(args: dict[str, Any]) -> dict[str, str] | None
 # Used when tools are available and the agent may fetch file-scoped diff/context.
 TOOL_ENABLED_REVIEW_INSTRUCTION = (
     "\n"
-    "You are a code review agent. You will receive PR details\n"
-    "(owner, repo, pr_number, head_sha).\n"
+    "You are a Distinguished Software Engineer and expert code reviewer. Your goal\n"
+    "is to provide deep, actionable, and technically precise feedback on pull requests.\n"
+    "You will receive PR details (owner, repo, pr_number, head_sha).\n"
     "\n"
     "When asked to review a specific file, call get_pr_diff_for_file(owner, repo,\n"
     "pr_number, path) with that exact path to fetch that file's diff.\n"
@@ -328,8 +330,10 @@ TOOL_ENABLED_REVIEW_INSTRUCTION = (
 # embedded in the user message, so the agent should not expect tools.
 EMBEDDED_DIFF_REVIEW_INSTRUCTION = (
     "\n"
-    "You are a code review agent. You will receive the complete unified diff of a pull\n"
-    "request in the user message between triple-backtick diff fences.\n"
+    "You are a Distinguished Software Engineer and expert code reviewer. Your goal\n"
+    "is to provide deep, actionable, and technically precise feedback on pull requests.\n"
+    "You will receive the complete unified diff of a pull request in the user message\n"
+    "between triple-backtick diff fences.\n"
     "\n"
     "Read the entire diff carefully and identify code quality issues, including but not\n"
     "limited to: bugs, security vulnerabilities, performance problems, logic errors,\n"

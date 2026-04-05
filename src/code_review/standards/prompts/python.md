@@ -1,9 +1,11 @@
 ### Python
 - Flag mutable default args, implicit `None` handling bugs, and exception swallowing.
 - Verify resource safety: context managers, file/socket/db cleanup, and transaction handling.
-- Check async correctness: blocking calls inside async paths, missed `await`, cancellation safety.
-- Call out dangerous deserialization/eval/subprocess usage and unsafe string-built SQL/shell commands.
-- Prefer type-hint clarity when it prevents bugs (public APIs, complex data flow), not as style-only noise.
+- Check async correctness: blocking calls inside async paths, missed `await`, cancellation safety, and error handling in `asyncio.gather`.
+- Call out dangerous deserialization/eval/subprocess usage and unsafe string-built SQL/shell commands (use `shlex.quote` or parameterized queries). Use `yaml.safe_load` and avoid `pickle` for untrusted data.
+- Type Hinting: Call out excessive use of `Any` where a more specific type (or at least `object`/`dict[str, Any]`) is possible. Verify that `Optional` is used correctly for nullable return values.
+- Shared State: Check for thread-safety in module-level variables or shared caches.
+- Performance: Identify O(n^2) operations (e.g., list membership checks in a loop) that should use a `set`.
 - In Django code: check ORM query safety (N+1, missing select_related/prefetch_related), signal misuse, missing form validation, and unenforced permission checks.
-- In FastAPI/Starlette code: check dependency injection correctness, missing request validation, missing response model enforcement, and unhandled async lifespan events.
+- In FastAPI/Starlette code: check dependency injection correctness, missing request validation, missing response model enforcement, and unhandled async lifespan events (startup/shutdown).
 - In Flask code: check improper use of g/session, missing input sanitization, and insecure default configs.
