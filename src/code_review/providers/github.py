@@ -3,6 +3,7 @@
 import base64
 import json
 import logging
+import os
 from typing import Any, Literal
 
 import httpx
@@ -668,6 +669,11 @@ class GitHubProvider(HttpXProvider):
     def get_bot_attribution_identity(
         self, owner: str, repo: str, pr_number: int
     ) -> BotAttributionIdentity:
+        # When running via a GitHub App, the installation token cannot call GET /user
+        # (returns 403). The app bot login is injected via SCM_GITHUB_APP_BOT_LOGIN.
+        app_bot_login = os.environ.get("SCM_GITHUB_APP_BOT_LOGIN", "").strip()
+        if app_bot_login:
+            return BotAttributionIdentity(login=app_bot_login.lower())
         try:
             data = self._get("/user")
             if isinstance(data, dict):
