@@ -455,7 +455,7 @@ def test_after_model_callback_logs_usage_metadata(caplog) -> None:
         content=SimpleNamespace(parts=[]),
     )
 
-    caplog.set_level(logging.INFO)
+    caplog.set_level(logging.INFO, logger="code_review.agent.agent")
 
     _after_model_callback(SimpleNamespace(agent_name="batch_review_0"), llm_response)
 

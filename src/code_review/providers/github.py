@@ -669,19 +669,21 @@ class GitHubProvider(HttpXProvider):
     def get_bot_attribution_identity(
         self, owner: str, repo: str, pr_number: int
     ) -> BotAttributionIdentity:
-        # When running via a GitHub App, the installation token cannot call GET /user
-        # (returns 403). The app bot login is injected via SCM_GITHUB_APP_BOT_LOGIN.
-        app_bot_login = os.environ.get("SCM_GITHUB_APP_BOT_LOGIN", "").strip()
-        if app_bot_login:
-            return BotAttributionIdentity(login=app_bot_login.lower())
+        # Try the API first to get both login and numeric id_str.
+        # GET /user returns 403 for GitHub App installation tokens, so fall back
+        # to SCM_GITHUB_APP_BOT_LOGIN when the call fails or returns nothing usable.
         try:
             data = self._get("/user")
             if isinstance(data, dict):
                 login = str(data.get("login") or "").strip().lower()
                 uid = str(data.get("id") or "").strip()
-                return BotAttributionIdentity(login=login, id_str=uid)
+                if login:
+                    return BotAttributionIdentity(login=login, id_str=uid)
         except Exception as e:
-            logger.warning("GitHub get_bot_attribution_identity failed: %s", e)
+            logger.warning("GitHub get_bot_attribution_identity /user failed: %s", e)
+        app_bot_login = os.environ.get("SCM_GITHUB_APP_BOT_LOGIN", "").strip()
+        if app_bot_login:
+            return BotAttributionIdentity(login=app_bot_login.lower())
         return BotAttributionIdentity()
 
     def _github_build_dismissal_context_from_comment_nodes(
