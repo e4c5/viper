@@ -1,6 +1,7 @@
 # Keep this file in sync with [project.dependencies] in pyproject.toml.
 google-adk>=1.25.0
 httpx>=0.28.0
+PyGithub>=2.5
 pydantic>=2.0
 pydantic-settings>=2.0
 typer>=0.12

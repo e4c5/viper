@@ -7,6 +7,13 @@ from typer.testing import CliRunner
 from code_review.evals.cli import app
 
 
+def _result_error_output(result) -> str:
+    try:
+        return result.stderr
+    except ValueError:
+        return result.output
+
+
 def test_eval_cli_runs_all_suites() -> None:
     result = CliRunner().invoke(app, [])
 
@@ -20,14 +27,14 @@ def test_eval_cli_rejects_unknown_suite() -> None:
     result = CliRunner().invoke(app, ["--suite", "unknown"])
 
     assert result.exit_code == 2
-    assert "Unknown eval suite" in result.stderr
+    assert "Unknown eval suite" in _result_error_output(result)
 
 
 def test_eval_cli_rejects_unknown_execution_mode() -> None:
     result = CliRunner().invoke(app, ["--execution", "weird"])
 
     assert result.exit_code == 2
-    assert "Unknown eval execution mode" in result.stderr
+    assert "Unknown eval execution mode" in _result_error_output(result)
 
 
 @patch("code_review.evals.cli.run_local_reply_dismissal_eval")

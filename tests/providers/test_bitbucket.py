@@ -38,7 +38,7 @@ def test_get_incremental_pr_diff_uses_compare_endpoint(mock_client):
 
     assert "diff --git" in diff
     call = mock_client.return_value.__enter__.return_value.get.call_args
-    assert "/diff/base123..head456" in call[0][0]
+    assert "/diff/head456..base123" in call[0][0]
 
 
 @patch("code_review.providers.http_shortcuts.httpx.Client")
@@ -88,7 +88,7 @@ def test_get_incremental_pr_files_uses_diffstat_compare_endpoint(mock_client):
     assert len(files) == 1
     assert files[0].path == "foo.py"
     call = mock_client.return_value.__enter__.return_value.get.call_args
-    assert "/diffstat/base123..head456" in call[0][0]
+    assert "/diffstat/head456..base123" in call[0][0]
 
 
 @patch("code_review.providers.http_shortcuts.httpx.Client")

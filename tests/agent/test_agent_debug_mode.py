@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -14,6 +15,7 @@ from code_review.agent import (
 )
 from code_review.agent.agent import (
     _TOOL_RESULT_CHAR_LIMIT,
+    _after_model_callback,
     _after_tool_callback,
     _before_model_callback,
     _before_tool_callback,
@@ -438,3 +440,26 @@ def test_after_tool_callback_truncates_oversized_string_results() -> None:
     assert result is not None
     assert result.endswith("\n...[truncated by callback]")
     assert len(result) > _TOOL_RESULT_CHAR_LIMIT
+
+
+def test_after_model_callback_logs_usage_metadata(caplog) -> None:
+    llm_response = SimpleNamespace(
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=123,
+            candidates_token_count=45,
+            total_token_count=168,
+            cached_content_token_count=7,
+            tool_use_prompt_token_count=8,
+            thoughts_token_count=9,
+        ),
+        content=SimpleNamespace(parts=[]),
+    )
+
+    caplog.set_level(logging.INFO, logger="code_review.agent.agent")
+
+    _after_model_callback(SimpleNamespace(agent_name="batch_review_0"), llm_response)
+
+    assert "LLM usage agent=batch_review_0" in caplog.text
+    assert "prompt_tokens=123" in caplog.text
+    assert "completion_tokens=45" in caplog.text
+    assert "total_tokens=168" in caplog.text

@@ -66,7 +66,12 @@ def _maybe_relocate_finding(
             anchor_text,
             best_line,
         )
-        return f.model_copy(update={"line": best_line})
+        update: dict = {"line": best_line}
+        if f.end_line is not None:
+            delta = best_line - f.line
+            new_end = f.end_line + delta
+            update["end_line"] = max(new_end, best_line)
+        return f.model_copy(update=update)
     return f
 
 

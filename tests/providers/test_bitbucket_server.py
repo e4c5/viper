@@ -227,7 +227,7 @@ def test_get_incremental_pr_diff_uses_compare_endpoint(mock_client):
     assert "+// new comment" in diff
     call = mock_client.return_value.__enter__.return_value.get.call_args
     assert call[0][0].endswith("/compare/diff")
-    assert call[1]["params"] == {"from": "base123", "to": "head456"}
+    assert call[1]["params"] == {"from": "head456", "to": "base123"}
 
 
 @patch("code_review.providers.bitbucket_server.httpx.Client")
@@ -282,8 +282,8 @@ def test_get_incremental_pr_diff_merges_paginated_compare_pages(mock_client):
     assert "+++ b/src/Second.java" in diff
     calls = mock_client.return_value.__enter__.return_value.get.call_args_list
     assert len(calls) == 2
-    assert calls[0][1]["params"] == {"from": "base123", "to": "head456"}
-    assert calls[1][1]["params"] == {"from": "base123", "to": "head456", "start": 1}
+    assert calls[0][1]["params"] == {"from": "head456", "to": "base123"}
+    assert calls[1][1]["params"] == {"from": "head456", "to": "base123", "start": 1}
 
 
 @patch("code_review.providers.bitbucket_server.httpx.Client")
@@ -366,7 +366,7 @@ def test_get_incremental_pr_files_parse_compare_diff(mock_client):
     assert files[0].path == "src/Foo.java"
     call = mock_client.return_value.__enter__.return_value.get.call_args
     assert call[0][0].endswith("/compare/diff")
-    assert call[1]["params"] == {"from": "base123", "to": "head456"}
+    assert call[1]["params"] == {"from": "head456", "to": "base123"}
 
 
 # ---------------------------------------------------------------------------

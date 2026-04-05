@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from code_review.agent.tools.gitea_tools import create_findings_only_tools
 from code_review.config import get_llm_config
+from code_review.logging_config import emit_package_log
 from code_review.models import get_configured_model
 from code_review.providers.base import ProviderInterface
 from code_review.schemas.findings import FindingsBatchV1
@@ -173,6 +174,24 @@ def _after_model_callback(
     callback_context: CallbackContext, llm_response: LlmResponse
 ) -> None:
     """Log raw text-bearing model responses at DEBUG for schema and prompt debugging."""
+    usage = getattr(llm_response, "usage_metadata", None)
+    if usage is not None and logger.isEnabledFor(logging.INFO):
+        emit_package_log(
+            logger,
+            logging.INFO,
+            (
+                "LLM usage agent=%s prompt_tokens=%s completion_tokens=%s "
+                "total_tokens=%s cached_tokens=%s tool_prompt_tokens=%s "
+                "thoughts_tokens=%s"
+            ),
+            callback_context.agent_name,
+            getattr(usage, "prompt_token_count", None),
+            getattr(usage, "candidates_token_count", None),
+            getattr(usage, "total_token_count", None),
+            getattr(usage, "cached_content_token_count", None),
+            getattr(usage, "tool_use_prompt_token_count", None),
+            getattr(usage, "thoughts_token_count", None),
+        )
     if not logger.isEnabledFor(logging.DEBUG):
         return None
     parts = getattr(getattr(llm_response, "content", None), "parts", None) or ()

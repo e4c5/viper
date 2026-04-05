@@ -88,8 +88,14 @@ class BitbucketProvider(HttpXProvider):
         base_sha: str,
         head_sha: str,
     ) -> str:
-        """Return unified diff for the incremental compare range ``base_sha..head_sha``."""
-        spec = f"{base_sha}..{head_sha}"
+        """Return unified diff for the incremental compare range ``base_sha..head_sha``.
+
+        Bitbucket Cloud interprets ``A..B`` opposite to ``git diff A..B``:
+        the first commit is the changes to preview, and the second commit is the
+        state to compare against. For an incremental PR update, that means
+        ``head..base`` rather than ``base..head``.
+        """
+        spec = f"{head_sha}..{base_sha}"
         out = self._get(self._path(owner, repo, "diff", spec))
         return out if isinstance(out, str) else ""
 
@@ -114,7 +120,7 @@ class BitbucketProvider(HttpXProvider):
         head_sha: str,
     ) -> list[FileInfo]:
         """Return files changed in the incremental compare range ``base_sha..head_sha``."""
-        spec = f"{base_sha}..{head_sha}"
+        spec = f"{head_sha}..{base_sha}"
         return self._get_diffstat_files(self._path(owner, repo, "diffstat", spec))
 
     def _get_diffstat_files(self, url: str | None) -> list[FileInfo]:

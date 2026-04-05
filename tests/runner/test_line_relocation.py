@@ -38,12 +38,14 @@ diff --git a/bar.py b/bar.py
 def _finding(
     path: str,
     line: int,
+    end_line: int | None = None,
     anchor: str | None = None,
     fingerprint_hint: str | None = None,
 ) -> FindingV1:
     return FindingV1(
         path=path,
         line=line,
+        end_line=end_line,
         severity="medium",
         code="test-code",
         message="test message",
@@ -163,3 +165,32 @@ class TestRelocateFindingsByAnchor:
         result = _relocate_findings_by_anchor([f], SAMPLE_DIFF)
         assert len(result) == 1
         assert result[0].line == 10
+
+    def test_relocation_updates_end_line_single_line(self):
+        """When a single-line finding (end_line == line) is relocated, end_line moves too."""
+        # anchor "Files.writeString" is at line 10; finding says line 8 with end_line=8
+        f = _finding("foo.py", 8, end_line=8, anchor="Files.writeString")
+        result = _relocate_findings_by_anchor([f], SAMPLE_DIFF)
+        assert len(result) == 1
+        assert result[0].line == 10
+        assert result[0].end_line == 10  # must move with line
+
+    def test_relocation_updates_end_line_range(self):
+        """When a multi-line finding is relocated, end_line is shifted by the same delta."""
+        # anchor "Files.writeString" is at line 10; finding says line 8..9
+        f = _finding("foo.py", 8, end_line=9, anchor="Files.writeString")
+        result = _relocate_findings_by_anchor([f], SAMPLE_DIFF)
+        assert len(result) == 1
+        assert result[0].line == 10
+        assert result[0].end_line == 11  # shifted by +2
+
+    def test_relocation_end_line_clamped(self):
+        """end_line is never less than the new line after relocation."""
+        # anchor "Files.createDirectories" is at line 11; finding says line=12, end_line=12.
+        # Relocating forward to 11 would put original end_line=12 at 12+(-1)=11 — fine.
+        # Test relocation where delta is positive and end_line stays above new line.
+        f = _finding("foo.py", 8, end_line=8, anchor="viewName")  # viewName at line 12
+        result = _relocate_findings_by_anchor([f], SAMPLE_DIFF)
+        assert len(result) == 1
+        assert result[0].line == 12
+        assert result[0].end_line >= result[0].line

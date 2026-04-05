@@ -33,3 +33,17 @@ def test_configure_logging_default_when_env_unset():
         configure_logging(level=None)
     log = logging.getLogger("code_review")
     assert log.level == logging.WARNING
+
+
+def test_configure_logging_updates_existing_handler_levels():
+    """Reconfiguring logging updates existing handler levels."""
+    log = logging.getLogger("code_review")
+
+    with patch.dict(os.environ, {LOG_LEVEL_ENV: "WARNING"}, clear=False):
+        configure_logging()
+    with patch.dict(os.environ, {LOG_LEVEL_ENV: "DEBUG"}, clear=False):
+        configure_logging()
+
+    assert log.level == logging.DEBUG
+    assert log.handlers
+    assert all(handler.level == logging.DEBUG for handler in log.handlers)

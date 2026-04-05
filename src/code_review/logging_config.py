@@ -56,9 +56,10 @@ def configure_logging(level: str | None = None) -> None:
     _suppress_third_party_loggers()
     if not log.handlers:
         handler = logging.StreamHandler()
-        handler.setLevel(numeric)
         handler.setFormatter(logging.Formatter(LOG_FORMAT))
         log.addHandler(handler)
+    for handler in log.handlers:
+        handler.setLevel(numeric)
     # Prevent propagation to root so we don't double-print if root is configured
     log.propagate = False
 

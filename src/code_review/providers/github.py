@@ -1,17 +1,17 @@
 """GitHub API provider (for local testing without Gitea)."""
 
-import base64
-import json
 import logging
+import os
 from typing import Any, Literal
 
-import httpx
+from github.GithubException import GithubException
 
 from code_review.formatters.comment import (
     infer_severity_from_comment_body,
     max_inferred_severity,
     render_suggestion_block,
 )
+from code_review.github_client import GitHubApiClient
 from code_review.diff.utils import normalize_path
 from code_review.providers.base import (
     BotAttributionIdentity,
@@ -19,18 +19,18 @@ from code_review.providers.base import (
     FileInfo,
     InlineComment,
     PRInfo,
+    ProviderInterface,
     ProviderCapabilities,
     ReviewComment,
     ReviewDecision,
     UnresolvedReviewItem,
+    _log_pr_info_warning,
     _log_pr_commit_messages_warning,
-    commit_messages_from_commit_list,
-    file_infos_from_pull_file_list,
+    unified_diff_for_path,
 )
 from code_review.providers.bot_blocking_common import (
     blocking_state_from_token_and_github_style_review_list,
 )
-from code_review.providers.http_base import HttpXProvider
 from code_review.providers.review_decision_common import github_style_pull_review_json
 from code_review.providers.safety import MAX_REPO_FILE_BYTES, truncate_repo_content
 from code_review.schemas.review_thread_dismissal import (
@@ -38,51 +38,92 @@ from code_review.schemas.review_thread_dismissal import (
     ReviewThreadDismissalEntry,
 )
 
-DEFAULT_BASE_URL = "https://api.github.com"
-JSON_MEDIA_TYPE = "application/json"
 logger = logging.getLogger(__name__)
 
+_GITHUB_COMPARE_MAX_FILES = 300
 
-class GitHubProvider(HttpXProvider):
+
+class GitHubProvider(ProviderInterface):
     """GitHub API client for PR diff, file content, and review comments."""
 
-    _httpx_module = httpx
+    def __init__(self, base_url: str, token: str, timeout: float = 30.0):
+        self._base_url = base_url.rstrip("/")
+        self._token = token
+        self._timeout = timeout
+        self._github_client: GitHubApiClient | None = None
 
-    def _auth_header(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._token}"} if self._token else {}
+    def _client(self) -> GitHubApiClient:
+        if self._github_client is None:
+            self._github_client = GitHubApiClient(
+                self._base_url,
+                self._token,
+                timeout=self._timeout,
+            )
+        return self._github_client
 
-    def _default_headers(self) -> dict[str, str]:
-        return {"Accept": "application/vnd.github+json"}
+    @staticmethod
+    def _sha_guard_passes(base_sha: str, head_sha: str) -> bool:
+        base = (base_sha or "").strip()
+        head = (head_sha or "").strip()
+        return bool(base and head and base != head)
 
     def _get_diff(self, path: str) -> str:
         """GET with Accept application/vnd.github.v3.diff for unified diff."""
-        return self._get_text(path, headers={"Accept": "application/vnd.github.v3.diff"})
+        return self._client().request_text(
+            "GET",
+            path,
+            headers={"Accept": "application/vnd.github.v3.diff"},
+        )
 
-    def _graphql_endpoint(self) -> str:
-        u = self._base_url.rstrip("/")
-        if "api.github.com" in u:
-            return "https://api.github.com/graphql"
-        if u.endswith("/api/v3"):
-            return u[: -len("/api/v3")] + "/api/graphql"
-        return f"{u}/api/graphql"
+    @staticmethod
+    def _comparison_file_list(comparison: Any) -> list[Any]:
+        return list(getattr(comparison, "files", None) or [])
 
-    def _graphql_headers(self) -> dict[str, str]:
-        h = {"Content-Type": JSON_MEDIA_TYPE, "Accept": JSON_MEDIA_TYPE}
-        if self._token:
-            h["Authorization"] = f"Bearer {self._token}"
-        return h
+    @staticmethod
+    def _comparison_files_truncated(comparison: Any) -> bool:
+        files = GitHubProvider._comparison_file_list(comparison)
+        if len(files) >= _GITHUB_COMPARE_MAX_FILES:
+            return True
+        raw_data = getattr(comparison, "raw_data", None)
+        if isinstance(raw_data, dict):
+            raw_files = raw_data.get("files")
+            if isinstance(raw_files, list) and len(raw_files) >= _GITHUB_COMPARE_MAX_FILES:
+                return True
+        return False
+
+    def _get_incremental_compare(self, owner: str, repo: str, pr_number: int, base_sha: str, head_sha: str) -> Any | None:
+        try:
+            comparison = self._client().get_repo(owner, repo).compare(base_sha, head_sha)
+        except GithubException as e:
+            logger.warning(
+                "GitHub incremental compare metadata failed owner=%s repo=%s pr=%s "
+                "base=%s head=%s: %s; falling back to full PR review",
+                owner,
+                repo,
+                pr_number,
+                base_sha,
+                head_sha,
+                e,
+            )
+            return None
+        if self._comparison_files_truncated(comparison):
+            logger.warning(
+                "GitHub incremental compare metadata hit the %s-file compare limit "
+                "owner=%s repo=%s pr=%s base=%s head=%s; falling back to full PR review",
+                _GITHUB_COMPARE_MAX_FILES,
+                owner,
+                repo,
+                pr_number,
+                base_sha,
+                head_sha,
+            )
+            return None
+        return comparison
 
     def _graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
-        url = self._graphql_endpoint()
-        payload = {"query": query, "variables": variables}
-        with httpx.Client(timeout=self._timeout) as client:
-            r = client.post(url, headers=self._graphql_headers(), json=payload)
-            r.raise_for_status()
-            body = r.json()
+        body = self._client().graphql_query(query, variables)
         if not isinstance(body, dict):
             raise RuntimeError("GitHub GraphQL: invalid JSON body")
-        if body.get("errors"):
-            raise RuntimeError(f"GitHub GraphQL errors: {body['errors']}")
         data = body.get("data")
         return data if isinstance(data, dict) else {}
 
@@ -417,7 +458,7 @@ class GitHubProvider(HttpXProvider):
         """Use GraphQL review threads (resolved / outdated). On GraphQL failure, return []."""
         try:
             return self._unresolved_review_threads_graphql(owner, repo, pr_number)
-        except (httpx.HTTPError, json.JSONDecodeError, RuntimeError) as e:
+        except (GithubException, RuntimeError) as e:
             logger.warning(
                 "GitHub GraphQL reviewThreads failed owner=%s repo=%s pr=%s: %s; "
                 "skipping unresolved aggregation (REST comments lack resolution state).",
@@ -433,6 +474,18 @@ class GitHubProvider(HttpXProvider):
         path = f"/repos/{owner}/{repo}/pulls/{pr_number}"
         return self._get_diff(path)
 
+    def get_incremental_pr_diff(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> str:
+        if not self._sha_guard_passes(base_sha, head_sha):
+            return self.get_pr_diff(owner, repo, pr_number)
+        return self._get_incremental_pr_diff(owner, repo, pr_number, base_sha, head_sha)
+
     def _get_incremental_pr_diff(
         self,
         owner: str,
@@ -442,10 +495,13 @@ class GitHubProvider(HttpXProvider):
         head_sha: str,
     ) -> str:
         """Return unified diff for the incremental compare range ``base_sha...head_sha``."""
+        comparison = self._get_incremental_compare(owner, repo, pr_number, base_sha, head_sha)
+        if comparison is None:
+            return self.get_pr_diff(owner, repo, pr_number)
         path = f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}"
         try:
             return self._get_diff(path)
-        except httpx.HTTPError as e:
+        except GithubException as e:
             logger.warning(
                 "GitHub incremental compare diff failed owner=%s repo=%s pr=%s "
                 "base=%s head=%s: %s; falling back to full PR diff",
@@ -460,35 +516,61 @@ class GitHubProvider(HttpXProvider):
 
     def get_file_content(self, owner: str, repo: str, ref: str, path: str) -> str:
         """Return file content at ref; truncated if over max size."""
-        api_path = f"/repos/{owner}/{repo}/contents/{path}"
-        resp = self._get(api_path, params={"ref": ref})
-        if isinstance(resp, dict) and "content" in resp:
-            raw = base64.b64decode(resp["content"]).decode("utf-8", errors="replace")
-            return truncate_repo_content(raw, max_bytes=MAX_REPO_FILE_BYTES)
-        raise ValueError(f"Unexpected response for {path} at {ref}")
+        content = self._client().get_repo(owner, repo).get_contents(path, ref=ref)
+        if isinstance(content, list):
+            raise ValueError(f"Unexpected response for {path} at {ref}")
+        raw = content.decoded_content.decode("utf-8", errors="replace")
+        return truncate_repo_content(raw, max_bytes=MAX_REPO_FILE_BYTES)
 
     def get_pr_files(self, owner: str, repo: str, pr_number: int) -> list[FileInfo]:
         """Return list of changed files in the PR."""
-        path = f"/repos/{owner}/{repo}/pulls/{pr_number}/files"
-        data = self._get(path, params={"per_page": 100})
-        return file_infos_from_pull_file_list(data) if isinstance(data, list) else []
+        files = self._client().get_pull(owner, repo, pr_number).get_files()
+        result: list[FileInfo] = []
+        for item in files:
+            result.append(self._github_file_info(item))
+        return result
 
     @staticmethod
-    def _github_pr_file_matches_path(item: dict[str, Any], wanted_path: str) -> bool:
-        filename = normalize_path(str(item.get("filename") or ""), strip_git_prefixes=False)
+    def _github_pr_file_data(item: Any) -> dict[str, Any]:
+        if isinstance(item, dict):
+            return item
+        return {
+            "filename": str(getattr(item, "filename", "") or ""),
+            "previous_filename": str(getattr(item, "previous_filename", "") or ""),
+            "status": str(getattr(item, "status", "modified") or "modified"),
+            "additions": int(getattr(item, "additions", 0) or 0),
+            "deletions": int(getattr(item, "deletions", 0) or 0),
+            "patch": str(getattr(item, "patch", "") or ""),
+        }
+
+    @classmethod
+    def _github_file_info(cls, item: Any) -> FileInfo:
+        data = cls._github_pr_file_data(item)
+        return FileInfo(
+            path=str(data.get("filename") or ""),
+            status=str(data.get("status") or "modified"),
+            additions=int(data.get("additions") or 0),
+            deletions=int(data.get("deletions") or 0),
+        )
+
+    @staticmethod
+    def _github_pr_file_matches_path(item: Any, wanted_path: str) -> bool:
+        data = GitHubProvider._github_pr_file_data(item)
+        filename = normalize_path(str(data.get("filename") or ""), strip_git_prefixes=False)
         previous = normalize_path(
-            str(item.get("previous_filename") or ""),
+            str(data.get("previous_filename") or ""),
             strip_git_prefixes=False,
         )
         return wanted_path in {filename, previous}
 
     @staticmethod
-    def _github_single_file_diff_from_item(item: dict[str, Any]) -> str | None:
-        patch_text = str(item.get("patch") or "").strip()
+    def _github_single_file_diff_from_item(item: Any) -> str | None:
+        data = GitHubProvider._github_pr_file_data(item)
+        patch_text = str(data.get("patch") or "").strip()
         if not patch_text:
             return None
-        old_path = str(item.get("previous_filename") or item.get("filename") or "")
-        new_path = str(item.get("filename") or old_path)
+        old_path = str(data.get("previous_filename") or data.get("filename") or "")
+        new_path = str(data.get("filename") or old_path)
         lines = [
             f"diff --git a/{old_path} b/{new_path}",
             f"--- a/{old_path}",
@@ -497,12 +579,8 @@ class GitHubProvider(HttpXProvider):
         ]
         return "\n".join(lines)
 
-    def _github_diff_for_matching_pr_file(
-        self, data: list[Any], wanted_path: str
-    ) -> str | None:
+    def _github_diff_for_matching_pr_file(self, data: list[Any], wanted_path: str) -> str | None:
         for item in data:
-            if not isinstance(item, dict):
-                continue
             if not self._github_pr_file_matches_path(item, wanted_path):
                 continue
             return self._github_single_file_diff_from_item(item)
@@ -513,24 +591,27 @@ class GitHubProvider(HttpXProvider):
         wanted_path = normalize_path(path, strip_git_prefixes=False)
         if not wanted_path:
             return ""
-        api_path = f"/repos/{owner}/{repo}/pulls/{pr_number}/files"
-        page = 1
-        for _ in range(100):
-            data = self._get(api_path, params={"per_page": 100, "page": page})
-            if not isinstance(data, list) or not data:
-                return ""
-            match = self._github_diff_for_matching_pr_file(data, wanted_path)
-            if match is not None:
-                return match
-            if any(
-                isinstance(item, dict) and self._github_pr_file_matches_path(item, wanted_path)
-                for item in data
-            ):
-                return super().get_pr_diff_for_file(owner, repo, pr_number, path)
-            if len(data) < 100:
-                return ""
-            page += 1
+        data = list(self._client().get_pull(owner, repo, pr_number).get_files())
+        if not data:
+            return ""
+        match = self._github_diff_for_matching_pr_file(data, wanted_path)
+        if match is not None:
+            return match
+        if any(self._github_pr_file_matches_path(item, wanted_path) for item in data):
+            return unified_diff_for_path(self.get_pr_diff(owner, repo, pr_number), path)
         return ""
+
+    def get_incremental_pr_files(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> list[FileInfo]:
+        if not self._sha_guard_passes(base_sha, head_sha):
+            return self.get_pr_files(owner, repo, pr_number)
+        return self._get_incremental_pr_files(owner, repo, pr_number, base_sha, head_sha)
 
     def _get_incremental_pr_files(
         self,
@@ -541,24 +622,11 @@ class GitHubProvider(HttpXProvider):
         head_sha: str,
     ) -> list[FileInfo]:
         """Return files changed in the incremental compare range ``base_sha...head_sha``."""
-        path = f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}"
-        try:
-            data = self._get(path, params={"per_page": 100})
-        except httpx.HTTPError as e:
-            logger.warning(
-                "GitHub incremental compare files failed owner=%s repo=%s pr=%s "
-                "base=%s head=%s: %s; falling back to full PR files",
-                owner,
-                repo,
-                pr_number,
-                base_sha,
-                head_sha,
-                e,
-            )
+        comparison = self._get_incremental_compare(owner, repo, pr_number, base_sha, head_sha)
+        if comparison is None:
             return self.get_pr_files(owner, repo, pr_number)
-        if not isinstance(data, dict):
-            return []
-        return file_infos_from_pull_file_list(data.get("files") or [])
+        files = self._comparison_file_list(comparison)
+        return [self._github_file_info(item) for item in files]
 
     def post_review_comments(
         self,
@@ -589,26 +657,28 @@ class GitHubProvider(HttpXProvider):
             "body": "Code review comments",
             "comments": review_comments,
         }
-        if head_sha:
-            payload["commit_id"] = head_sha
-        self._post(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews", payload)
+        self._client().create_pull_review(
+            owner,
+            repo,
+            pr_number,
+            event=str(payload["event"]),
+            body=str(payload["body"]),
+            head_sha=head_sha,
+            comments=review_comments,
+        )
 
     def get_existing_review_comments(
         self, owner: str, repo: str, pr_number: int
     ) -> list[ReviewComment]:
         """Return existing review comments. GitHub does not expose 'resolved' on list."""
-        path = f"/repos/{owner}/{repo}/pulls/{pr_number}/comments"
-        data = self._get(path, params={"per_page": 100})
-        if not isinstance(data, list):
-            return []
         result: list[ReviewComment] = []
-        for c in data:
+        for c in self._client().get_pull(owner, repo, pr_number).get_review_comments():
             result.append(
                 ReviewComment(
-                    id=str(c.get("id", "")),
-                    path=c.get("path", ""),
-                    line=int(c.get("line", 0) or 0),
-                    body=c.get("body", ""),
+                    id=str(getattr(c, "id", "") or ""),
+                    path=str(getattr(c, "path", "") or ""),
+                    line=int(getattr(c, "line", 0) or 0),
+                    body=str(getattr(c, "body", "") or ""),
                     resolved=False,
                 )
             )
@@ -616,47 +686,39 @@ class GitHubProvider(HttpXProvider):
 
     def _github_token_user_login_lower(self) -> str | None:
         try:
-            data = self._get("/user")
-            if isinstance(data, dict):
-                login = str(data.get("login") or "").strip().lower()
-                return login or None
+            login = str(getattr(self._client().get_authenticated_user(), "login", "") or "")
+            login = login.strip().lower()
+            return login or None
         except Exception as e:
             logger.warning("GitHub GET /user failed for bot blocking state: %s", e)
         return None
 
     def _github_list_pull_reviews(self, owner: str, repo: str, pr_number: int) -> list[Any] | None:
         """List PR reviews, or ``None`` if the listing failed (caller maps to ``UNKNOWN``)."""
-        path = f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
-        out: list[Any] = []
-        page = 1
-        for _ in range(50):
-            try:
-                data = self._get(path, params={"per_page": 100, "page": page})
-            except Exception as e:
-                logger.warning(
-                    "GitHub list PR reviews failed owner=%s repo=%s pr=%s: %s",
-                    owner,
-                    repo,
-                    pr_number,
-                    e,
+        try:
+            out: list[Any] = []
+            for review in self._client().get_pull(owner, repo, pr_number).get_reviews():
+                out.append(
+                    {
+                        "id": int(getattr(review, "id", 0) or 0),
+                        "state": str(getattr(review, "state", "") or ""),
+                        "user": {
+                            "login": str(
+                                getattr(getattr(review, "user", None), "login", "") or ""
+                            )
+                        },
+                    }
                 )
-                return None
-            if not isinstance(data, list):
-                logger.warning(
-                    "GitHub list PR reviews unexpected JSON owner=%s repo=%s pr=%s page=%s",
-                    owner,
-                    repo,
-                    pr_number,
-                    page,
-                )
-                return None
-            if not data:
-                break
-            out.extend(data)
-            if len(data) < 100:
-                break
-            page += 1
-        return out
+            return out
+        except Exception as e:
+            logger.warning(
+                "GitHub list PR reviews failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
 
     def get_bot_blocking_state(self, owner: str, repo: str, pr_number: int) -> BotBlockingState:
         """Latest token-user PR review: ``CHANGES_REQUESTED`` → blocking."""
@@ -668,14 +730,20 @@ class GitHubProvider(HttpXProvider):
     def get_bot_attribution_identity(
         self, owner: str, repo: str, pr_number: int
     ) -> BotAttributionIdentity:
+        # Try the API first to get both login and numeric id_str.
+        # GET /user returns 403 for GitHub App installation tokens, so fall back
+        # to SCM_GITHUB_APP_BOT_LOGIN when the call fails or returns nothing usable.
         try:
-            data = self._get("/user")
-            if isinstance(data, dict):
-                login = str(data.get("login") or "").strip().lower()
-                uid = str(data.get("id") or "").strip()
+            user = self._client().get_authenticated_user()
+            login = str(getattr(user, "login", "") or "").strip().lower()
+            uid = str(getattr(user, "id", "") or "").strip()
+            if login:
                 return BotAttributionIdentity(login=login, id_str=uid)
         except Exception as e:
-            logger.warning("GitHub get_bot_attribution_identity failed: %s", e)
+            logger.warning("GitHub get_bot_attribution_identity /user failed: %s", e)
+        app_bot_login = os.environ.get("SCM_GITHUB_APP_BOT_LOGIN", "").strip()
+        if app_bot_login:
+            return BotAttributionIdentity(login=app_bot_login.lower())
         return BotAttributionIdentity()
 
     def _github_build_dismissal_context_from_comment_nodes(
@@ -733,24 +801,51 @@ class GitHubProvider(HttpXProvider):
         except (TypeError, ValueError):
             return 0
 
+    @staticmethod
+    def _github_comment_database_id(comment: dict[str, Any]) -> int:
+        try:
+            return int(comment.get("databaseId") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _github_thread_id(node: dict[str, Any]) -> str:
+        return str(node.get("id") or "")
+
+    @staticmethod
+    def _github_thread_comments_wrapper(node: dict[str, Any]) -> dict[str, Any] | None:
+        comments = node.get("comments")
+        return comments if isinstance(comments, dict) else None
+
+    def _github_thread_contains_comment_id(
+        self, comments: list[dict[str, Any]], want_id: int
+    ) -> bool:
+        return any(self._github_comment_database_id(comment) == want_id for comment in comments)
+
+    def _github_dismissal_context_from_thread_node(
+        self, node: dict[str, Any], want_id: int
+    ) -> ReviewThreadDismissalContext | None:
+        tid = self._github_thread_id(node)
+        if not tid:
+            return None
+        expanded = self._github_expand_thread_comments(
+            tid,
+            self._github_thread_comments_wrapper(node),
+            gate_mode=False,
+        )
+        if not self._github_thread_contains_comment_id(expanded, want_id):
+            return None
+        return self._github_build_dismissal_context_from_comment_nodes(tid, expanded)
+
     def _github_dismissal_context_in_thread_nodes(
         self, nodes: list[Any], want_id: int
     ) -> ReviewThreadDismissalContext | None:
         for node in nodes:
             if not isinstance(node, dict):
                 continue
-            tid = str(node.get("id") or "")
-            if not tid:
-                continue
-            cw = node.get("comments") if isinstance(node.get("comments"), dict) else None
-            expanded = self._github_expand_thread_comments(tid, cw, gate_mode=False)
-            for c in expanded:
-                if not isinstance(c, dict):
-                    continue
-                if int(c.get("databaseId") or 0) == want_id:
-                    return self._github_build_dismissal_context_from_comment_nodes(
-                        tid, expanded
-                    )
+            hit = self._github_dismissal_context_from_thread_node(node, want_id)
+            if hit is not None:
+                return hit
         return None
 
     def get_review_thread_dismissal_context(
@@ -816,9 +911,12 @@ class GitHubProvider(HttpXProvider):
             rid = int((reply_to_comment_id or "").strip())
         except ValueError as e:
             raise ValueError("GitHub reply_to_comment_id must be numeric") from e
-        self._post(
-            f"/repos/{owner}/{repo}/pulls/{pr_number}/comments",
-            {"body": body, "in_reply_to": rid},
+        self._client().reply_to_review_comment(
+            owner,
+            repo,
+            pr_number,
+            rid,
+            body,
         )
 
     def resolve_review_thread(
@@ -854,41 +952,73 @@ class GitHubProvider(HttpXProvider):
     ) -> None:
         """Submit a PR-level review decision on GitHub."""
         payload = github_style_pull_review_json(decision, body, head_sha)
-        self._post(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews", payload)
-
-    def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
-        """Post PR-level comment (GitHub: issues comments endpoint for PRs)."""
-        self._post(f"/repos/{owner}/{repo}/issues/{pr_number}/comments", {"body": body})
-
-    def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
-        """List commits on the PR (GitHub: GET /pulls/{id}/commits)."""
-        path = f"/repos/{owner}/{repo}/pulls/{pr_number}/commits"
-        try:
-            data = self._get(path, params={"per_page": 100})
-        except Exception as e:
-            _log_pr_commit_messages_warning(logger, owner, repo, pr_number, e)
-            return []
-        return commit_messages_from_commit_list(data)
-
-    def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
-        """Return PR title, labels, and description for skip-review and metadata."""
-        return self._get_pr_info_from_path(
+        self._client().create_pull_review(
             owner,
             repo,
             pr_number,
-            path=f"/repos/{owner}/{repo}/pulls/{pr_number}",
-            logger=logger,
+            event=str(payload["event"]),
+            body=str(payload["body"]),
+            head_sha=head_sha,
         )
+
+    def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
+        """Post PR-level comment (GitHub: issues comments endpoint for PRs)."""
+        self._client().get_issue(owner, repo, pr_number).create_comment(body)
+
+    @staticmethod
+    def _github_commit_message(item: Any) -> str:
+        commit = getattr(item, "commit", None)
+        message = getattr(commit, "message", None)
+        if message is None:
+            raw_data = getattr(item, "raw_data", None)
+            if isinstance(raw_data, dict):
+                commit_dict = raw_data.get("commit") if isinstance(raw_data.get("commit"), dict) else {}
+                message = commit_dict.get("message") or raw_data.get("message")
+        text = str(message or "").strip()
+        return text
+
+    def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
+        """List commits on the PR (GitHub: GET /pulls/{id}/commits)."""
+        try:
+            commits = self._client().get_pull(owner, repo, pr_number).get_commits()
+        except Exception as e:
+            _log_pr_commit_messages_warning(logger, owner, repo, pr_number, e)
+            return []
+        out: list[str] = []
+        for item in commits:
+            msg = self._github_commit_message(item)
+            if msg:
+                out.append(msg)
+        return out
+
+    def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
+        """Return PR title, labels, and description for skip-review and metadata."""
+        try:
+            pull = self._client().get_pull(owner, repo, pr_number)
+            labels = [
+                str(getattr(label, "name", "") or "").strip()
+                for label in (getattr(pull, "labels", None) or [])
+            ]
+            head_sha = str(getattr(getattr(pull, "head", None), "sha", "") or "").strip()
+            return PRInfo(
+                title=str(getattr(pull, "title", "") or ""),
+                labels=[label for label in labels if label],
+                description=str(getattr(pull, "body", "") or ""),
+                head_sha=head_sha,
+            )
+        except Exception as e:
+            _log_pr_info_warning(logger, owner, repo, pr_number, e)
+            return None
 
     def update_pr_description(
         self, owner: str, repo: str, pr_number: int, description: str, title: str | None = None
     ) -> None:
         """Update the PR body (and optionally title) via PATCH /repos/.../pulls/{number}."""
-        self._patch_pr_description(
-            path=f"/repos/{owner}/{repo}/pulls/{pr_number}",
-            description=description,
-            title=title,
-        )
+        pull = self._client().get_pull(owner, repo, pr_number)
+        if title is None:
+            pull.edit(body=description)
+            return
+        pull.edit(title=title, body=description)
 
     def capabilities(self) -> ProviderCapabilities:
         """GitHub supports suggestion blocks; resolved is per-conversation, not per-comment."""
