@@ -27,27 +27,21 @@ def _reset_injected_env_tracking():
 
 
 @patch("code_review.models.get_llm_config")
-def test_get_configured_model_gemini_uses_native_adk(mock_get_config):
+def test_get_configured_model_gemini_returns_model_string(mock_get_config):
     mock_get_config.return_value = MagicMock(
         provider="gemini", model="gemini-2.0-flash", api_key=None
     )
     result = get_configured_model()
-    if hasattr(result, "model"):
-        assert result.model == "gemini-2.0-flash"
-    else:
-        assert result == "gemini-2.0-flash"
+    assert result == "gemini-2.0-flash"
 
 
 @patch("code_review.models.get_llm_config")
-def test_get_configured_model_vertex_uses_native_adk(mock_get_config):
+def test_get_configured_model_vertex_returns_model_string(mock_get_config):
     mock_get_config.return_value = MagicMock(
         provider="vertex", model="gemini-1.5-pro", api_key=None
     )
     result = get_configured_model()
-    if hasattr(result, "model"):
-        assert result.model == "gemini-1.5-pro"
-    else:
-        assert result == "gemini-1.5-pro"
+    assert result == "gemini-1.5-pro"
 
 
 @patch("code_review.models.get_llm_config")
@@ -85,7 +79,7 @@ def test_get_configured_model_ollama_uses_litellm_or_fallback(mock_get_config):
 
 @patch("code_review.models.get_llm_config")
 def test_get_configured_model_litellm_import_error_returns_model_string(mock_get_config):
-    """When ADK models cannot be imported, return config.model as fallback."""
+    """When LiteLlm cannot be imported, return config.model as fallback."""
     import builtins
 
     mock_get_config.return_value = MagicMock(
@@ -94,8 +88,8 @@ def test_get_configured_model_litellm_import_error_returns_model_string(mock_get
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
-        if name == "google.adk.models":
-            raise ImportError("no google.adk.models")
+        if name == "google.adk.models.lite_llm":
+            raise ImportError("no lite_llm")
         return real_import(name, *args, **kwargs)
 
     with patch("builtins.__import__", side_effect=fake_import):
@@ -161,11 +155,7 @@ def test_get_model_metadata_refreshed_gemini_limits():
 def test_get_configured_model_gemini_alias_resolves_to_runtime_model(mock_get_config):
     mock_get_config.return_value = MagicMock(provider="gemini", model="gemini-3.1", api_key=None)
 
-    result = get_configured_model()
-    if hasattr(result, "model"):
-        assert result.model == "gemini-3-flash-preview"
-    else:
-        assert result == "gemini-3-flash-preview"
+    assert get_configured_model() == "gemini-3-flash-preview"
 
 
 @patch("code_review.models.get_llm_config")
@@ -284,9 +274,8 @@ def test_get_configured_model_unknown_provider_uses_model_string_as_litellm(mock
 
 
 @patch("code_review.models.get_llm_config")
-@patch("google.adk.models.LiteLlm")
-def test_get_configured_model_sets_api_key_from_config(mock_lite_llm, mock_get_config):
-    """When LLM_API_KEY is set, get_configured_model() passes it to the constructor."""
+def test_get_configured_model_sets_provider_env_var_from_llm_api_key(mock_get_config):
+    """When LLM_API_KEY is set, get_configured_model() sets the provider-specific env var."""
     from pydantic import SecretStr
 
     mock_get_config.return_value = MagicMock(
@@ -294,37 +283,68 @@ def test_get_configured_model_sets_api_key_from_config(mock_lite_llm, mock_get_c
         model="anthropic/claude-3.5-sonnet",
         api_key=SecretStr("sk-fake"),
     )
-    mock_instance = MagicMock()
-    mock_instance.model = "openrouter/anthropic/claude-3.5-sonnet"
-    mock_lite_llm.return_value = mock_instance
-
-    result = get_configured_model()
-
-    mock_lite_llm.assert_called_once_with(
-        model="openrouter/anthropic/claude-3.5-sonnet",
-        api_key="sk-fake",
-    )
-    assert result == mock_instance
+    previous_api_key = os.environ.get("OPENROUTER_API_KEY")
+    try:
+        result = get_configured_model()
+        assert os.environ.get("OPENROUTER_API_KEY") == "sk-fake"
+        if hasattr(result, "model"):
+            assert result.model == "openrouter/anthropic/claude-3.5-sonnet"
+    finally:
+        if previous_api_key is None:
+            os.environ.pop("OPENROUTER_API_KEY", None)
+        else:
+            os.environ["OPENROUTER_API_KEY"] = previous_api_key
 
 
 @patch("code_review.models.get_llm_config")
-@patch("google.adk.models.LiteLlm")
-def test_get_configured_model_ignores_blank_api_key(mock_lite_llm, mock_get_config):
-    """Blank API keys must not be passed to the constructor."""
+def test_get_configured_model_ignores_blank_api_key(mock_get_config):
+    """Blank API keys must not overwrite provider-specific credentials."""
     from pydantic import SecretStr
 
+    previous_api_key = os.environ.get("OPENROUTER_API_KEY")
+    os.environ["OPENROUTER_API_KEY"] = "existing-token"
     mock_get_config.return_value = MagicMock(
         provider="openrouter",
         model="anthropic/claude-3.5-sonnet",
         api_key=SecretStr("   "),
     )
-    mock_instance = MagicMock()
-    mock_instance.model = "openrouter/anthropic/claude-3.5-sonnet"
-    mock_lite_llm.return_value = mock_instance
+    try:
+        get_configured_model()
+        assert os.environ.get("OPENROUTER_API_KEY") == "existing-token"
+    finally:
+        if previous_api_key is None:
+            os.environ.pop("OPENROUTER_API_KEY", None)
+        else:
+            os.environ["OPENROUTER_API_KEY"] = previous_api_key
 
-    result = get_configured_model()
 
-    mock_lite_llm.assert_called_once_with(
-        model="openrouter/anthropic/claude-3.5-sonnet"
-    )
-    assert result == mock_instance
+@patch("code_review.models.get_llm_config")
+def test_get_configured_model_clears_injected_key_on_provider_switch(mock_get_config):
+    """Injected provider key should not leak after switching providers."""
+    from pydantic import SecretStr
+
+    previous_openrouter = os.environ.get("OPENROUTER_API_KEY")
+    previous_openai = os.environ.get("OPENAI_API_KEY")
+    mock_get_config.side_effect = [
+        MagicMock(provider="openrouter", model="claude", api_key=SecretStr("sk-openrouter")),
+        MagicMock(provider="openai", model="gpt-4o", api_key=SecretStr("sk-openai")),
+    ]
+    try:
+        get_configured_model()
+        assert os.environ.get("OPENROUTER_API_KEY") == "sk-openrouter"
+
+        get_configured_model()
+        if previous_openrouter is None:
+            assert "OPENROUTER_API_KEY" not in os.environ
+        else:
+            assert os.environ.get("OPENROUTER_API_KEY") == previous_openrouter
+        assert os.environ.get("OPENAI_API_KEY") == "sk-openai"
+    finally:
+        if previous_openrouter is None:
+            os.environ.pop("OPENROUTER_API_KEY", None)
+        else:
+            os.environ["OPENROUTER_API_KEY"] = previous_openrouter
+        if previous_openai is None:
+            os.environ.pop("OPENAI_API_KEY", None)
+        else:
+            os.environ["OPENAI_API_KEY"] = previous_openai
