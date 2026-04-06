@@ -75,7 +75,7 @@ Loaded via `LLMConfig` (`env_prefix="LLM_"`).
 |----------|---------|-------------|
 | `LLM_PROVIDER` | `gemini` | `gemini` \| `openai` \| `anthropic` \| `ollama` \| `vertex` \| `openrouter` |
 | `LLM_MODEL` | `gemini-2.5-flash` | Model identifier for the provider. |
-| `LLM_API_KEY` | — | Single key; mapped internally to provider-specific env vars for ADK/LiteLLM (see `models.py`). |
+| `LLM_API_KEY` | — | Single universal API key. Passed directly to the ADK `LiteLlm` constructor (no `os.environ` injection). |
 | `LLM_CONTEXT_WINDOW` | `128000` | Context window in tokens (used for chunking / budgets). |
 | `LLM_MAX_OUTPUT_TOKENS` | `4096` | Max output tokens for generation. |
 | `LLM_TEMPERATURE` | `0.0` | Sampling temperature. |
@@ -85,7 +85,7 @@ Loaded via `LLMConfig` (`env_prefix="LLM_"`).
 
 **Ollama:** No API key required. `OLLAMA_API_BASE` (default `http://localhost:11434`) is the usual convention for LiteLLM/Ollama; see `docs/DEVELOPER_GUIDE.md`.
 
-**Provider-specific API env injection:** When `LLM_API_KEY` is set, `get_configured_model()` may set `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENROUTER_API_KEY` temporarily for the provider.
+**Unified API Key handling:** `LLM_API_KEY` is passed directly to the `LiteLlm` constructor for all providers. Provider-specific properties like `GOOGLE_API_KEY` are **no longer supported or injected**.
 
 ---
 
