@@ -433,8 +433,8 @@ class StandardReviewHandler:
             # saving LLM calls for duplicates.
             to_verify = [f for f, _ in to_post]
             verified_findings = verify_findings(to_verify, full_diff)
-            verified_ids = {id(f) for f in verified_findings}
-            to_post = [item for item in to_post if id(item[0]) in verified_ids]
+            verified_set = set(verified_findings)
+            to_post = [item for item in to_post if item[0] in verified_set]
         except Exception as exc:
             logger.warning("Verification agent step failed; proceeding without it: %s", exc)
         after_verification_count = len(to_post)
