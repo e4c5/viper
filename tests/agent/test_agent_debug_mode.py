@@ -191,15 +191,12 @@ def test_findings_only_instruction_contains_line_number_guidance():
     """TOOL_ENABLED_REVIEW_INSTRUCTION must contain line number guidance.
 
     In tool-enabled review the agent reads a diff returned from get_pr_diff_for_file.
-    The diff is pre-annotated with <L{n}> prefixes on visible new-file lines.
+    The diff is pre-annotated with n: prefixes on visible new-file lines.
     The instruction must tell the agent to use these annotations as the 'line'
     value in findings so it does not have to compute line numbers from hunk headers.
     """
-    assert (
-        "<L{n}>" in TOOL_ENABLED_REVIEW_INSTRUCTION
-        or "<L" in TOOL_ENABLED_REVIEW_INSTRUCTION
-    ), (
-        "TOOL_ENABLED_REVIEW_INSTRUCTION must explain the <L{n}> line number annotation format"
+    assert "n:" in TOOL_ENABLED_REVIEW_INSTRUCTION, (
+        "TOOL_ENABLED_REVIEW_INSTRUCTION must explain the n: line number annotation format"
     )
     assert "annotation" in TOOL_ENABLED_REVIEW_INSTRUCTION.lower(), (
         "TOOL_ENABLED_REVIEW_INSTRUCTION must reference the line number annotations"
@@ -211,7 +208,7 @@ def test_findings_only_instruction_restricts_to_visible_diff_lines():
     instr = TOOL_ENABLED_REVIEW_INSTRUCTION
     # Must tell the agent to drop findings for lines with no annotation
     assert "annotation" in instr.lower() or "annotated" in instr.lower(), (
-        "TOOL_ENABLED_REVIEW_INSTRUCTION must describe the <L{n}> annotation mechanism"
+        "TOOL_ENABLED_REVIEW_INSTRUCTION must describe the n: annotation mechanism"
     )
     # Must distinguish added (+) vs context lines
     assert "+" in instr, "TOOL_ENABLED_REVIEW_INSTRUCTION must mention '+' for added lines"
@@ -284,7 +281,7 @@ def test_instructions_consistent_category_guidance():
 
 
 def test_shared_line_number_rules_appear_in_both_instructions():
-    """Both instructions must contain the shared <L{n}> line-number rule bullets.
+    """Both instructions must contain the shared n: line-number rule bullets.
 
     These bullets are extracted into ``_SHARED_LINE_NUMBER_RULES`` to avoid
     duplication.  Verifying both instructions contain the shared text ensures

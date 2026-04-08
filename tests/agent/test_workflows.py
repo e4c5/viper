@@ -84,4 +84,4 @@ def test_create_sequential_batch_review_agent_builds_one_sub_agent_per_batch(
     assert "Review exactly one prepared batch" in kwargs["sub_agents"][0].instruction
     assert "a.py, b.py" in kwargs["sub_agents"][0].instruction
     assert "Segment: full-file segment for a.py" in kwargs["sub_agents"][0].instruction
-    assert "<L2>+new" in kwargs["sub_agents"][0].instruction
+    assert "2:+new" in kwargs["sub_agents"][0].instruction

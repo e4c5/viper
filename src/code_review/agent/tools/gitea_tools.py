@@ -49,7 +49,7 @@ def _make_get_file_lines(provider: ProviderInterface) -> Callable:
         Use this when you need additional context around a diff line.
         Always pass head_sha as ref so you read the file at the correct revision.
         Line numbers here are 1-based new-file line numbers, matching the
-        ``<L{n}>`` annotations in the diff.
+        ``n:`` annotations in the diff.
 
         Args:
             owner: Repository owner.
@@ -195,9 +195,9 @@ def create_findings_only_tools(provider: ProviderInterface) -> list[Callable]:
     def get_pr_diff_for_file(owner: str, repo: str, pr_number: int, path: str) -> str:
         """Fetch the unified diff for a single file in the PR, annotated with line numbers.
 
-        The returned diff has ``<L{n}>`` prefixes on every visible new-file line
+        The returned diff has ``n:`` prefixes on every visible new-file line
         (added ``+`` and context `` `` lines).  Removed lines (``-``) have no
-        annotation.  Use the ``<L{n}>`` value directly as the ``line`` field in
+        annotation.  Use the ``n:`` value directly as the ``line`` field in
         findings — do NOT compute line numbers from hunk headers.
 
         Args:
