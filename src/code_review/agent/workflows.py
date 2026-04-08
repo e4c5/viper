@@ -34,7 +34,7 @@ def _batch_instruction_suffix(batch: ReviewBatch, head_sha: str) -> str:
 
     # IMPORTANT: Do NOT use bare {…} in this string — ADK's instruction template engine
     # matches the regex {+[^{}]*}+ and tries to substitute every such pattern from session
-    # state.  Using bare braces (e.g. <L{n}> or {"findings": []}) causes a KeyError before
+    # state.  Using bare braces (e.g. {n}: or {"findings": []}) causes a KeyError before
     # the LLM is ever called.  Use prose descriptions instead.
     return (
         "For this run, ignore any generic wording about reviewing a complete PR diff "
@@ -43,8 +43,8 @@ def _batch_instruction_suffix(batch: ReviewBatch, head_sha: str) -> str:
         + head_sha_clause
         + f" This batch covers these file paths: {', '.join(batch.paths)}."
         + " Only report findings for code that appears in the batch segments below."
-        + " Use the ``<Ln>`` annotation value as the line field in each finding"
-        " (e.g. ``<L42>`` means line 42)."
+        + " Use the ``n:`` annotation value as the line field in each finding"
+        " (e.g. ``42:`` means line 42)."
         + " If a file appears in multiple segments, treat them as partial views "
         "of the same file and still use the true file path."
         + " Output a JSON findings object for this batch only (same schema as the main instruction)."

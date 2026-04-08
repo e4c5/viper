@@ -1081,7 +1081,7 @@ def test_run_batch_mode_message_includes_head_sha_and_batch_count():
 
 
 def test_build_review_batches_preserves_annotations_for_segment_diffs():
-    """Prepared batches must preserve explicit <L{n}> annotations in embedded diff segments."""
+    """Prepared batches must preserve explicit n: annotations in embedded diff segments."""
     from code_review.orchestration.execution import build_review_batches_for_scope
     from code_review.providers.base import FileInfo
 
@@ -1110,11 +1110,11 @@ def test_build_review_batches_preserves_annotations_for_segment_diffs():
     from code_review.diff.parser import annotate_diff_with_line_numbers
 
     annotated = annotate_diff_with_line_numbers(segment_text)
-    assert "<L10>" in annotated
-    assert "<L11>" in annotated
-    assert "<L12>" in annotated
+    assert "10: " in annotated
+    assert "11:+" in annotated
+    assert "12: " in annotated
     removed_lines = [ln for ln in annotated.splitlines() if "-old_11" in ln]
-    assert all(not ln.strip().startswith("<L") for ln in removed_lines)
+    assert all(not ln.strip().split(':')[0].isdigit() for ln in removed_lines)
 
 
 def test_build_review_batches_for_scope_falls_back_when_diff_budget_is_zero():

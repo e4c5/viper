@@ -93,7 +93,7 @@ diff --git a/b.py b/b.py
 
 
 def test_annotate_diff_context_and_added_lines():
-    """Context (' ') and added ('+') lines get <L{n}> annotations; removed lines do not."""
+    """Context (' ') and added ('+') lines get n: annotations; removed lines do not."""
     diff = (
         "diff --git a/foo.py b/foo.py\n"
         "--- a/foo.py\n+++ b/foo.py\n"
@@ -110,11 +110,11 @@ def test_annotate_diff_context_and_added_lines():
     assert lines[2] == "+++ b/foo.py"
     assert lines[3].startswith("@@")
     # context_line is at new-file line 1
-    assert "<L1> context_line" in out
-    # removed_line has no annotation — check the actual line containing it
-    assert all("<L" not in ln for ln in out.splitlines() if "-removed_line" in ln)
-    # added_line is at new-file line 2 (context incremented to 1, then added = 2)
-    assert "<L2>+added_line" in out
+    assert "1: context_line" in out
+    # -removed_line has no annotation
+    assert all("1:" not in ln and "2:" not in ln for ln in out.splitlines() if "-removed_line" in ln)
+    # +added_line gets 2:
+    assert "2:+added_line" in out
 
 
 def test_annotate_diff_correct_line_numbers_with_deletions():
@@ -131,14 +131,14 @@ def test_annotate_diff_correct_line_numbers_with_deletions():
     )
     out = annotate_diff_with_line_numbers(diff)
     # ctx_a is at new-file line 10
-    assert "<L10> ctx_a" in out
+    assert "10: ctx_a" in out
     # old_b and old_c have no new-file line — just raw '-' lines
-    assert "-old_b" in out
-    assert "-old_c" in out
+    assert " -old_b" in out or "-old_b" in out
+    assert " -old_c" in out or "-old_c" in out
     # new_b is at new-file line 11 (10 used by ctx_a, old lines don't count)
-    assert "<L11>+new_b" in out
+    assert "11:+new_b" in out
     # ctx_d is at new-file line 12
-    assert "<L12> ctx_d" in out
+    assert "12: ctx_d" in out
 
 
 def test_annotate_diff_empty_string():
@@ -177,11 +177,11 @@ def test_annotate_diff_multi_hunk():
         " lineZ\n"
     )
     out = annotate_diff_with_line_numbers(diff)
-    assert "<L1> lineA" in out
-    assert "<L2>+lineB" in out
-    assert "<L10> lineX" in out
-    assert "<L11>+lineY" in out
-    assert "<L12> lineZ" in out
+    assert "1: lineA" in out
+    assert "2:+lineB" in out
+    assert "10: lineX" in out
+    assert "11:+lineY" in out
+    assert "12: lineZ" in out
 
 
 def test_annotate_diff_multi_file():
@@ -197,8 +197,8 @@ def test_annotate_diff_multi_file():
         "+b_new\n"
     )
     out = annotate_diff_with_line_numbers(diff)
-    assert "<L1>+a_new" in out
-    assert "<L5>+b_new" in out
+    assert "1:+a_new" in out
+    assert "5:+b_new" in out
 
 
 def test_annotate_diff_roundtrip_line_numbers_match_parser():
@@ -220,9 +220,9 @@ def test_annotate_diff_roundtrip_line_numbers_match_parser():
     # Collect all annotations from output
     annotated: dict[int, str] = {}
     for line in out.splitlines():
-        if line.startswith("<L"):
-            end = line.index(">")
-            n = int(line[2:end])
+        if ":" in line and line.strip().split(':')[0].isdigit():
+            end = line.index(":")
+            n = int(line[:end].strip())
             annotated[n] = line[end + 1 :]
 
     # Collect expected new-file lines from parser

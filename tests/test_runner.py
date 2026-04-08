@@ -472,7 +472,7 @@ def test_run_review_decision_only_reply_dismissal_sends_anchored_diff_context(
     assert "Relevant PR diff context:" in prompt
     assert "Anchored file: src/Foo.java" in prompt
     assert "Anchored line: 5" in prompt
-    assert "<L5>+new = escapeXml(input)" in prompt
+    assert "5:+new = escapeXml(input)" in prompt
     provider.get_pr_diff_for_file.assert_called_once_with("o", "r", 1, "src/Foo.java")
     assert not provider.get_pr_diff.called
 

@@ -2,7 +2,7 @@
   {
     "case_id": "agreed_when_thread_is_clearly_addressed",
     "description": "A concrete code-change reply with anchored diff context should be treated as agreed.",
-    "user_message": "Original automated review comment id: 10\nOriginal automated review comment severity: medium\nTriggering human reply comment id: 11\n\nReview thread entries:\n- Comment id: 10\n  Author: viper\n  Role: original automated review comment, bot-authored\n  Body: [Medium] Escape XML-special characters before writing the attribute value.\n- Comment id: 11\n  Author: dev\n  Role: triggering human reply\n  Body: Fixed in the latest push by switching to StringEscapeUtils.escapeXml11(value).\n\nRelevant PR diff context:\nAnchored file: src/Foo.java\nAnchored line: 42\n```diff\n<L41>  String value = request.getValue();\n<L42>+String escaped = StringEscapeUtils.escapeXml11(value);\n<L43>+writer.writeAttribute(\"name\", escaped);\n```\n",
+    "user_message": "Original automated review comment id: 10\nOriginal automated review comment severity: medium\nTriggering human reply comment id: 11\n\nReview thread entries:\n- Comment id: 10\n  Author: viper\n  Role: original automated review comment, bot-authored\n  Body: [Medium] Escape XML-special characters before writing the attribute value.\n- Comment id: 11\n  Author: dev\n  Role: triggering human reply\n  Body: Fixed in the latest push by switching to StringEscapeUtils.escapeXml11(value).\n\nRelevant PR diff context:\nAnchored file: src/Foo.java\nAnchored line: 42\n```diff\n41:  String value = request.getValue();\n42:+String escaped = StringEscapeUtils.escapeXml11(value);\n43:+writer.writeAttribute(\"name\", escaped);\n```\n",
     "expected": {
       "version": "1",
       "verdict": "agreed",
@@ -12,7 +12,7 @@
   {
     "case_id": "disagreed_when_reply_only_promises_future_work",
     "description": "A promise to fix later without code evidence should remain blocking.",
-    "user_message": "Original automated review comment id: 77\nOriginal automated review comment severity: high\nTriggering human reply comment id: 78\n\nReview thread entries:\n- Comment id: 77\n  Author: viper\n  Role: original automated review comment, bot-authored\n  Body: [High] Parameterize this query instead of concatenating user input.\n- Comment id: 78\n  Author: dev\n  Role: triggering human reply\n  Body: I agree, I'll fix it in the next commit.\n\nRelevant PR diff context:\nAnchored file: src/UserRepo.java\nAnchored line: 19\n```diff\n<L19>+String sql = \"select * from users where email = '\" + email + \"'\";\n<L20>+return jdbc.query(sql, mapper);\n```\n",
+    "user_message": "Original automated review comment id: 77\nOriginal automated review comment severity: high\nTriggering human reply comment id: 78\n\nReview thread entries:\n- Comment id: 77\n  Author: viper\n  Role: original automated review comment, bot-authored\n  Body: [High] Parameterize this query instead of concatenating user input.\n- Comment id: 78\n  Author: dev\n  Role: triggering human reply\n  Body: I agree, I'll fix it in the next commit.\n\nRelevant PR diff context:\nAnchored file: src/UserRepo.java\nAnchored line: 19\n```diff\n19:+String sql = \"select * from users where email = '\" + email + \"'\";\n20:+return jdbc.query(sql, mapper);\n```\n",
     "expected": {
       "version": "1",
       "verdict": "disagreed",

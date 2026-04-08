@@ -96,7 +96,7 @@ def test_findings_only_tools_include_get_pr_diff_for_file_but_not_full_diff():
 def test_findings_only_get_pr_diff_for_file_returns_annotated_diff():
     """get_pr_diff_for_file in findings-only tools must return a line-annotated diff.
 
-    The annotation (<L{n}> prefixes on visible new-file lines) is critical for
+    The annotation (n: prefixes on visible new-file lines) is critical for
     correct comment placement: without it, the LLM has to compute absolute line
     numbers from hunk headers by counting +/- lines — a calculation it frequently
     gets wrong when deletions precede the target line.
@@ -118,32 +118,31 @@ def test_findings_only_get_pr_diff_for_file_returns_annotated_diff():
     result = get_file_diff("o", "r", 1, "foo.py")
 
     # context_10 must be annotated as new-file line 10
-    assert "<L10> context_10" in result
-    # old_11 (removed) must NOT have an annotation
-    assert all("<L" not in ln for ln in result.splitlines() if "-old_11" in ln)
-    # new_11 (added) must be annotated as new-file line 11
-    assert "<L11>+new_11" in result
-    # context_12 must be annotated as new-file line 12
-    assert "<L12> context_12" in result
+    assert "10: context_10" in result
+    # Removing line has no annotation
+    assert all(":" not in ln.split("-")[0] for ln in result.splitlines() if "-old_11" in ln)
+    # Added lines get n:
+    assert "11:+new_11" in result
+    # Next context gets ++1
+    assert "12: context_12" in result
 
 
 def test_findings_only_get_pr_diff_for_file_has_annotation_docstring():
-    """get_pr_diff_for_file tool must have a docstring mentioning <L{n}> annotations.
-
-    ADK uses the function docstring to build the tool description shown to the LLM.
-    Without it the LLM has no in-context reminder that the returned diff is annotated
-    and that it should use <L{n}> values as line numbers, not hunk-header arithmetic.
+    """get_pr_diff_for_file tool must have a docstring mentioning n: annotations.
+    
+    The runner relies on the LLM understanding these explicit annotations,
+    and that it should use n: values as line numbers, not hunk-header arithmetic.
     """
     provider = _mock_provider()
     tools = create_findings_only_tools(provider)
     get_file_diff = next(t for t in tools if t.__name__ == "get_pr_diff_for_file")
     doc = get_file_diff.__doc__ or ""
-    assert "<L{n}>" in doc or "<L" in doc, (
-        "get_pr_diff_for_file tool docstring must mention <L{n}> line annotations "
-        "so the ADK tool description reminds the LLM to use them as line numbers"
+    assert "n:" in doc or ":" in doc, (
+        "get_pr_diff_for_file tool docstring must mention n: line annotations "
+        "because the runner relies on it substituting hunk-based line math."
     )
-    assert "line" in doc.lower(), (
-        "get_pr_diff_for_file docstring must explain that <L{n}> values are line numbers"
+    assert "line number" in doc.lower(), (
+        "get_pr_diff_for_file docstring must explain that n: values are line numbers"
     )
 
 

@@ -121,7 +121,7 @@ def annotate_diff_with_line_numbers(diff_text: str) -> str:
     """Annotate a unified diff with explicit new-file line numbers.
 
     For each line visible in the new file ('+' added or ' ' context), prepend
-    ``<L{n}>`` where *n* is the absolute new-file line number.  Removed lines
+    ``n:`` where *n* is the absolute new-file line number.  Removed lines
     ('-' prefix) are kept as-is without annotation because they do not exist
     in the new file.
 
@@ -141,12 +141,12 @@ def annotate_diff_with_line_numbers(diff_text: str) -> str:
     Example output::
 
         @@ -100,4 +100,4 @@
-        <L100>  context_line_100
+        100:  context_line_100
         -old_line_101
-        <L101> +new_line_101
-        <L102>  context_line_102
+        101:+new_line_101
+        102:  context_line_102
 
-    The updated agent instructions tell the model to use the ``<L{n}>``
+    The updated agent instructions tell the model to use the ``n:``
     annotation as the ``line`` value in findings, rather than inferring it
     from hunk arithmetic.
     """
@@ -182,7 +182,7 @@ def annotate_diff_with_line_numbers(diff_text: str) -> str:
 
         prefix = line[0] if line else " "
         if prefix in (" ", "+"):
-            result_lines.append(f"<L{new_ln}>" + line)
+            result_lines.append(f"{new_ln}:" + line)
             new_ln += 1
         else:
             # Removed lines (-), no-newline markers (\), and any other prefix
