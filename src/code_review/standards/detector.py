@@ -41,10 +41,13 @@ _TEST_FILE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:^|/)test_[^/]+\.(?:cpp|cc|cxx|hpp)$"),
     re.compile(r"(?:^|/)[^/]+_test\.(?:cpp|cc|cxx|hpp)$"),
     re.compile(r"(?:^|/)[^/]+(?:Test|Tests|Spec)\.(?:cpp|cc|cxx)$"),
-    # Generic directory conventions  (tests?/, spec/, __tests__/)
-    re.compile(r"(?:^|/)__tests__/"),
-    re.compile(r"(?:^|/)tests?/"),
-    re.compile(r"(?:^|/)spec/"),
+    # Generic directory conventions  (__tests__/, tests?/) — case-insensitive
+    # so that Tests/, __Tests__/ etc. are also matched.
+    # Note: spec/ is intentionally omitted — it is ambiguous (e.g. api/spec/, docs/spec/)
+    # and all real "spec" test conventions are already caught by language-specific filename
+    # rules above (e.g. _spec.rb, .spec.ts, *Spec.java, *Spec.cs).
+    re.compile(r"(?:^|/)__tests__/", re.IGNORECASE),
+    re.compile(r"(?:^|/)tests?/", re.IGNORECASE),
 )
 
 
