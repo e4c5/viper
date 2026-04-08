@@ -69,6 +69,11 @@ IMPORTANT — Analysis methodology (expert-level rigor):
 - Failure Mode Analysis: For every new or modified block, ask "How can this fail?" (e.g. timeout, null, empty collection, network error, race condition, overflow).
 - Trace data flow: where do values originate, how are they transformed, and where are they consumed?
 - Context matching: Does the implementation align with the intent stated in the PR title, description, and commit messages?
+- Intent gap: Read the name, docstring, or surrounding comment of each function or test and ask
+  "Is the implementation doing what this description claims?" Look for cases where the code
+  runs without error but silently does the wrong thing — for example, a boundary check that
+  passes vacuously, a guard condition that is always true, or an accumulator that is never
+  reset. When the code's visible behaviour diverges from its stated intent, report it.
 - Check invariants: what assumptions does the code make? What happens when they are violated?
 - Examine heuristics and branching logic: do conditions correctly distinguish the cases they intend to? Are there missing branches?
 - Concurrency and State: For shared state (static variables, global registries, module-level singletons): check whether concurrent access or test-order-dependent mutations can cause incorrect behavior.
@@ -109,6 +114,28 @@ CRITICAL - Placement of suggestions:
 - If you use `suggested_patch`, the `line` (and `end_line` if applicable) MUST exactly cover the lines that your patch replaces. If you omit `end_line`, your `suggested_patch` will replace ONLY the single `line`.
 - Never attach a finding to a blank line or a preceding line if the `suggested_patch` is meant to replace the code below it. Doing so will insert duplicate code.
 - Keep `suggested_patch` focused on the smallest safe, self-contained change. Do not include surrounding unchanged context."""
+
+# Test-code quality rules — conditionally appended to the batch instruction when the batch
+# contains one or more test files (detected by is_test_file() in standards/detector.py).
+# Not included in the base instruction to avoid adding tokens to purely production-code reviews.
+_SHARED_TEST_QUALITY_RULES = """\
+IMPORTANT — Test code review (this batch contains test files):
+When reviewing test code, the key question is: would this assertion FAIL if the behaviour
+under test regressed? If the answer is "not necessarily", that is a finding.
+
+- Vacuous truth: `all(condition for x in collection)` silently passes when `collection` is
+  empty. An assertion that guards the all() with an existence check is non-negotiable;
+  without it, a missing output is indistinguishable from a correct empty output.
+- Tautological guards: `assert A or B` where B is trivially true for any realistic value
+  of the system under test (e.g. checking for any colon in a long instruction string) makes
+  A effectively unenforced. The `or` branch must be one that can actually be False.
+- Missing existence before property: asserting properties of a filtered or computed list
+  without first asserting the list is non-empty allows the assertion to pass vacuously when
+  the filtering step produces nothing.
+- Name-assertion mismatch: a test named `test_foo_rejects_empty` that never actually
+  exercises the empty case is a false assurance. Check that the test name and the assertions align.
+- Use severity "medium" for non-protective assertions — they do not raise but silently allow
+  regressions to pass CI undetected."""
 
 # Patch-note line (first sentence identical in both; FINDINGS_ONLY appends one extra).
 _SHARED_PATCH_NOTE = """\

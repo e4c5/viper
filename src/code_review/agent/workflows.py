@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 
 from code_review.agent.agent import create_review_agent
+from code_review.agent.agent import _SHARED_TEST_QUALITY_RULES
 from code_review.batching import ReviewBatch
 from code_review.config import get_code_review_app_config
 from code_review.diff.parser import annotate_diff_with_line_numbers
 from code_review.logging_config import emit_package_log
 from code_review.providers.base import ProviderInterface
+from code_review.standards.detector import is_test_file
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,7 @@ def _batch_instruction_suffix(batch: ReviewBatch, head_sha: str) -> str:
     # matches the regex {+[^{}]*}+ and tries to substitute every such pattern from session
     # state.  Using bare braces (e.g. {n}: or {"findings": []}) causes a KeyError before
     # the LLM is ever called.  Use prose descriptions instead.
-    return (
+    suffix = (
         "For this run, ignore any generic wording about reviewing a complete PR diff "
         "in the user message. "
         "Review exactly one prepared batch from this PR."
@@ -52,6 +54,17 @@ def _batch_instruction_suffix(batch: ReviewBatch, head_sha: str) -> str:
         + "\n\nPrepared batch segments:\n"
         + "\n\n".join(segment_blocks)
     )
+
+    # Conditionally append test-quality rules when the batch contains test files.
+    has_test_files = any(is_test_file(s.path) for s in batch.segments)
+    if has_test_files:
+        suffix += "\n\n" + _SHARED_TEST_QUALITY_RULES
+        logger.debug(
+            "Appended test-quality rules to batch instruction (test paths: %s)",
+            ", ".join(s.path for s in batch.segments if is_test_file(s.path)),
+        )
+
+    return suffix
 
 
 def create_sequential_batch_review_agent(
