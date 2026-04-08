@@ -1,5 +1,7 @@
 """Tests for diff parser."""
 
+import re
+
 from code_review.diff import (
     annotate_diff_with_line_numbers,
     iter_new_lines,
@@ -111,8 +113,9 @@ def test_annotate_diff_context_and_added_lines():
     assert lines[3].startswith("@@")
     # context_line is at new-file line 1
     assert "1: context_line" in out
-    # -removed_line has no annotation
-    assert all("1:" not in ln and "2:" not in ln for ln in out.splitlines() if "-removed_line" in ln)
+    removed_lines = [ln for ln in out.splitlines() if "-removed_line" in ln]
+    assert removed_lines, "Expected '-removed_line' missing from output diff"
+    assert all(not re.match(r"^\d+:", ln) for ln in removed_lines)
     # +added_line gets 2:
     assert "2:+added_line" in out
 

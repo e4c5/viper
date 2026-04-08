@@ -195,10 +195,7 @@ def test_findings_only_instruction_contains_line_number_guidance():
     The instruction must tell the agent to use these annotations as the 'line'
     value in findings so it does not have to compute line numbers from hunk headers.
     """
-    assert (
-        "n:" in TOOL_ENABLED_REVIEW_INSTRUCTION
-        or ":" in TOOL_ENABLED_REVIEW_INSTRUCTION
-    ), (
+    assert "n:" in TOOL_ENABLED_REVIEW_INSTRUCTION, (
         "TOOL_ENABLED_REVIEW_INSTRUCTION must explain the n: line number annotation format"
     )
     assert "annotation" in TOOL_ENABLED_REVIEW_INSTRUCTION.lower(), (

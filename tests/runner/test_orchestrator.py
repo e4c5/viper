@@ -1114,6 +1114,7 @@ def test_build_review_batches_preserves_annotations_for_segment_diffs():
     assert "11:+" in annotated
     assert "12: " in annotated
     removed_lines = [ln for ln in annotated.splitlines() if "-old_11" in ln]
+    assert removed_lines, "Expected '-old_11' missing from the annotated segment text"
     assert all(not ln.strip().split(':')[0].isdigit() for ln in removed_lines)
 
 

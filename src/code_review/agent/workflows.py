@@ -43,8 +43,8 @@ def _batch_instruction_suffix(batch: ReviewBatch, head_sha: str) -> str:
         + head_sha_clause
         + f" This batch covers these file paths: {', '.join(batch.paths)}."
         + " Only report findings for code that appears in the batch segments below."
-        + " Use the ``n:`` annotation value as the line field in each finding"
-        " (e.g. ``42:`` means line 42)."
+        + " Use the integer from the ``n:`` annotation as the line field in each finding"
+        " (e.g. ``42:`` means line 42). Extract only the number; do NOT emit the ``:`` suffix."
         + " If a file appears in multiple segments, treat them as partial views "
         "of the same file and still use the true file path."
         + " Output a JSON findings object for this batch only (same schema as the main instruction)."

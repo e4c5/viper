@@ -119,8 +119,9 @@ def test_findings_only_get_pr_diff_for_file_returns_annotated_diff():
 
     # context_10 must be annotated as new-file line 10
     assert "10: context_10" in result
-    # Removing line has no annotation
-    assert all(":" not in ln.split("-")[0] for ln in result.splitlines() if "-old_11" in ln)
+    removed_lines = [ln for ln in result.splitlines() if "-old_11" in ln]
+    assert removed_lines, "Expected removed line '-old_11' was missing from the output diff"
+    assert all(":" not in ln.split("-")[0] for ln in removed_lines)
     # Added lines get n:
     assert "11:+new_11" in result
     # Next context gets ++1
@@ -137,7 +138,8 @@ def test_findings_only_get_pr_diff_for_file_has_annotation_docstring():
     tools = create_findings_only_tools(provider)
     get_file_diff = next(t for t in tools if t.__name__ == "get_pr_diff_for_file")
     doc = get_file_diff.__doc__ or ""
-    assert "n:" in doc or ":" in doc, (
+    import re
+    assert "n:" in doc or re.search(r'\bn:', doc), (
         "get_pr_diff_for_file tool docstring must mention n: line annotations "
         "because the runner relies on it substituting hunk-based line math."
     )
