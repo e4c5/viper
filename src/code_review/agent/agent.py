@@ -124,8 +124,11 @@ When reviewing test code, the key question is: would this assertion FAIL if the 
 under test regressed? If the answer is "not necessarily", that is a finding.
 
 - Vacuous truth: `all(condition for x in collection)` silently passes when `collection` is
-  empty. An assertion that guards the all() with an existence check is non-negotiable;
-  without it, a missing output is indistinguishable from a correct empty output.
+  empty. Flag this **only** when the test intends to verify at least one element exists —
+  indicated by the test name (e.g. `test_returns_results`, `test_finds_items`), a docstring,
+  or the absence of any prior assertion that the collection may legitimately be empty.
+  Do NOT flag `all(...)` assertions in tests that explicitly verify an empty result
+  (e.g. the test is named `test_no_matches` or filters that correctly produce nothing).
 - Tautological guards: `assert A or B` where B is trivially true for any realistic value
   of the system under test (e.g. where B cannot realistically be False, such as checking
   that a string contains any character that will always be present) makes A effectively

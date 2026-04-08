@@ -118,6 +118,24 @@ def create_verification_agent():
 # ---------------------------------------------------------------------------
 
 
+def _parse_diff_header_path(header_line: str) -> str:
+    """Extract the b-side path from a ``diff --git`` header line.
+
+    Handles both plain (``diff --git a/foo b/foo``) and Git-quoted forms
+    (``diff --git "a/path with spaces" "b/path with spaces"``).
+    Returns an empty string if the header cannot be parsed.
+    """
+    # Quoted form: diff --git "a/..." "b/..."
+    if '" "b/' in header_line:
+        _, _, rest = header_line.partition('" "b/')
+        return rest.rstrip('"').strip()
+    # Unquoted form: diff --git a/... b/...
+    parts = header_line.split(" b/", 1)
+    if len(parts) == 2:
+        return parts[1].strip()
+    return ""
+
+
 def _extract_snippet_from_annotated(
     finding: FindingV1,
     annotated_diff: str,
@@ -149,10 +167,7 @@ def _extract_snippet_from_annotated(
     for raw_line in annotated_diff.splitlines():
         # Detect file boundary via diff header
         if raw_line.startswith("diff --git"):
-            current_path = ""
-            parts = raw_line.split(" b/", 1)
-            if len(parts) == 2:
-                current_path = normalize_path(parts[1].strip())
+            current_path = _parse_diff_header_path(raw_line)
             in_file = current_path == norm_target
             if not in_file and window_lines:
                 break  # we've left our file after collecting some lines — done
@@ -221,26 +236,31 @@ def verify_findings(
     )
 
     confirmed: list[tuple[int, FindingV1]] = []
+    fail_open_keeps: list[tuple[int, FindingV1]] = []
     total_confirmed = 0
+    total_fail_open = 0
     total_rejected = 0
 
     # Process in batches to keep prompts manageable
     for batch_start in range(0, len(to_verify), _MAX_FINDINGS_PER_BATCH):
         batch = to_verify[batch_start : batch_start + _MAX_FINDINGS_PER_BATCH]
-        batch_confirmed, batch_rejected = _verify_batch(batch, diff_text)
+        batch_confirmed, batch_fail_open, batch_rejected = _verify_batch(batch, diff_text)
         confirmed.extend(batch_confirmed)
+        fail_open_keeps.extend(batch_fail_open)
         total_confirmed += len(batch_confirmed)
+        total_fail_open += len(batch_fail_open)
         total_rejected += batch_rejected
 
     logger.info(
-        "Verification: confirmed=%d rejected=%d (of %d verified)",
+        "Verification: confirmed=%d fail_open=%d rejected=%d (of %d verified)",
         total_confirmed,
+        total_fail_open,
         total_rejected,
         len(to_verify),
     )
 
-    # Merge high-confidence + confirmed, restoring original order
-    merged: list[tuple[int, FindingV1]] = high + confirmed
+    # Merge high-confidence + confirmed + fail-open keeps, restoring original order
+    merged: list[tuple[int, FindingV1]] = high + confirmed + fail_open_keeps
     merged.sort(key=lambda t: t[0])
     return [f for _, f in merged]
 
@@ -248,34 +268,41 @@ def verify_findings(
 def _verify_batch(
     batch: list[tuple[int, FindingV1]],
     diff_text: str,
-) -> tuple[list[tuple[int, FindingV1]], int]:
-    """Verify one batch of findings.  Returns (confirmed_list, rejected_count)."""
+) -> tuple[list[tuple[int, FindingV1]], list[tuple[int, FindingV1]], int]:
+    """Verify one batch of findings.
+
+    Returns ``(confirmed, fail_open_keeps, rejected_count)`` where:
+    - ``confirmed``: findings explicitly confirmed by the agent.
+    - ``fail_open_keeps``: findings kept because the agent failed or omitted a verdict.
+    - ``rejected_count``: number of findings the agent explicitly rejected.
+    """
     prompt = _build_verification_prompt(batch, diff_text)
     result = _run_verification_agent(prompt)
 
     if result is None:
-        # On failure, keep all findings (fail open)
+        # Agent invocation failed entirely — keep all as fail-open, none confirmed.
         logger.warning(
-            "Verification agent failed for batch of %d finding(s); keeping all as-is",
+            "Verification agent failed for batch of %d finding(s); keeping all as fail-open",
             len(batch),
         )
-        return list(batch), 0
+        return [], list(batch), 0
 
     verdict_by_index: dict[int, _VerificationVerdict] = {v.index: v for v in result.verdicts}
 
     confirmed: list[tuple[int, FindingV1]] = []
+    fail_open: list[tuple[int, FindingV1]] = []
     rejected = 0
 
     for local_idx, (original_idx, finding) in enumerate(batch):
         verdict = verdict_by_index.get(local_idx)
         if verdict is None:
-            # Agent omitted this finding — treat as confirmed (fail open)
+            # Agent omitted a verdict — keep as fail-open, do not count as confirmed.
             logger.debug(
                 "Verification: no verdict for finding %s:%d — keeping (fail-open)",
                 finding.path,
                 finding.line,
             )
-            confirmed.append((original_idx, finding))
+            fail_open.append((original_idx, finding))
         elif verdict.verdict == "confirm":
             logger.debug(
                 "Verification: confirmed %s:%d — %s",
@@ -294,7 +321,7 @@ def _verify_batch(
             )
             rejected += 1
 
-    return confirmed, rejected
+    return confirmed, fail_open, rejected
 
 
 def _build_verification_prompt(
