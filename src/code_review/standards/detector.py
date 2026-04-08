@@ -11,6 +11,67 @@ from pydantic import BaseModel, Field
 CONFIDENCE_THRESHOLD_HIGH = 0.8
 CONFIDENCE_THRESHOLD_MEDIUM = 0.5
 
+# ---------------------------------------------------------------------------
+# Test file detection
+# ---------------------------------------------------------------------------
+
+# Patterns that identify test files by path/filename convention across ecosystems.
+# Ordered roughly by specificity (filename patterns before directory patterns).
+_TEST_FILE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Python (pytest / unittest)
+    re.compile(r"(?:^|/)test_[^/]+\.py$"),
+    re.compile(r"(?:^|/)[^/]+_test\.py$"),
+    # JavaScript / TypeScript (Jest, Mocha, Vitest)
+    re.compile(r"\.(?:spec|test)\.[jt]sx?$"),
+    # Java / Kotlin (JUnit, TestNG, Spock)
+    re.compile(r"(?:^|/)[^/]+(?:Test|Tests|Spec|IT)\.(?:java|kt)$"),
+    # Go (standard _test.go suffix)
+    re.compile(r"(?:^|/)[^/]+_test\.go$"),
+    # Ruby (RSpec / Minitest)
+    re.compile(r"(?:^|/)[^/]+_(?:spec|test)\.rb$"),
+    # Dart (flutter / dart test)
+    re.compile(r"(?:^|/)[^/]+_test\.dart$"),
+    # C# (.NET — xUnit, NUnit, MSTest)
+    re.compile(r"(?:^|/)[^/]+(?:Test|Tests|Spec)\.cs$"),
+    re.compile(r"(?:^|/).*\.Tests?/"),          # project directory: Foo.Tests/
+    # C (check / cmocka / Unity)
+    re.compile(r"(?:^|/)test_[^/]+\.(?:c|h)$"),
+    re.compile(r"(?:^|/)[^/]+_test\.(?:c|h)$"),
+    # C++ (Google Test, Catch2, doctest)
+    re.compile(r"(?:^|/)test_[^/]+\.(?:cpp|cc|cxx|hpp)$"),
+    re.compile(r"(?:^|/)[^/]+_test\.(?:cpp|cc|cxx|hpp)$"),
+    re.compile(r"(?:^|/)[^/]+(?:Test|Tests|Spec)\.(?:cpp|cc|cxx)$"),
+    # Generic directory conventions  (tests?/, spec/, __tests__/)
+    re.compile(r"(?:^|/)__tests__/"),
+    re.compile(r"(?:^|/)tests?/"),
+    re.compile(r"(?:^|/)spec/"),
+)
+
+
+def is_test_file(path: str) -> bool:
+    """Return True when *path* follows a recognised test-file naming convention.
+
+    Detection is purely path-based (no file I/O).  Covers Python, JavaScript /
+    TypeScript, Java, Kotlin, Go, Ruby, Dart, C#, C, and C++.
+
+    Examples::
+
+        >>> is_test_file("tests/agent/test_agent_debug_mode.py")
+        True
+        >>> is_test_file("src/code_review/agent/agent.py")
+        False
+        >>> is_test_file("com/example/FooTest.java")
+        True
+        >>> is_test_file("pkg/storage/storage_test.go")
+        True
+        >>> is_test_file("src/components/Button.spec.ts")
+        True
+        >>> is_test_file("Foo.Tests/FooTests.cs")
+        True
+    """
+    normalised = path.replace("\\", "/")
+    return any(p.search(normalised) is not None for p in _TEST_FILE_PATTERNS)
+
 
 def _confidence_from_score(score: float) -> Literal["high", "medium", "low"]:
     """Map numeric confidence 0.0-1.0 to literal using thresholds."""
