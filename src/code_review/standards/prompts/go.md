@@ -5,3 +5,8 @@
 - Flag API contract issues around nil/zero values and exported behavior, not cosmetic gofmt concerns.
 - For HTTP handlers, check that errors returned by `http.ResponseWriter` writes are handled, and that panics are recovered at the handler boundary.
 - For database code, check for missing transaction rollback on error, unclosed rows/statements, and SQL injection via string concatenation.
+- `context.Context` propagation: flag functions that accept a `context.Context` parameter but ignore it (passing `context.Background()` or `context.TODO()` internally instead), breaking cancellation and deadline propagation to callers.
+- HTTP response body leaks: flag `http.Get` / `http.Do` calls where `resp.Body` is not closed via `defer resp.Body.Close()` on all code paths, including error returns where `resp` may be non-nil.
+- `defer` inside loops: flag `defer` calls placed inside a `for` loop body — defers accumulate until the surrounding function returns, not the loop iteration, causing resource leaks and unpredictable cleanup order.
+- `sync.WaitGroup.Add` inside goroutine: flag patterns where `wg.Add(1)` is called inside the body of a `go func()` instead of before the `go` statement. This creates a race condition where `wg.Wait()` can return before the goroutine has registered itself; `Add` must always be called before the corresponding `go` to guarantee the counter is incremented before `Wait` is reached.
+- `rows.Err()` not checked after loop: flag `for rows.Next() { ... }` loops on `database/sql` `Rows` that do not call `rows.Err()` afterwards. `rows.Next()` returns `false` on both exhaustion *and* error; if `rows.Err()` is not checked, a database error is silently ignored and partial data is treated as a complete result.

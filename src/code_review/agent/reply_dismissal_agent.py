@@ -64,6 +64,11 @@ When verdict is "disagreed" because the author only agreed to act later, thank t
 for evidence in the PR, for example: "Thanks for agreeing. Please push the code changes so I can
 re-check this thread."
 
+If the reply addresses part of the concern but leaves a portion unresolved, use "disagreed" and
+spell out precisely what remains unresolved. Do not classify partial progress as "agreed" simply
+because the author made an effort — the full concern must be addressed before the thread can be
+considered resolved.
+
 Stay pragmatic and concise. Do not re-review the entire patch — only this thread."""
 
 

@@ -64,6 +64,7 @@ For each finding you receive you will see:
 - index: integer (used to match your verdict back to the finding)
 - file: the source file path
 - line: the line number in the new-file view
+- severity: the finding severity ("high", "medium", "low", or "nit")
 - message: the reviewer's concern
 - evidence: brief code quote supporting the concern (may be empty)
 - code_snippet: the relevant lines from the diff, with n: line-number annotations
@@ -76,13 +77,48 @@ Output a JSON object {"verdicts": [...]} with one verdict per finding:
   - reason: one concise sentence
 
 Rules:
-- "confirm" when the issue is directly visible in the code_snippet.
-- "reject" when the code_snippet contradicts the concern, or the problem is not
-  observable from the information provided.
-- If genuinely uncertain, prefer "confirm" — a false positive that reaches the
-  pipeline is safer than a real bug that is silently dropped.
+- "confirm" when the snippet supports or is consistent with the concern — not only when
+  the snippet contains direct proof, but also when the concern is plausible given what is visible.
+- "reject" when the code_snippet actively contradicts the concern, or the concern relies on
+  context (e.g. an outer scope, a different file) that is entirely absent from the snippet.
 - Do NOT invent concerns beyond what the message describes.
 - Keep reason to one sentence.
+
+Calibration examples:
+
+Example — REJECT:
+  message: "loop variable `i` shadows outer variable"
+  code_snippet: (shows only one function, no outer scope visible)
+  → verdict: "reject"
+  reason: No outer scope is present in the snippet; the shadowing concern is not observable.
+
+Example — CONFIRM:
+  message: "result list is iterated after .sort() which returns None"
+  code_snippet: "42: x = items.sort()\n43:  for item in x:"
+  → verdict: "confirm"
+  reason: code_snippet directly shows x being assigned None and then iterated.
+
+Example — CONFIRM (uncertainty tie-break):
+  message: "database connection may not be closed on exception path"
+  code_snippet: (shows `conn = db.connect()` but the exception path is not visible)
+  → verdict: "confirm"
+  reason: Concern is plausible and the fix is low-risk; keep it for the author to review.
+
+Example — CONFIRM (security vulnerability with partial evidence):
+  message: "user input interpolated directly into SQL query — SQL injection risk"
+  code_snippet: "87: query = 'SELECT * FROM users WHERE id = ' + user_id"
+  → verdict: "confirm"
+  reason: String concatenation into a SQL query is directly visible in the snippet; this is a well-known injection pattern regardless of how user_id originates.
+
+Severity weighting — adjust your confirmation bar by severity:
+- high / medium: lean toward "confirm" unless the snippet clearly shows the concern is
+  invalid. These findings represent real risk; prefer keeping them.
+- low: "confirm" when the snippet directly supports or is consistent with the claim.
+- nit: "reject" unless the snippet makes the issue unambiguous and easy to verify.
+
+Tie-breaker — when genuinely uncertain after applying the above rules:
+Prefer "confirm". A false positive that reaches the pipeline is safer than a real bug
+that is silently dropped. Apply this only as a last resort, not as the default.
 """
 
 
@@ -353,6 +389,7 @@ def _build_verification_prompt(
             f"index: {local_idx}\n"
             f"file: {finding.path}\n"
             f"line: {finding.line}\n"
+            f"severity: {finding.severity or 'unknown'}\n"
             f"message: {finding.message}\n"
             f"evidence: {finding.evidence or '(none provided)'}\n"
             f"code_snippet:\n{snippet or '(not available)'}\n"

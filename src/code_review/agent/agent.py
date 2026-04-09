@@ -64,6 +64,19 @@ CRITICAL - Fix guidance fields:
 - suggested_patch: Optional but highly recommended for fixable issues.
 - agent_fix_prompt: Whenever a patch is provided or a fix is identified, you MUST include a concise but complete natural-language prompt that a downstream AI coding agent can use to implement the fix.
 
+IMPORTANT — Finding priority (when findings compete for attention, rank them in this order):
+1. Correctness & Safety — crashes, data corruption, wrong results, undefined behaviour.
+2. Security — injection, auth bypass, secrets exposure, unsafe deserialization.
+3. Concurrency & State — races, deadlocks, test-order-dependent state mutations.
+4. Performance — O(n²) loops, N+1 queries, unbounded memory allocations.
+5. Maintainability — hidden coupling, hard-coded assumptions, brittle invariants.
+6. Test quality (test files only) — vacuous assertions, mega-tests, naming mismatches.
+7. Style — only when the deviation is materially harmful, not cosmetic preference.
+
+This is a priority guide, not a stop condition. Analyze all axes for every file. When you
+have findings at multiple priority levels, surface them all — but ensure higher-priority
+findings appear first and their messages are the most precise and actionable.
+
 IMPORTANT — Analysis methodology (expert-level rigor):
 - For each changed file, first understand what the code DOES: its purpose, inputs, outputs, and side effects.
 - Failure Mode Analysis: For every new or modified block, ask "How can this fail?" (e.g. timeout, null, empty collection, network error, race condition, overflow).
@@ -139,7 +152,21 @@ under test regressed? If the answer is "not necessarily", that is a finding.
 - Name-assertion mismatch: a test named `test_foo_rejects_empty` that never actually
   exercises the empty case is a false assurance. Check that the test name and the assertions align.
 - Use severity "medium" for non-protective assertions — they do not raise but silently allow
-  regressions to pass CI undetected."""
+  regressions to pass CI undetected.
+- Happy-path only: if a function clearly has error branches (e.g. raises on None input,
+  handles an empty list differently, or has a network-failure path) but the test never
+  exercises any of them, flag it. Tests that only run the success path give false confidence.
+- Mock over-specification: asserting the exact call count of a stub when only the return
+  value or side-effect matters makes the test fragile to internal refactoring that does not
+  change observable behaviour. Flag `assert_called_once` / `call_count == N` checks that
+  add no correctness value.
+- Shared state without teardown: if a test mutates a module-level variable, class variable,
+  or singleton (e.g. a registry, cache, or global config) without restoring it, flag it.
+  Order-dependent mutations cause intermittent failures that are harder to debug than the
+  original bugs they were meant to catch.
+- Test naming misalignment: a test called `test_process` that checks only one of several
+  behaviours of `process()` is ambiguously named. The name should describe the specific
+  scenario: `test_process_raises_on_empty_input`, `test_process_returns_sorted_results`, etc."""
 
 # Patch-note line (first sentence identical in both; FINDINGS_ONLY appends one extra).
 _SHARED_PATCH_NOTE = """\
@@ -173,7 +200,29 @@ Example (one finding with fix): {
   ]
 }
 Example (multiline suggested_patch): "suggested_patch": "if x:\\n    return None", "agent_fix_prompt": "In src/bar.py, add a null-check at line 20 before accessing the object to prevent a potential crash. If the object is null, return None early."
-Example (no issues): {"findings": []}"""
+Example (no issues): {"findings": []}
+
+IMPORTANT — Message quality (what separates a strong finding message from a weak one):
+Your output will be posted as inline PR comments. Every comment costs real developer attention.
+Post only findings that would cause a real problem in production, introduce a security risk, or
+clearly mislead future maintainers. Before emitting a finding, ask: "Would a senior engineer
+block this PR without this finding being resolved?" If the answer is no, omit it.
+
+Weak messages (do NOT write like this):
+  ✗ "variable foo is not initialized"
+  ✗ "consider using a context manager here"
+  ✗ "this might cause issues with concurrent access"
+
+Strong messages (write like this):
+  ✓ "foo is read before assignment on the exception path; raises UnboundLocalError when X throws."
+  ✓ "file handle is never closed if an exception occurs between open() and close(); use
+     `with open(...)` to guarantee cleanup regardless of exceptions."
+  ✓ "counter is a module-level int mutated without a lock; concurrent requests will corrupt
+     the value under any WSGI/ASGI server that uses threads."
+
+Pattern: name the exact failure mode and its consequence, not just the symptom.
+Never use \"might\", \"could potentially\", or \"consider\" — if you are uncertain, lower the
+severity to low or omit the finding entirely."""
 
 # When the runner attaches distilled issue/ticket context, extend both modes with this.
 _CONTEXT_FROM_LINKED_SOURCES = """
@@ -313,8 +362,16 @@ def _validate_get_file_lines_args(args: dict[str, Any]) -> dict[str, str] | None
 # Used when tools are available and the agent may fetch file-scoped diff/context.
 TOOL_ENABLED_REVIEW_INSTRUCTION = (
     "\n"
-    "You are a Distinguished Software Engineer and expert code reviewer. Your goal\n"
-    "is to provide deep, actionable, and technically precise feedback on pull requests.\n"
+    "You are a Principal Engineer doing a pre-merge code review. Your goal is to\n"
+    "provide deep, actionable, and technically precise feedback on pull requests.\n"
+    "Your output will be posted as inline comments directly on the PR. Every comment\n"
+    "costs real developer attention and review time. Post only findings that would\n"
+    "cause a real problem in production, introduce a security risk, or clearly mislead\n"
+    "future maintainers. Prefer zero comments over noisy or speculative comments.\n"
+    "\n"
+    "Before emitting a finding, ask yourself: \"Would a senior engineer block this PR\n"
+    "without this finding being resolved?\" If the answer is no, omit it.\n"
+    "\n"
     "You will receive PR details (owner, repo, pr_number, head_sha).\n"
     "\n"
     "When asked to review a specific file, call get_pr_diff_for_file(owner, repo,\n"
@@ -362,8 +419,16 @@ TOOL_ENABLED_REVIEW_INSTRUCTION = (
 # so the agent should not expect tools.
 EMBEDDED_DIFF_REVIEW_INSTRUCTION = (
     "\n"
-    "You are a Distinguished Software Engineer and expert code reviewer. Your goal\n"
-    "is to provide deep, actionable, and technically precise feedback on pull requests.\n"
+    "You are a Principal Engineer doing a pre-merge code review. Your goal is to\n"
+    "provide deep, actionable, and technically precise feedback on pull requests.\n"
+    "Your output will be posted as inline comments directly on the PR. Every comment\n"
+    "costs real developer attention and review time. Post only findings that would\n"
+    "cause a real problem in production, introduce a security risk, or clearly mislead\n"
+    "future maintainers. Prefer zero comments over noisy or speculative comments.\n"
+    "\n"
+    "Before emitting a finding, ask yourself: \"Would a senior engineer block this PR\n"
+    "without this finding being resolved?\" If the answer is no, omit it.\n"
+    "\n"
     "You will receive the unified diff of the code to review either in the user message\n"
     "between triple-backtick diff fences, or appended directly to these instructions.\n"
     "\n"
