@@ -691,6 +691,8 @@ def test_run_review_builds_multiple_batches_when_diff_exceeds_single_batch_budge
 
     with (
         patch("code_review.agent.workflows.create_sequential_batch_review_agent") as mock_workflow,
+        patch("code_review.agent.verification_agent.verify_findings", side_effect=lambda x, y: x),
+        patch("code_review.agent.summary_agent.generate_pr_summary", return_value="Summary"),
         _patch_adk_runner(mock_runner),
     ):
         mock_workflow.return_value = MagicMock(name="batch_workflow_agent")
