@@ -104,6 +104,12 @@ Example — CONFIRM (uncertainty tie-break):
   → verdict: "confirm"
   reason: Concern is plausible and the fix is low-risk; keep it for the author to review.
 
+Example — CONFIRM (security vulnerability with partial evidence):
+  message: "user input interpolated directly into SQL query — SQL injection risk"
+  code_snippet: "87: query = 'SELECT * FROM users WHERE id = ' + user_id"
+  → verdict: "confirm"
+  reason: String concatenation into a SQL query is directly visible in the snippet; this is a well-known injection pattern regardless of how user_id originates.
+
 Severity weighting — adjust your confirmation bar by severity:
 - high / medium: lean toward "confirm" unless the snippet clearly shows the concern is
   invalid. These findings represent real risk; prefer keeping them.

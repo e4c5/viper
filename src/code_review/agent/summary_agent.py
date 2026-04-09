@@ -50,6 +50,12 @@ FORMATTING:
 LENGTH:
 - The entire summary MUST be 400 words or fewer. Be ruthlessly concise.
 - If findings are numerous, summarize themes rather than listing every finding individually.
+
+NO-FINDINGS CASE:
+- When the Findings input is "No specific findings identified." (empty findings list), produce a
+  short, positive summary: note that the review found no issues, briefly describe what changed
+  (from the PR metadata), and keep the output to 3-5 sentences. Do NOT invent findings or pad
+  the output with generic advice.
 """
 
 
