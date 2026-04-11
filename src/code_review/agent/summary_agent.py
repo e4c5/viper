@@ -56,6 +56,14 @@ NO-FINDINGS CASE:
   short, positive summary: note that the review found no issues, briefly describe what changed
   (from the PR metadata), and keep the output to 3-5 sentences. Do NOT invent findings or pad
   the output with generic advice.
+
+INCREMENTAL UPDATES:
+If the input includes "Incremental Review Context", this is an incremental update review.
+- Focus your assessment, walkthrough, and narrative summary ONLY on the new changes provided in
+  this run (the specified incremental commits and changed files).
+- Do NOT re-summarize the entire PR or previous commits that are not part of this update.
+- The Narrative Summary should tell the story of THIS specific update (e.g., "This update addresses
+  previous feedback by...", "This commit adds missing validation mentioned in the last review").
 """
 
 
@@ -82,6 +90,8 @@ def generate_pr_summary(
     pr_info: Any,
     findings: list[FindingV1],
     changed_paths: list[str],
+    incremental_base_sha: str = "",
+    incremental_commits: list[str] | None = None,
 ) -> str:
     """Generate a Markdown summary using the summary agent."""
     import uuid
@@ -111,9 +121,24 @@ def generate_pr_summary(
     else:
         findings_summary = "No specific findings identified."
 
+    commits_text = ""
+    if incremental_commits:
+        commits_list = "\n".join(f"  - {msg}" for msg in incremental_commits)
+        commits_text = f"\nIncremental commits in this update:\n{commits_list}"
+
+    incremental_context = ""
+    if incremental_base_sha or incremental_commits:
+        base_ref = (
+            f"from {incremental_base_sha[:12]}" if incremental_base_sha else "from unknown base"
+        )
+        incremental_context = f"\nIncremental Review Context: {base_ref}{commits_text}\n"
+
+    pr_desc = getattr(pr_info, "description", "").strip()
+    description_part = f"PR Description: {pr_desc}\n" if pr_desc else ""
+
     prompt = f"""\
 PR Title: {getattr(pr_info, 'title', 'Unknown')}
-PR Description: {getattr(pr_info, 'description', 'No description provided')}
+{description_part}{incremental_context}
 Changed Files: {', '.join(changed_paths)}
 
 Findings:

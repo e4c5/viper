@@ -160,3 +160,35 @@ def test_finding_to_comment_body_strips_dst_prefix_from_message_and_prompt():
     body = finding_to_comment_body(f, use_collapsible_prompt=False)
     assert "dst://" not in body
     assert "In src/foo.py at line 1" in body or "In the file src/foo.py at line 1" in body
+
+def test_finding_to_comment_body_structured_prompt():
+    """Verify the structured prompt includes preamble, metadata, and postamble."""
+    f = FindingV1(
+        path="src/logic.py",
+        line=10,
+        end_line=12,
+        severity="medium",
+        code="complex-logic",
+        message="Refactor this.",
+        agent_fix_prompt="Simplify the if-else chain.",
+    )
+    body = finding_to_comment_body(f)
+    
+    # Check preamble
+    assert "_Review observation from Viper_" in body
+    
+    # Check labels and values
+    assert "**File:** `src/logic.py`" in body
+    assert "**Lines:** 10-12" in body
+    
+    # Check Instruction header
+    assert "**Instruction:**" in body
+    assert "Simplify the if-else chain." in body
+    
+    # Check postamble
+    assert "Please confirm the validity of this finding." in body
+    assert "The implementation should be as concise as possible" in body
+    
+    # Verify collapsible tags
+    assert "<details>" in body
+    assert "<summary>Prompt for AI Agents</summary>" in body

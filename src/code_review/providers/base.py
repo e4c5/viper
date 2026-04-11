@@ -661,6 +661,21 @@ class ProviderInterface(ABC):
         """
         return []
 
+    def get_incremental_pr_commit_messages(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> list[str]:
+        """
+        Return commit messages for the incremental review range ``base_sha..head_sha``.
+
+        Default fallback returns an empty list.
+        """
+        return []
+
     def get_bot_blocking_state(self, owner: str, repo: str, pr_number: int) -> BotBlockingState:
         """Return whether the token/integration user currently blocks merge via review state.
 

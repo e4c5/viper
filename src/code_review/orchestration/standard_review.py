@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from code_review import orchestration_deps as runner_mod
@@ -311,6 +312,244 @@ class StandardReviewHandler:
             run_observability.finish(self.pr_ctx, [], [], [])
             raise
 
+    def _check_early_exits(
+        self,
+        provider: ProviderInterface,
+        cfg: Any,
+        llm_cfg: Any,
+        run_observability: ReviewRunObservability,
+        skip_if_needed: Callable[..., list[FindingV1] | None],
+        compute_idempotency_and_maybe_short_circuit: Callable[..., list[FindingV1] | None],
+        incremental_base_sha_fn: Callable[[Any, str], str],
+        comment_mgr: CommentManager,
+    ) -> tuple[list[FindingV1] | None, str]:
+        """Check for skip-status or idempotency short-circuits."""
+        skip_result = skip_if_needed(provider, cfg, run_observability)
+        if skip_result is not None:
+            return skip_result, ""
+
+        comment_mgr.load_existing_comments(provider, self.owner, self.repo, self.pr_number)
+        existing_dicts = [c.model_dump() for c in comment_mgr.existing_comments]
+        incremental_base_sha = incremental_base_sha_fn(cfg, self.head_sha)
+
+        idempotency_result = compute_idempotency_and_maybe_short_circuit(
+            cfg,
+            llm_cfg,
+            existing_dicts,
+            run_observability,
+            incremental_base_sha=incremental_base_sha,
+        )
+        if idempotency_result is not None:
+            logger.info("Skipping run (idempotent: same review range/config already reviewed)")
+            return idempotency_result, incremental_base_sha
+
+        return None, incremental_base_sha
+
+    @dataclass
+    class _ReviewEnv:
+        files: list[FileInfo]
+        paths: list[str]
+        full_diff: str
+        incremental_base_sha: str
+        pr_info: PRInfo | None
+        early_exit_result: list[FindingV1] | None = None
+
+    def _setup_review_environment(
+        self,
+        provider: ProviderInterface,
+        cfg: Any,
+        run_observability: ReviewRunObservability,
+        incremental_base_sha_fn: Callable[[Any, str], str],
+    ) -> _ReviewEnv:
+        """Fetch files, diffs, and PR metadata; handle empty scope."""
+        ctx_cfg = runner_mod.get_context_aware_config()
+        self.validate_context_sources_or_raise(ctx_cfg, cfg, run_observability)
+
+        pr_info = provider.get_pr_info(self.owner, self.repo, self.pr_number)
+        files, paths, full_diff, incremental_base_sha = self.fetch_review_files_and_diffs(
+            provider,
+            cfg,
+            incremental_base_sha_fn=incremental_base_sha_fn,
+        )
+        self.log_review_scope_fetch(incremental_base_sha, self.head_sha, paths)
+
+        empty_scope_result = self.review_decision_handler.maybe_finish_empty_scope_review(
+            provider, cfg, self.head_sha, run_observability, paths, pr_info
+        )
+        if empty_scope_result is not None:
+            return self._ReviewEnv([], [], "", "", None, early_exit_result=empty_scope_result)
+
+        if not self.dry_run:
+            CommentPoster(provider, self.pr_ctx).post_started_review_comment(pr_info, paths)
+
+        return self._ReviewEnv(files, paths, full_diff, incremental_base_sha, pr_info)
+
+    @dataclass
+    class _ReviewExecution:
+        all_findings: list[FindingV1]
+        context_brief_attached: bool
+        prompt_suffix: str
+        early_exit_result: list[FindingV1] | None = None
+
+    def _execute_review_agent(
+        self,
+        provider: ProviderInterface,
+        cfg: Any,
+        app_cfg: Any,
+        run_observability: ReviewRunObservability,
+        env: _ReviewEnv,
+        review_standards: Any,
+    ) -> _ReviewExecution:
+        """Handle batching, prompt enrichment, and running the review agent."""
+        context_window = runner_mod.get_context_window()
+        batch_budget = build_review_batch_budget(
+            context_window_tokens=context_window,
+            max_output_tokens=runner_mod.get_max_output_tokens(),
+            diff_budget_ratio=runner_mod.DIFF_TOKEN_BUDGET_RATIO,
+        )
+        diff_budget = batch_budget.effective_diff_budget_tokens
+        remaining_prompt_tokens = batch_budget.prompt_budget_tokens
+
+        ctx_cfg = runner_mod.get_context_aware_config()
+        refs, context_brief, prompt_suffix = self.context_enricher.build_prompt_suffix(
+            provider, cfg, ctx_cfg, app_cfg, env.pr_info, env.full_diff, remaining_prompt_tokens
+        )
+        self.log_context_aware_prompt_inputs(refs, context_brief)
+
+        batches = execution_mod.build_review_batches_for_scope(
+            env.files, env.paths, env.full_diff, diff_budget
+        )
+        context_brief_attached = bool(context_brief and _CONTEXT_TAG in prompt_suffix)
+        execution_mod.log_review_batch_plan(batches, env.paths, env.incremental_base_sha)
+
+        if not batches:
+            logger.info("Prepared zero review batches from the scoped diff; skipping LLM run")
+            return self._ReviewExecution(
+                [],
+                context_brief_attached,
+                prompt_suffix,
+                early_exit_result=self._result_builder(
+                    run_observability,
+                    env.paths,
+                    [],
+                    0,
+                    [],
+                    context_brief_attached=context_brief_attached,
+                ),
+            )
+
+        review_visible_lines = bool(getattr(app_cfg, "review_visible_lines", False))
+        session_id, _session_service, runner = execution_mod.create_agent_and_runner(
+            self.pr_ctx,
+            provider,
+            review_standards,
+            batches,
+            context_brief_attached=context_brief_attached,
+            review_visible_lines=review_visible_lines,
+        )
+        all_findings = execution_mod.run_agent_and_collect_findings(
+            self.pr_ctx,
+            provider,
+            review_standards,
+            runner,
+            session_id,
+            batches,
+            context_brief_attached=context_brief_attached,
+            prompt_suffix=prompt_suffix,
+            review_visible_lines=review_visible_lines,
+        )
+        return self._ReviewExecution(all_findings, context_brief_attached, prompt_suffix)
+
+    def _refine_findings_funnel(
+        self,
+        provider: ProviderInterface,
+        app_cfg: Any,
+        env: _ReviewEnv,
+        comment_mgr: CommentManager,
+        all_findings: list[FindingV1],
+    ) -> list[tuple[FindingV1, bool]]:
+        """Filter by scope, deduplicate, and verify findings."""
+        llm_returned_count = len(all_findings)
+        review_visible_lines = bool(getattr(app_cfg, "review_visible_lines", False))
+
+        findings = self.filter_findings_by_diff_scope(
+            all_findings, env.paths, env.full_diff, review_visible_lines=review_visible_lines
+        )
+        after_scope_count = len(findings)
+
+        to_post = comment_mgr.filter_duplicates(
+            findings,
+            self.make_fingerprint_fn(provider),
+            use_collapsible_prompt=provider.capabilities().markup_supports_collapsible,
+        )
+        after_unique_count = len(to_post)
+
+        try:
+            from code_review.agent.verification_agent import verify_findings
+
+            to_verify = [f for f, _ in to_post]
+            verified_findings = verify_findings(to_verify, env.full_diff)
+            verified_set = set(verified_findings)
+            to_post = [item for item in to_post if item[0] in verified_set]
+        except Exception as exc:
+            logger.warning("Verification agent step failed; proceeding without it: %s", exc)
+
+        after_verification_count = len(to_post)
+        logger.info(
+            "Funnel: LLM=%d → Scoped=%d → Unique=%d → Verified=%d",
+            llm_returned_count,
+            after_scope_count,
+            after_unique_count,
+            after_verification_count,
+        )
+        return to_post
+
+    def _maybe_generate_and_post_summary(
+        self,
+        provider: ProviderInterface,
+        env: _ReviewEnv,
+        to_post: list[tuple[FindingV1, bool]],
+    ) -> None:
+        """Generate and post a PR summary for non-dry-run reviews with findings."""
+        if self.dry_run or not to_post:
+            return
+
+        try:
+            from code_review.agent.summary_agent import create_summary_agent, generate_pr_summary
+
+            incremental_commits: list[str] | None = None
+            if env.incremental_base_sha and self.head_sha:
+                try:
+                    incremental_commits = provider.get_incremental_pr_commit_messages(
+                        self.owner, self.repo, self.pr_number, env.incremental_base_sha, self.head_sha
+                    )
+                except Exception as e:
+                    logger.warning("Failed to fetch incremental commit messages: %s", e)
+
+            pr_info_for_summary = env.pr_info
+            if (
+                env.incremental_base_sha
+                and pr_info_for_summary
+                and hasattr(pr_info_for_summary, "model_copy")
+            ):
+                # For incremental reviews, scrub the full PR description to avoid summary-drift
+                # toward the full PR context.
+                pr_info_for_summary = pr_info_for_summary.model_copy(update={"description": ""})
+
+            posted_findings = [f for f, _ in to_post]
+            summary_agent = create_summary_agent()
+            summary_text = generate_pr_summary(
+                summary_agent,
+                pr_info_for_summary,
+                posted_findings,
+                env.paths,
+                incremental_base_sha=env.incremental_base_sha,
+                incremental_commits=incremental_commits,
+            )
+            CommentPoster(provider, self.pr_ctx).post_pr_summary(summary_text)
+        except Exception as e:
+            logger.warning("Failed to generate/post PR summary: %s", e)
+
     @staticmethod
     def log_review_scope_fetch(incremental_base_sha: str, head_sha: str, paths: list[str]) -> None:
         """Emit a concise log line describing the fetched review scope."""
@@ -355,161 +594,57 @@ class StandardReviewHandler:
             pr_url,
         )
         print(f"Starting review for PR: {pr_url}")
-        skip_result = skip_if_needed(provider, cfg, run_observability)
-        if skip_result is not None:
-            return skip_result
+
         comment_mgr = CommentManager()
-        comment_mgr.load_existing_comments(provider, self.owner, self.repo, self.pr_number)
-        existing = comment_mgr.existing_comments
-        existing_dicts = [c.model_dump() for c in existing]
-        incremental_base_sha = incremental_base_sha_fn(cfg, self.head_sha)
-        idempotency_result = compute_idempotency_and_maybe_short_circuit(
+        early_exit_result, _ = self._check_early_exits(
+            provider,
             cfg,
             llm_cfg,
-            existing_dicts,
             run_observability,
-            incremental_base_sha=incremental_base_sha,
+            skip_if_needed,
+            compute_idempotency_and_maybe_short_circuit,
+            incremental_base_sha_fn,
+            comment_mgr,
         )
-        if idempotency_result is not None:
-            logger.info("Skipping run (idempotent: same review range/config already reviewed)")
-            return idempotency_result
-        ctx_cfg = runner_mod.get_context_aware_config()
-        self.validate_context_sources_or_raise(ctx_cfg, cfg, run_observability)
-        pr_info_for_metadata = provider.get_pr_info(self.owner, self.repo, self.pr_number)
-        files, paths, full_diff, incremental_base_sha = self.fetch_review_files_and_diffs(
-            provider,
-            cfg,
-            incremental_base_sha_fn=incremental_base_sha_fn,
-        )
-        self.log_review_scope_fetch(incremental_base_sha, self.head_sha, paths)
-        empty_scope_result = self.review_decision_handler.maybe_finish_empty_scope_review(
-            provider,
-            cfg,
-            self.head_sha,
-            run_observability,
-            paths,
-            pr_info_for_metadata,
-        )
-        if empty_scope_result is not None:
-            return empty_scope_result
-        if not self.dry_run:
-            CommentPoster(provider, self.pr_ctx).post_started_review_comment(
-                pr_info_for_metadata, paths
-            )
-        _, review_standards = self.detect_languages_for_files(paths)
-        context_window = runner_mod.get_context_window()
-        batch_budget = build_review_batch_budget(
-            context_window_tokens=context_window,
-            max_output_tokens=runner_mod.get_max_output_tokens(),
-            diff_budget_ratio=runner_mod.DIFF_TOKEN_BUDGET_RATIO,
-        )
-        diff_budget = batch_budget.effective_diff_budget_tokens
-        remaining_prompt_tokens = batch_budget.prompt_budget_tokens
-        refs, context_brief, prompt_suffix = self.context_enricher.build_prompt_suffix(
-            provider,
-            cfg,
-            ctx_cfg,
-            app_cfg,
-            pr_info_for_metadata,
-            full_diff,
-            remaining_prompt_tokens,
-        )
-        self.log_context_aware_prompt_inputs(refs, context_brief)
-        batches = execution_mod.build_review_batches_for_scope(files, paths, full_diff, diff_budget)
-        context_brief_attached = bool(context_brief and _CONTEXT_TAG in prompt_suffix)
-        execution_mod.log_review_batch_plan(batches, paths, incremental_base_sha)
-        if not batches:
-            logger.info("Prepared zero review batches from the scoped diff; skipping LLM run")
-            return self._result_builder(
-                run_observability,
-                paths,
-                [],
-                0,
-                [],
-                context_brief_attached=context_brief_attached,
-            )
-        review_visible_lines = bool(getattr(app_cfg, "review_visible_lines", False))
-        session_id, _session_service, runner = execution_mod.create_agent_and_runner(
-            self.pr_ctx,
-            provider,
-            review_standards,
-            batches,
-            context_brief_attached=context_brief_attached,
-            review_visible_lines=review_visible_lines,
-        )
-        all_findings = execution_mod.run_agent_and_collect_findings(
-            self.pr_ctx,
-            provider,
-            review_standards,
-            runner,
-            session_id,
-            batches,
-            context_brief_attached=context_brief_attached,
-            prompt_suffix=prompt_suffix,
-            review_visible_lines=review_visible_lines,
-        )
-        llm_returned_count = len(all_findings)
-        all_findings = self.filter_findings_by_diff_scope(
-            all_findings,
-            paths,
-            full_diff,
-            review_visible_lines=bool(getattr(app_cfg, "review_visible_lines", False)),
-        )
-        after_scope_count = len(all_findings)
+        if early_exit_result is not None:
+            return early_exit_result
 
-        to_post = comment_mgr.filter_duplicates(
-            all_findings,
-            self.make_fingerprint_fn(provider),
-            use_collapsible_prompt=provider.capabilities().markup_supports_collapsible,
+        env = self._setup_review_environment(
+            provider, cfg, run_observability, incremental_base_sha_fn
         )
-        after_unique_count = len(to_post)
+        if env.early_exit_result is not None:
+            return env.early_exit_result
 
-        try:
-            from code_review.agent.verification_agent import verify_findings
-            # Verification now only runs on findings we actually intend to post,
-            # saving LLM calls for duplicates.
-            to_verify = [f for f, _ in to_post]
-            verified_findings = verify_findings(to_verify, full_diff)
-            verified_set = set(verified_findings)
-            to_post = [item for item in to_post if item[0] in verified_set]
-        except Exception as exc:
-            logger.warning("Verification agent step failed; proceeding without it: %s", exc)
-        after_verification_count = len(to_post)
-
-        logger.info(
-            "Funnel: LLM=%d → Scoped=%d → Unique=%d → Verified=%d",
-            llm_returned_count,
-            after_scope_count,
-            after_unique_count,
-            after_verification_count,
+        _, review_standards = self.detect_languages_for_files(env.paths)
+        execution = self._execute_review_agent(
+            provider, cfg, app_cfg, run_observability, env, review_standards
         )
+        if execution.early_exit_result is not None:
+            return execution.early_exit_result
+
+        to_post = self._refine_findings_funnel(
+            provider, app_cfg, env, comment_mgr, execution.all_findings
+        )
+
         self.print_findings_summary(self.print_findings, to_post)
         successful_post_count = self.post_findings_and_summary(
             provider,
-            incremental_base_sha,
+            env.incremental_base_sha,
             to_post,
             cfg,
             llm_cfg,
-            existing,
-            full_diff=full_diff,
+            comment_mgr.existing_comments,
+            full_diff=env.full_diff,
         )
-        posted_findings = [f for f, _ in to_post]
-        if not self.dry_run and to_post:
-            try:
-                from code_review.agent.summary_agent import create_summary_agent, generate_pr_summary
-                summary_agent = create_summary_agent()
-                summary_text = generate_pr_summary(
-                    summary_agent, pr_info_for_metadata, posted_findings, paths
-                )
-                CommentPoster(provider, self.pr_ctx).post_pr_summary(summary_text)
-            except Exception as e:
-                logger.warning("Failed to generate/post PR summary: %s", e)
+
+        self._maybe_generate_and_post_summary(provider, env, to_post)
+
         self.log_post_counts(self.dry_run, len(to_post), successful_post_count)
         return self._result_builder(
             run_observability,
-            paths,
-            all_findings,
+            env.paths,
+            execution.all_findings,
             successful_post_count,
             to_post,
-            context_brief_attached=context_brief_attached,
+            context_brief_attached=execution.context_brief_attached,
         )

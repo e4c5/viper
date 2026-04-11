@@ -991,6 +991,39 @@ class GitHubProvider(ProviderInterface):
                 out.append(msg)
         return out
 
+    def get_incremental_pr_commit_messages(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> list[str]:
+        if not self._sha_guard_passes(base_sha, head_sha):
+            return []
+        return self._get_incremental_pr_commit_messages(owner, repo, pr_number, base_sha, head_sha)
+
+    def _get_incremental_pr_commit_messages(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        base_sha: str,
+        head_sha: str,
+    ) -> list[str]:
+        """Return commit messages for the incremental compare range ``base_sha...head_sha``."""
+        comparison = self._get_incremental_compare(owner, repo, pr_number, base_sha, head_sha)
+        if comparison is None:
+            return self.get_pr_commit_messages(owner, repo, pr_number)
+
+        commits = getattr(comparison, "commits", [])
+        out: list[str] = []
+        for item in commits:
+            msg = self._github_commit_message(item)
+            if msg:
+                out.append(msg)
+        return out
+
     def get_pr_info(self, owner: str, repo: str, pr_number: int) -> PRInfo | None:
         """Return PR title, labels, and description for skip-review and metadata."""
         try:

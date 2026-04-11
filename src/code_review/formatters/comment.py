@@ -85,16 +85,41 @@ def finding_to_comment_body(
     # Optionally append block containing an agent fix prompt, when provided.
     if f.agent_fix_prompt:
         prompt_text = _strip_path_prefixes(f.agent_fix_prompt)
+        line_range = str(f.line)
+        if f.end_line and f.end_line != f.line:
+            line_range = f"{f.line}-{f.end_line}"
+
+        # Standard Viper prompt components
+        clean_path = _strip_path_prefixes(f.path)
+        preamble = "_Review observation from Viper_"
+        meta = f"**File:** `{clean_path}`\n**Lines:** {line_range}"
+        postamble = (
+            "Please confirm the validity of this finding. If correct, use the "
+            "instruction above to guide a fix. The implementation should be as "
+            "concise as possible while resolving the issue."
+        )
+
         if use_collapsible_prompt:
             prompt_block = (
                 "\n\n"
                 "<details>\n"
                 "<summary>Prompt for AI Agents</summary>\n\n"
-                f"{prompt_text}\n"
+                f"{preamble}\n\n"
+                f"{meta}\n\n"
+                "**Instruction:**\n"
+                f"{prompt_text}\n\n"
+                "---\n"
+                f"_{postamble}_\n"
                 "</details>"
             )
         else:
-            prompt_block = f"\n\n---\n**Prompt for AI Agents**\n\n{prompt_text}"
+            prompt_block = (
+                "\n\n---\n**Prompt for AI Agents**\n\n"
+                f"{preamble}\n\n"
+                f"{meta}\n\n"
+                f"{prompt_text}\n\n"
+                f"_{postamble}_"
+            )
         return main + prompt_block
 
     return main
