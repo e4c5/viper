@@ -41,10 +41,11 @@ _SHARED_LINE_NUMBER_RULES = """\
   Use that integer ``n`` as the ``line`` value (e.g. 42) in your findings.
   Do NOT emit the ``n:`` tag itself as the line value; extract only the number.
   Do NOT compute line numbers yourself from the hunk headers.
-- Only report findings for added ``+`` lines with a ``n:`` annotation.
-  Do NOT report findings on context `` `` lines or removed ``-`` lines.
-- If the exact line containing the issue is not an added ``+`` line with a ``n:``
-  annotation, drop the finding entirely. Do NOT shift it to the nearest annotated line."""
+- By default, only report findings for added ``+`` lines with a ``n:`` annotation.
+  Do NOT report findings on context `` `` lines unless a later LINE-SCOPE OVERRIDE explicitly allows them.
+  Removed ``-`` lines are always invalid.
+- If the exact line containing the issue is not permitted by the active line-scope rules,
+  drop the finding entirely. Do NOT shift it to the nearest annotated line."""
 
 _VISIBLE_LINE_SCOPE_OVERRIDE = """\
 LINE-SCOPE OVERRIDE:
