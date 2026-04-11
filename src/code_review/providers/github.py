@@ -1000,22 +1000,21 @@ class GitHubProvider(ProviderInterface):
         head_sha: str,
     ) -> list[str]:
         if not self._sha_guard_passes(base_sha, head_sha):
-            return self.get_pr_commit_messages(owner, repo, pr_number)
-        return self._get_incremental_pr_commit_messages(owner, repo, base_sha, head_sha)
+            return []
+        return self._get_incremental_pr_commit_messages(owner, repo, pr_number, base_sha, head_sha)
 
     def _get_incremental_pr_commit_messages(
         self,
         owner: str,
         repo: str,
+        pr_number: int,
         base_sha: str,
         head_sha: str,
     ) -> list[str]:
         """Return commit messages for the incremental compare range ``base_sha...head_sha``."""
-        try:
-            comparison = self._client().get_repo(owner, repo).compare(base_sha, head_sha)
-        except GithubException as e:
-            logger.error("GitHub incremental compare for commits failed: %s", e)
-            raise
+        comparison = self._get_incremental_compare(owner, repo, pr_number, base_sha, head_sha)
+        if comparison is None:
+            return self.get_pr_commit_messages(owner, repo, pr_number)
 
         commits = getattr(comparison, "commits", [])
         out: list[str] = []

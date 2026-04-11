@@ -105,7 +105,7 @@ def test_generate_pr_summary_non_incremental_prompt():
         mock_event.is_final_response.return_value = True
         mock_event.author = "summary_agent"
         mock_event.content.parts = [MagicMock(text="Summary Text")]
-        mock_runner.run.value = [mock_event]
+        mock_runner.run.return_value = [mock_event]
         # Also mock run_async for completeness if it's used elsewhere
         mock_runner.run_async.return_value = MagicMock()
 
