@@ -596,7 +596,7 @@ class StandardReviewHandler:
         print(f"Starting review for PR: {pr_url}")
 
         comment_mgr = CommentManager()
-        early_exit_result, incremental_base_sha = self._check_early_exits(
+        early_exit_result, _ = self._check_early_exits(
             provider,
             cfg,
             llm_cfg,

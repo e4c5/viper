@@ -65,7 +65,7 @@ def test_generate_pr_summary_incremental_unknown_base():
     findings = []
     changed_paths = ["file.py"]
     
-    with patch("google.adk.runners.Runner") as mock_runner_cls, \
+    with patch("google.adk.runners.Runner") as _, \
          patch("code_review.orchestration.runner_utils._run_agent_and_collect_response") as mock_run:
         
         mock_run.return_value = "Summary Text"
