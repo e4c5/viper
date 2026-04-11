@@ -269,7 +269,7 @@ class StandardReviewHandler:
             return findings
         added_lines = runner_mod._added_lines_in_diff(full_diff)
         if not added_lines:
-            return findings
+            return []
         line_filtered: list[FindingV1] = []
         for finding in findings:
             norm_path = runner_mod._normalize_path_for_anchor(finding.path or "")
