@@ -95,9 +95,9 @@ class GitHubProvider(ProviderInterface):
         try:
             comparison = self._client().get_repo(owner, repo).compare(base_sha, head_sha)
         except GithubException as e:
-            logger.error(
+            logger.warning(
                 "GitHub incremental compare metadata failed owner=%s repo=%s pr=%s "
-                "base=%s head=%s: %s",
+                "base=%s head=%s: %s; falling back to full PR review",
                 owner,
                 repo,
                 pr_number,
@@ -105,7 +105,7 @@ class GitHubProvider(ProviderInterface):
                 head_sha,
                 e,
             )
-            raise
+            return None
         if self._comparison_files_truncated(comparison):
             logger.warning(
                 "GitHub incremental compare metadata hit the %s-file compare limit "
