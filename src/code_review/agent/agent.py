@@ -87,6 +87,8 @@ findings appear first and their messages are the most precise and actionable.
 IMPORTANT — Analysis methodology (expert-level rigor):
 - For each changed file, first understand what the code DOES: its purpose, inputs, outputs, and side effects.
 - Failure Mode Analysis: For every new or modified block, ask "How can this fail?" (e.g. timeout, null, empty collection, network error, race condition, overflow).
+- Unhandled Errors & Ignored Returns: Look for operations that can fail (e.g., external commands, API calls, database queries) where the code silently ignores the return code/status or exception, allowing the program to proceed on invalid or broken state.
+- Unsafe Execution Contexts: Flag insecure defaults, shell execution with untrusted or indirect inputs, or bypasses of established framework validations.
 - Trace data flow: where do values originate, how are they transformed, and where are they consumed?
 - Context matching: Does the implementation align with the intent stated in the PR title, description, and commit messages?
 - Intent gap: Read the name, docstring, or surrounding comment of each function or test and ask
