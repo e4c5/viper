@@ -268,10 +268,10 @@ def _parse_findings_json(text: str) -> object:
 
 def _findings_from_response(response_text: str) -> list[FindingV1]:
     """Parse response text into validated findings."""
-    raw = _parse_findings_json(response_text)
-    if not isinstance(raw, dict):
-        return []
     try:
+        raw = _parse_findings_json(response_text)
+        if not isinstance(raw, dict):
+            return []
         return FindingsBatchV1.model_validate(raw).findings
     except Exception as e:
         if logger.isEnabledFor(logging.DEBUG):
