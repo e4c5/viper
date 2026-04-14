@@ -375,7 +375,7 @@ TOOL_ENABLED_REVIEW_INSTRUCTION = (
     "Your output will be posted as inline comments directly on the PR. Every comment\n"
     "costs real developer attention and review time. Focus findings that would\n"
     "cause a real problem in production, introduce a security risk, or clearly mislead\n"
-    "future maintainers.  comments over noisy or speculative comments.\n"
+    "future maintainers.\n"
     "\n"
     "Before emitting a finding, ask yourself: \"Would a senior engineer block this PR\n"
     "without this finding being resolved?\" If the answer is no, omit it.\n"

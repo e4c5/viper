@@ -25,7 +25,7 @@ def parse_github_pr_url(url: str) -> tuple[str, str, int]:
             return parts[0], parts[1], int(parts[3])
     except Exception:
         pass
-    raise ValueError(f"Invalid GitHub PR URL. Expected format: https://github.com/owner/repo/pull/123")
+    raise ValueError("Invalid GitHub PR URL. Expected format: https://github.com/owner/repo/pull/123")
 
 def create_signature(payload_bytes: bytes, secret: str) -> str:
     """Generate the GitHub X-Hub-Signature-256 header value."""
