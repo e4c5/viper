@@ -1146,3 +1146,101 @@ def test_build_review_batches_for_scope_falls_back_when_diff_budget_is_zero():
     assert len(batches) == 1
     assert len(batches[0].segments) == 1
     assert batches[0].segments[0].estimated_tokens > 0
+
+
+# --- Multiline suggested_patch enforcement at post_inline ---
+
+
+def test_post_inline_strips_multiline_patch_when_platform_does_not_support_it():
+    """When supports_multiline_suggestions=False, a multiline patch is cleared before posting.
+
+    This is the defensive enforcement layer — the LLM prompt already discourages multiline
+    patches on these platforms, but this ensures a rogue patch can never reach the API.
+    """
+    from code_review.models import PRContext
+    from code_review.orchestration.posting import CommentPoster
+    from code_review.providers.base import ProviderCapabilities
+    from code_review.schemas.findings import FindingV1
+
+    provider = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        supports_suggestions=True,
+        supports_multiline_suggestions=False,  # e.g. Bitbucket Cloud / Server
+    )
+
+    finding = FindingV1(
+        path="src/foo.py",
+        line=10,
+        severity="medium",
+        code="bad-indent",
+        message="Fix indentation.",
+        suggested_patch="    if x:\n        return None",  # multiline — should be stripped
+    )
+
+    poster = CommentPoster(
+        provider=provider,
+        pr_ctx=PRContext("o", "r", 1, head_sha="abc123"),
+    )
+
+    captured_comments: list = []
+
+    def _capture_post(_owner, _repo, _pr, comments, **_kw):
+        captured_comments.extend(comments)
+
+    provider.post_review_comments.side_effect = _capture_post
+
+    poster.post_inline(
+        incremental_base_sha="",
+        to_post=[(finding, "fp-abc")],
+        cfg=MagicMock(provider="bitbucket"),
+        llm_cfg=MagicMock(),
+    )
+
+    assert len(captured_comments) == 1
+    assert captured_comments[0].suggested_patch is None
+
+
+def test_post_inline_preserves_single_line_patch_when_platform_does_not_support_multiline():
+    """Single-line patches must NOT be stripped even when supports_multiline_suggestions=False."""
+    from code_review.models import PRContext
+    from code_review.orchestration.posting import CommentPoster
+    from code_review.providers.base import ProviderCapabilities
+    from code_review.schemas.findings import FindingV1
+
+    provider = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        supports_suggestions=True,
+        supports_multiline_suggestions=False,
+    )
+
+    finding = FindingV1(
+        path="src/foo.py",
+        line=10,
+        severity="medium",
+        code="rename-var",
+        message="Rename variable.",
+        suggested_patch="    user_id = request.user_id",  # single-line — must be kept
+    )
+
+    poster = CommentPoster(
+        provider=provider,
+        pr_ctx=PRContext("o", "r", 1, head_sha="abc123"),
+    )
+
+    captured_comments: list = []
+
+    def _capture_post(_owner, _repo, _pr, comments, **_kw):
+        captured_comments.extend(comments)
+
+    provider.post_review_comments.side_effect = _capture_post
+
+    poster.post_inline(
+        incremental_base_sha="",
+        to_post=[(finding, "fp-xyz")],
+        cfg=MagicMock(provider="bitbucket"),
+        llm_cfg=MagicMock(),
+    )
+
+    assert len(captured_comments) == 1
+    assert captured_comments[0].suggested_patch == "    user_id = request.user_id"
+

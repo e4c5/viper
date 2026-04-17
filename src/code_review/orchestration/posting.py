@@ -263,13 +263,26 @@ class CommentPoster:
             if added_set:
                 norm_path = _normalize_path_for_anchor(f.path)
                 line_type = "ADDED" if (norm_path, f.line) in added_set else "CONTEXT"
+            patch = f.suggested_patch
+            if (
+                patch
+                and not caps.supports_multiline_suggestions
+                and len(patch.splitlines()) > 1
+            ):
+                logger.warning(
+                    "Stripping multiline suggested_patch from %s:%d: "
+                    "platform does not support multiline suggestions",
+                    f.path,
+                    f.line,
+                )
+                patch = None
             comments.append(
                 InlineComment(
                     path=f.path,
                     line=f.line,
                     body=body,
                     end_line=f.end_line,
-                    suggested_patch=f.suggested_patch,
+                    suggested_patch=patch,
                     line_type=line_type,
                 )
             )
