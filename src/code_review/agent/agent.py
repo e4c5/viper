@@ -180,7 +180,13 @@ under test regressed? If the answer is "not necessarily", that is a finding.
 # Patch-note line (first sentence identical in both; FINDINGS_ONLY appends one extra).
 _SHARED_PATCH_NOTE = """\
 For suggested_patch (and all string fields): use \\n for newlines inside the JSON string so the
-output is valid JSON; do not put literal line breaks inside string values."""
+output is valid JSON; do not put literal line breaks inside string values.
+CRITICAL — Indentation in suggested_patch: The patch content MUST preserve the exact leading
+whitespace (spaces or tabs) of the original line(s) it replaces.  The diff annotation shows
+you the full line including its indentation (e.g. ``42:+    return x`` means the line starts
+with four spaces).  Your suggested_patch must start with the same four spaces:
+``    return y``, NOT ``return y``.  Dropping indentation will produce syntactically broken
+code in Python, YAML, and every other indentation-sensitive language."""
 
 # agent_fix_prompt guidance + output examples — identical in both modes.
 _SHARED_AGENT_FIX_AND_EXAMPLES = """\
@@ -191,7 +197,8 @@ Your agent_fix_prompt must:
 - Include any relevant project-specific constraints or context.
 - Be descriptive and helpful, providing enough detail for an AI agent to act without ambiguity.
 
-Example (one finding with fix): {
+Example (one finding with fix — note the patch includes its 4-space indent, matching the diff
+line ``42:+    foo = request.user_id`` which also starts with 4 spaces): {
   "findings": [
     {
       "path": "src/foo.py",
@@ -203,12 +210,14 @@ Example (one finding with fix): {
       "message": "Rename variable foo to user_id for clarity.",
       "evidence": "The assignment uses the generic name foo even though request.user_id is the value.",
       "anchor": "foo = request.user_id",
-      "suggested_patch": "user_id = request.user_id",
+      "suggested_patch": "    user_id = request.user_id",
       "agent_fix_prompt": "Rename the variable `foo` to `user_id` on line 42 of src/foo.py to better reflect its content (a user identifier from the request object). This improves code readability and ensures the variable name aligns with its actual usage."
     }
   ]
 }
-Example (multiline suggested_patch): "suggested_patch": "if x:\\n    return None", "agent_fix_prompt": "In src/bar.py, add a robust null-check for the object at line 20 before any member access to prevent a potential crash. If the object is null, the function should return `None` early to maintain system stability."
+Example (multiline suggested_patch — both lines carry the same leading spaces as the original
+lines in the diff; here the original lines each started with 4 spaces):
+"suggested_patch": "    if x:\\n        return None", "agent_fix_prompt": "In src/bar.py, add a robust null-check for the object at line 20 before any member access to prevent a potential crash. If the object is null, the function should return `None` early to maintain system stability."
 Example (no issues): {"findings": []}
 
 IMPORTANT — Message quality (what separates a strong finding message from a weak one):
