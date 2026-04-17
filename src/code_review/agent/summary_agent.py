@@ -187,7 +187,7 @@ def split_summary_for_pr_description(full_text: str) -> tuple[str, str]:
     """
     import re
 
-    match = re.search(r'^\s*(?:#{1,6}\s+|(?:\d+\.\s+)?\*\*)\s*Walkthrough\b', full_text, re.MULTILINE | re.IGNORECASE)
+    match = re.search(r'^[ \t]*(?:#{1,6}[ \t]+|(?:\d+\.[ \t]+)?\*\*)[ \t]*Walkthrough\b', full_text, re.MULTILINE | re.IGNORECASE)
     if not match:
         return full_text.strip(), ""
     return full_text[: match.start()].strip(), full_text[match.start() :].strip()
