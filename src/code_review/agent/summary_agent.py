@@ -17,10 +17,12 @@ Your task is to provide a high-level, strictly technical summary of a Pull Reque
 
 INPUTS:
 - PR Metadata: Title, Description, and list of changed files.
-- Findings: A list of specific code quality issues identified during the review, grouped by severity.
+- Findings: A list of specific code quality issues identified during the review,
+  grouped by severity.
 
 GOAL:
-Produce a concise, professional, and actionable Markdown summary that helps the author understand the overall impact of the review.
+Produce a concise, professional, and actionable Markdown summary that helps the author
+understand the overall impact of the review.
 
 TONE:
 - Strictly Technical.
@@ -187,7 +189,11 @@ def split_summary_for_pr_description(full_text: str) -> tuple[str, str]:
     """
     import re
 
-    match = re.search(r'^[ \t]*(?:#{1,6}[ \t]+|(?:\d+\.[ \t]+)?\*\*)[ \t]*Walkthrough\b', full_text, re.MULTILINE | re.IGNORECASE)
+    match = re.search(
+        r'^[ \t]*(?:#{1,6}[ \t]+|(?:\d+\.[ \t]+)?\*\*)[ \t]*Walkthrough\b',
+        full_text,
+        re.MULTILINE | re.IGNORECASE,
+    )
     if not match:
         return full_text.strip(), ""
     return full_text[: match.start()].strip(), full_text[match.start() :].strip()

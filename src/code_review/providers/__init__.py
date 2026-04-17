@@ -9,12 +9,12 @@ from code_review.providers.base import (
     ReviewComment,
     UnresolvedReviewItem,
 )
-from code_review.providers.http_base import HttpXProvider
 from code_review.providers.bitbucket import BitbucketProvider
 from code_review.providers.bitbucket_server import BitbucketServerProvider
 from code_review.providers.gitea import GiteaProvider
 from code_review.providers.github import GitHubProvider
 from code_review.providers.gitlab import GitLabProvider
+from code_review.providers.http_base import HttpXProvider
 
 
 def get_provider(

@@ -5,8 +5,8 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
-import code_review.providers.http_shortcuts as http_shortcuts
 
+import code_review.providers.http_shortcuts as http_shortcuts
 from code_review.formatters.comment import (
     infer_severity_from_comment_body,
     max_inferred_severity,

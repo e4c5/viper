@@ -1,7 +1,8 @@
-import pytest
 from unittest.mock import MagicMock, patch
-from code_review.agent.summary_agent import generate_pr_summary
+
+from code_review.agent.summary_agent import generate_pr_summary, split_summary_for_pr_description
 from code_review.schemas.findings import FindingV1
+
 
 def test_generate_pr_summary_incremental_prompt():
     agent = MagicMock()
@@ -17,7 +18,9 @@ def test_generate_pr_summary_incremental_prompt():
     
     # Patch both the Runner and the collection helper for robust isolation
     with patch("google.adk.runners.Runner") as mock_runner_cls, \
-         patch("code_review.orchestration.runner_utils._run_agent_and_collect_response") as mock_run:
+         patch(
+             "code_review.orchestration.runner_utils._run_agent_and_collect_response"
+         ) as mock_run:
         
         mock_runner = mock_runner_cls.return_value
         # Mock Runner.run to return a final response event as requested
@@ -66,7 +69,9 @@ def test_generate_pr_summary_incremental_unknown_base():
     changed_paths = ["file.py"]
     
     with patch("google.adk.runners.Runner") as _, \
-         patch("code_review.orchestration.runner_utils._run_agent_and_collect_response") as mock_run:
+         patch(
+             "code_review.orchestration.runner_utils._run_agent_and_collect_response"
+         ) as mock_run:
         
         mock_run.return_value = "Summary Text"
         
@@ -97,7 +102,9 @@ def test_generate_pr_summary_non_incremental_prompt():
     changed_paths = ["file.py"]
     
     with patch("google.adk.runners.Runner") as mock_runner_cls, \
-         patch("code_review.orchestration.runner_utils._run_agent_and_collect_response") as mock_run:
+         patch(
+             "code_review.orchestration.runner_utils._run_agent_and_collect_response"
+         ) as mock_run:
         
         mock_runner = mock_runner_cls.return_value
         # Mock Runner.run to return a final response event as requested
@@ -126,8 +133,6 @@ def test_generate_pr_summary_non_incremental_prompt():
         assert "Incremental Review Context" not in prompt
         assert "Changed Files: file.py" in prompt
         assert "PR Description: Test Desc" in prompt
-
-from code_review.agent.summary_agent import split_summary_for_pr_description
 
 def test_split_summary_for_pr_description_atx():
     text = "## Summary\nSum\n\n## Description\nDesc\n\n## Walkthrough\nWalk"

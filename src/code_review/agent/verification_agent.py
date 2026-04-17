@@ -108,7 +108,8 @@ Example — CONFIRM (security vulnerability with partial evidence):
   message: "user input interpolated directly into SQL query — SQL injection risk"
   code_snippet: "87: query = 'SELECT * FROM users WHERE id = ' + user_id"
   → verdict: "confirm"
-  reason: String concatenation into a SQL query is directly visible in the snippet; this is a well-known injection pattern regardless of how user_id originates.
+  reason: String concatenation into a SQL query is directly visible in the snippet;
+  this is a well-known injection pattern regardless of how user_id originates.
 
 Severity weighting — adjust your confirmation bar by severity:
 - high / medium: lean toward "confirm" unless the snippet clearly shows the concern is
@@ -261,7 +262,10 @@ def verify_findings(
             high.append((idx, f))
 
     if not to_verify:
-        logger.info("Verification: all %d finding(s) have high/unset confidence; skipping", len(findings))
+        logger.info(
+            "Verification: all %d finding(s) have high/unset confidence; skipping",
+            len(findings),
+        )
         return findings
 
     logger.info(

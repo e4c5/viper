@@ -20,7 +20,6 @@ from code_review.providers.base import BotAttributionIdentity, unified_diff_for_
 from code_review.schemas.review_decision_event import ReviewDecisionEventContext
 from code_review.schemas.review_thread_dismissal import ReviewThreadDismissalContext
 
-
 # ---------------------------------------------------------------------------
 # Module-level helpers (no shared state)
 # ---------------------------------------------------------------------------

@@ -94,9 +94,18 @@ def _invoke_run_review(
                 )
             )
         stack.enter_context(patch("google.adk.runners.Runner", return_value=runner_instance))
-        stack.enter_context(patch("google.adk.sessions.InMemorySessionService", return_value=_make_session_service()))
-        stack.enter_context(patch("code_review.agent.verification_agent.verify_findings", side_effect=lambda x, y: x))
-        stack.enter_context(patch("code_review.agent.summary_agent.generate_pr_summary", return_value="Summary"))
+        stack.enter_context(patch(
+            "google.adk.sessions.InMemorySessionService",
+            return_value=_make_session_service(),
+        ))
+        stack.enter_context(patch(
+            "code_review.agent.verification_agent.verify_findings",
+            side_effect=lambda x, y: x,
+        ))
+        stack.enter_context(patch(
+            "code_review.agent.summary_agent.generate_pr_summary",
+            return_value="Summary",
+        ))
         run_review(*args, **kwargs)
 
 

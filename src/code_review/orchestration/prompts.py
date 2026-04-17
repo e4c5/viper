@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 def _supplement_char_budget(remaining_tokens: int | None) -> int | None:
     # Keep the same rough conversion as code_review.diff.utils.estimate_tokens().
     if remaining_tokens is None:

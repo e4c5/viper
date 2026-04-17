@@ -1,8 +1,8 @@
 """Unit tests for ReviewOrchestrator and its extracted helpers (RUN_REVIEW_REFACTOR_PLAN)."""
 
+import hashlib
 import logging
 import os
-import hashlib
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -715,8 +715,8 @@ def test_incremental_base_sha_uses_cfg_head_sha_when_parameter_missing():
 def test_fetch_review_files_and_diffs_returns_files_paths_and_full_diff():
     """StandardReviewHandler.fetch_review_files_and_diffs returns the active review scope."""
     from code_review.orchestration.context_enricher import ContextEnricher
-    from code_review.orchestration.review_decision import ReviewDecisionHandler
     from code_review.orchestration.reply_dismissal import ReplyDismissalHandler
+    from code_review.orchestration.review_decision import ReviewDecisionHandler
     from code_review.orchestration.standard_review import StandardReviewHandler
     from code_review.providers.base import FileInfo
 
@@ -1009,7 +1009,9 @@ def test_split_summary_for_pr_description_splits_at_walkthrough():
 
 
 def test_split_summary_for_pr_description_no_walkthrough_returns_full_as_description():
-    """When the LLM omits the Walkthrough heading, full text goes to description and comment is empty."""
+    """When the LLM omits the Walkthrough heading, full text goes to description
+    and comment is empty.
+    """
     from code_review.agent.summary_agent import split_summary_for_pr_description
 
     full = "## Summary\nNo issues found.\n\n## Description\nSmall refactor."
@@ -1277,9 +1279,10 @@ def test_post_inline_preserves_single_line_patch_when_platform_does_not_support_
 
 
 def test_maybe_generate_and_post_summary_skips_overwrite_when_description_updated():
-    from code_review.orchestration.standard_review import StandardReviewHandler
-    from code_review.models import PRContext
     from unittest.mock import MagicMock
+
+    from code_review.models import PRContext
+    from code_review.orchestration.standard_review import StandardReviewHandler
 
     provider = MagicMock()
     pr_ctx = PRContext("o", "r", 1)
@@ -1289,12 +1292,27 @@ def test_maybe_generate_and_post_summary_skips_overwrite_when_description_update
     env.incremental_base_sha = ""
     env.paths = ["a.py"]
     
-    handler = StandardReviewHandler(pr_ctx, dry_run=False, print_findings=False, context_enricher=MagicMock(), review_decision_handler=MagicMock(), result_builder=MagicMock())
+    handler = StandardReviewHandler(
+        pr_ctx,
+        dry_run=False,
+        print_findings=False,
+        context_enricher=MagicMock(),
+        review_decision_handler=MagicMock(),
+        result_builder=MagicMock(),
+    )
     
-    with patch("code_review.agent.summary_agent.split_summary_for_pr_description", return_value=("New Desc", "New Comment")), \
-         patch("code_review.agent.summary_agent.create_summary_agent"), \
-         patch("code_review.agent.summary_agent.generate_pr_summary", return_value="Summary Text"), \
-         patch("code_review.orchestration.standard_review.CommentPoster") as MockPoster:
+    with (
+        patch(
+            "code_review.agent.summary_agent.split_summary_for_pr_description",
+            return_value=("New Desc", "New Comment"),
+        ),
+        patch("code_review.agent.summary_agent.create_summary_agent"),
+        patch(
+            "code_review.agent.summary_agent.generate_pr_summary",
+            return_value="Summary Text",
+        ),
+        patch("code_review.orchestration.standard_review.CommentPoster") as MockPoster,
+    ):
         
         poster_instance = MagicMock()
         MockPoster.return_value = poster_instance
@@ -1310,9 +1328,10 @@ def test_maybe_generate_and_post_summary_skips_overwrite_when_description_update
 
 
 def test_maybe_generate_and_post_summary_posts_walkthrough_when_findings_empty():
-    from code_review.orchestration.standard_review import StandardReviewHandler
-    from code_review.models import PRContext
     from unittest.mock import MagicMock
+
+    from code_review.models import PRContext
+    from code_review.orchestration.standard_review import StandardReviewHandler
 
     provider = MagicMock()
     pr_ctx = PRContext("o", "r", 1)
@@ -1322,12 +1341,27 @@ def test_maybe_generate_and_post_summary_posts_walkthrough_when_findings_empty()
     env.incremental_base_sha = ""
     env.paths = ["a.py"]
     
-    handler = StandardReviewHandler(pr_ctx, dry_run=False, print_findings=False, context_enricher=MagicMock(), review_decision_handler=MagicMock(), result_builder=MagicMock())
+    handler = StandardReviewHandler(
+        pr_ctx,
+        dry_run=False,
+        print_findings=False,
+        context_enricher=MagicMock(),
+        review_decision_handler=MagicMock(),
+        result_builder=MagicMock(),
+    )
     
-    with patch("code_review.agent.summary_agent.split_summary_for_pr_description", return_value=("New Desc", "Walkthrough Comment")), \
-         patch("code_review.agent.summary_agent.create_summary_agent"), \
-         patch("code_review.agent.summary_agent.generate_pr_summary", return_value="Summary Text"), \
-         patch("code_review.orchestration.standard_review.CommentPoster") as MockPoster:
+    with (
+        patch(
+            "code_review.agent.summary_agent.split_summary_for_pr_description",
+            return_value=("New Desc", "Walkthrough Comment"),
+        ),
+        patch("code_review.agent.summary_agent.create_summary_agent"),
+        patch(
+            "code_review.agent.summary_agent.generate_pr_summary",
+            return_value="Summary Text",
+        ),
+        patch("code_review.orchestration.standard_review.CommentPoster") as MockPoster,
+    ):
         
         poster_instance = MagicMock()
         MockPoster.return_value = poster_instance

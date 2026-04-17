@@ -44,7 +44,10 @@ def create_agent_and_runner(
         context_brief_attached=context_brief_attached,
         review_visible_lines=review_visible_lines,
     )
-    session_id = f"{pr_ctx.owner}/{pr_ctx.repo}/pr-{pr_ctx.pr_number}/{runner_mod.uuid.uuid4().hex[:12]}"
+    session_id = (
+        f"{pr_ctx.owner}/{pr_ctx.repo}/pr-{pr_ctx.pr_number}"
+        f"/{runner_mod.uuid.uuid4().hex[:12]}"
+    )
     session_service = InMemorySessionService()
     runner = Runner(
         agent=agent,

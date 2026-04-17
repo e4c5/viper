@@ -8,7 +8,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from code_review.diff.fingerprint import format_comment_body_with_marker, parse_marker_from_comment_body
+from code_review.diff.fingerprint import (
+    format_comment_body_with_marker,
+    parse_marker_from_comment_body,
+)
 from code_review.diff.parser import iter_new_lines
 from code_review.diff.utils import normalize_path as _normalize_path_for_anchor
 from code_review.formatters.comment import finding_to_comment_body
@@ -142,7 +145,10 @@ class CommentPoster:
     # ------------------------------------------------------------------
 
     def post_started_review_comment(self, pr_info, paths: list[str]) -> None:
-        """When PR has no description: post a started-review note; description is filled later by LLM."""
+        """Post a started-review note when PR has no description.
+
+        The description is filled later by the LLM.
+        """
         if not pr_info or not paths:
             return
         description = (getattr(pr_info, "description", "") or "").strip()
@@ -292,7 +298,10 @@ class CommentPoster:
         gate_outcome: QualityGateReviewOutcome,
         include_run_marker: bool = True,
     ) -> None:
-        """Post a PR-level summary for omit-marker providers; optionally attach the run= id marker."""
+        """Post a PR-level summary for omit-marker providers.
+
+        Optionally attaches the run= id marker.
+        """
         import code_review as _pkg
         agent_version = getattr(_pkg, "__version__", "0.1.0")
 

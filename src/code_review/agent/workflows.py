@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from code_review.agent.agent import create_review_agent, _SHARED_TEST_QUALITY_RULES
+from code_review.agent.agent import _SHARED_TEST_QUALITY_RULES, create_review_agent
 from code_review.batching import ReviewBatch
 from code_review.config import get_code_review_app_config
 from code_review.diff.parser import annotate_diff_with_line_numbers
@@ -48,7 +48,8 @@ def _batch_instruction_suffix(batch: ReviewBatch, head_sha: str) -> str:
         " (e.g. ``42:`` means line 42). Extract only the number; do NOT emit the ``:`` suffix."
         + " If a file appears in multiple segments, treat them as partial views "
         "of the same file and still use the true file path."
-        + " Output a JSON findings object for this batch only (same schema as the main instruction)."
+        + " Output a JSON findings object for this batch only"
+          " (same schema as the main instruction)."
         + " If there are no issues in this batch, output a findings object with an empty array."
         + "\n\nPrepared batch segments:\n"
         + "\n\n".join(segment_blocks)

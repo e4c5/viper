@@ -6,26 +6,26 @@ from typing import Any, Literal
 
 from github.GithubException import GithubException
 
+from code_review.diff.utils import normalize_path
 from code_review.formatters.comment import (
     infer_severity_from_comment_body,
     max_inferred_severity,
     render_suggestion_block,
 )
 from code_review.github_client import GitHubApiClient
-from code_review.diff.utils import normalize_path
 from code_review.providers.base import (
     BotAttributionIdentity,
     BotBlockingState,
     FileInfo,
     InlineComment,
     PRInfo,
-    ProviderInterface,
     ProviderCapabilities,
+    ProviderInterface,
     ReviewComment,
     ReviewDecision,
     UnresolvedReviewItem,
-    _log_pr_info_warning,
     _log_pr_commit_messages_warning,
+    _log_pr_info_warning,
     unified_diff_for_path,
 )
 from code_review.providers.bot_blocking_common import (
@@ -91,7 +91,9 @@ class GitHubProvider(ProviderInterface):
                 return True
         return False
 
-    def _get_incremental_compare(self, owner: str, repo: str, pr_number: int, base_sha: str, head_sha: str) -> Any | None:
+    def _get_incremental_compare(
+        self, owner: str, repo: str, pr_number: int, base_sha: str, head_sha: str
+    ) -> Any | None:
         try:
             comparison = self._client().get_repo(owner, repo).compare(base_sha, head_sha)
         except GithubException as e:
@@ -972,7 +974,9 @@ class GitHubProvider(ProviderInterface):
         if message is None:
             raw_data = getattr(item, "raw_data", None)
             if isinstance(raw_data, dict):
-                commit_dict = raw_data.get("commit") if isinstance(raw_data.get("commit"), dict) else {}
+                commit_dict = (
+                    raw_data.get("commit") if isinstance(raw_data.get("commit"), dict) else {}
+                )
                 message = commit_dict.get("message") or raw_data.get("message")
         text = str(message or "").strip()
         return text

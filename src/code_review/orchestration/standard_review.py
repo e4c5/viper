@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from code_review import orchestration_deps as runner_mod
-from code_review.batching import ReviewBatch, build_review_batch_budget
+from code_review.batching import build_review_batch_budget
 from code_review.comments.manager import CommentManager
 from code_review.models import PRContext
 from code_review.orchestration import execution as execution_mod
@@ -14,7 +14,7 @@ from code_review.orchestration.context_enricher import ContextEnricher
 from code_review.orchestration.posting import CommentPoster
 from code_review.orchestration.review_decision import ReviewDecisionHandler
 from code_review.orchestration.runner_utils import ReviewRunObservability
-from code_review.providers.base import RateLimitError
+from code_review.providers.base import FileInfo, PRInfo, ProviderInterface
 from code_review.quality.gate import QualityGate
 from code_review.refinement.pipeline import FindingRefinementPipeline
 from code_review.schemas.findings import FindingV1

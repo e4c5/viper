@@ -170,7 +170,10 @@ class ReplyDismissalHandler:
         if ctx is None:
             logger.info("Reply-dismissal skipped: no event context present")
             return None
-        logger.info("Reply-dismissal candidate: loading thread context for comment_id=%s", comment_id)
+        logger.info(
+            "Reply-dismissal candidate: loading thread context for comment_id=%s",
+            comment_id,
+        )
         bot_id = provider.get_bot_attribution_identity(self.owner, self.repo, self.pr_number)
         if _reply_added_event_authored_by_bot(ctx, bot_id):
             observability.record_reply_dismissal_outcome("skipped_bot_author")

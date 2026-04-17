@@ -3,8 +3,8 @@
 import logging
 from datetime import datetime
 from typing import Any
-import code_review.providers.http_shortcuts as http_shortcuts
 
+import code_review.providers.http_shortcuts as http_shortcuts
 from code_review.diff.utils import normalize_path
 from code_review.formatters.comment import infer_severity_from_comment_body, render_suggestion_block
 from code_review.providers.base import (

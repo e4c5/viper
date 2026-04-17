@@ -993,7 +993,8 @@ class BitbucketServerProvider(HttpXProvider):
             status = e.response.status_code if e.response is not None else 0
             if status in (400, 404):
                 logger.debug(
-                    "Bitbucket Server comments endpoint unavailable (status=%d) owner=%s repo=%s pr=%s",
+                    "Bitbucket Server comments endpoint unavailable"
+                    " (status=%d) owner=%s repo=%s pr=%s",
                     status,
                     owner,
                     repo,

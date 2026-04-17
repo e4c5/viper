@@ -3,7 +3,6 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import httpx
 from github.GithubException import GithubException
 
 from code_review.providers import get_provider
@@ -81,7 +80,9 @@ def test_get_incremental_pr_diff_falls_back_to_full_pr_diff_on_compare_error():
     repo = MagicMock()
     repo.compare.side_effect = GithubException(404, {"message": "compare failed"})
     client.get_repo.return_value = repo
-    client.request_text.return_value = "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
+    client.request_text.return_value = (
+        "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
+    )
     p = GitHubProvider("https://api.github.com", "tok")
     with patch.object(GitHubProvider, "_client", return_value=client):
         diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
@@ -101,7 +102,9 @@ def test_get_incremental_pr_diff_falls_back_to_full_pr_diff_when_compare_files_t
         files=[_fake_file(f"file_{index}.py") for index in range(300)]
     )
     client.get_repo.return_value = repo
-    client.request_text.return_value = "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
+    client.request_text.return_value = (
+        "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
+    )
     p = GitHubProvider("https://api.github.com", "tok")
 
     with patch.object(GitHubProvider, "_client", return_value=client):
@@ -193,7 +196,9 @@ def test_get_pr_diff_for_file_falls_back_to_full_diff_when_github_omits_patch():
     )
     p = GitHubProvider("https://api.github.com", "tok")
     with patch.object(GitHubProvider, "_client", return_value=client):
-        with patch.object(GitHubProvider, "get_pr_diff", return_value=full_diff) as mock_get_pr_diff:
+        with patch.object(
+            GitHubProvider, "get_pr_diff", return_value=full_diff
+        ) as mock_get_pr_diff:
             diff = p.get_pr_diff_for_file("owner", "repo", 1, "src/Foo.java")
 
     assert "diff --git a/src/Foo.java b/src/Foo.java" in diff
@@ -223,7 +228,9 @@ def test_get_incremental_pr_files_fall_back_to_full_pr_files_on_compare_error():
     repo.compare.side_effect = GithubException(404, {"message": "compare failed"})
     client.get_repo.return_value = repo
     pull = MagicMock()
-    pull.get_files.return_value = [_fake_file("full.py", status="modified", additions=2, deletions=1)]
+    pull.get_files.return_value = [
+        _fake_file("full.py", status="modified", additions=2, deletions=1)
+    ]
     client.get_pull.return_value = pull
     p = GitHubProvider("https://api.github.com", "tok")
     with patch.object(GitHubProvider, "_client", return_value=client):
@@ -241,7 +248,9 @@ def test_get_incremental_pr_files_fall_back_to_full_pr_files_when_compare_files_
     )
     client.get_repo.return_value = repo
     pull = MagicMock()
-    pull.get_files.return_value = [_fake_file("full.py", status="modified", additions=2, deletions=1)]
+    pull.get_files.return_value = [
+        _fake_file("full.py", status="modified", additions=2, deletions=1)
+    ]
     client.get_pull.return_value = pull
     p = GitHubProvider("https://api.github.com", "tok")
 

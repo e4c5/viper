@@ -68,12 +68,18 @@ class PRContext:
             case "bitbucket":
                 return f"https://bitbucket.org/{self.owner}/{self.repo}/pull-requests/{self.pr_number}"
             case "bitbucket_server":
-                return f"{base_url}/projects/{self.owner}/repos/{self.repo}/pull-requests/{self.pr_number}"
+                return (
+                    f"{base_url}/projects/{self.owner}/repos/{self.repo}"
+                    f"/pull-requests/{self.pr_number}"
+                )
             case _:
                 return f"{base_url}/{self.owner}/{self.repo}/pulls/{self.pr_number}"
 
     def idempotency_key(self, scm_cfg, llm_cfg, base_sha: str = "") -> str:
-        """Stable run fingerprint. Same key means this exact PR/range/config was already reviewed."""
+        """Stable run fingerprint.
+
+        Same key means this exact PR/range/config was already reviewed.
+        """
         import code_review as _pkg
 
         agent_version = getattr(_pkg, "__version__", "0.1.0")

@@ -10,19 +10,20 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-import code_review
 from google.genai import types
 
+import code_review
+
 if TYPE_CHECKING:
-    from google.adk.agents.callback_context import ReadonlyContext
+    pass
+
+import json
 
 from code_review import observability
 from code_review.json_utils import iter_json_candidates
 from code_review.models import PRContext
 from code_review.providers.base import RateLimitError
 from code_review.schemas.findings import FindingsBatchV1, FindingV1
-
-import json
 
 logger = logging.getLogger(__name__)
 
