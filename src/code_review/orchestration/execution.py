@@ -5,7 +5,12 @@ import logging
 from google.genai import types
 
 from code_review import orchestration_deps as runner_mod
-from code_review.batching import ReviewBatch, build_review_batches
+from code_review.batching import (
+    ReviewBatch,
+    ReviewSegment,
+    build_review_batches,
+    split_file_diff_into_segments,
+)
 from code_review.diff.utils import estimate_tokens
 from code_review.logging_config import emit_package_log
 from code_review.models import PRContext
@@ -29,6 +34,7 @@ def create_agent_and_runner(
     *,
     context_brief_attached: bool = False,
     review_visible_lines: bool | None = None,
+    single_batch_mode: bool = False,
 ):
     """Build the batch-review SequentialAgent, session service, and ADK Runner."""
     from google.adk.runners import Runner
@@ -43,6 +49,7 @@ def create_agent_and_runner(
         head_sha=pr_ctx.head_sha,
         context_brief_attached=context_brief_attached,
         review_visible_lines=review_visible_lines,
+        use_output_key=single_batch_mode,
     )
     session_id = (
         f"{pr_ctx.owner}/{pr_ctx.repo}/pr-{pr_ctx.pr_number}"
@@ -134,11 +141,14 @@ def _run_sequential_batch_review_mode(
             completed_successfully = response_indexes - failed_set
             failed_batches = [batches[i] for i in failed_indexes if i < len(batches)]
             remaining_batches = [
-                b for i, b in enumerate(batches) if i not in completed_successfully and i not in failed_set
+                b
+                for i, b in enumerate(batches)
+                if i not in completed_successfully and i not in failed_set
             ]
             if failed_batches:
                 logger.warning(
-                    "Recovering %d completed batch(es) that returned malformed findings before the rate limit.",
+                    "Recovering %d completed batch(es) that returned malformed findings "
+                    "before the rate limit.",
                     len(failed_batches),
                 )
                 findings.extend(
@@ -208,7 +218,8 @@ def build_batch_review_content(
     )
     if retry_attempt > 0:
         msg += (
-            "\n\nNote: Your previous response was interrupted and resulted in invalid, truncated JSON. "
+            "\n\nNote: Your previous response was interrupted and resulted in invalid, "
+            "truncated JSON. "
             "Please be concise, omit overly long code snippets in the description, "
             "and ensure all JSON strings and arrays are fully closed."
         )
@@ -234,7 +245,7 @@ def build_batch_review_content(
 def findings_from_batch_responses(
     responses: list[tuple[str, str]],
 ) -> tuple[list[runner_mod.FindingV1], list[int]]:
-    """Parse structured findings from a list of batch response texts, returning (findings, failed_indexes)."""
+    """Parse batch response texts and return findings plus failed batch indexes."""
     all_findings: list[runner_mod.FindingV1] = []
     failed_indexes: list[int] = []
     for author, response_text in responses:
@@ -259,6 +270,53 @@ def batch_index_from_author(author: str) -> int | None:
     return int(suffix) if suffix.isdigit() else None
 
 
+def _make_retry_batch(batch_index: int, segments: tuple[ReviewSegment, ...]) -> ReviewBatch:
+    """Build a retry batch from a subset of review segments."""
+    return ReviewBatch(
+        batch_index=batch_index,
+        estimated_tokens=sum(segment.estimated_tokens for segment in segments),
+        segments=segments,
+        paths=tuple(dict.fromkeys(segment.path for segment in segments)),
+    )
+
+
+def _split_batch_for_retry(
+    batch: ReviewBatch, *, attempt: int, max_retries: int
+) -> list[tuple[ReviewBatch, int]]:
+    """Return smaller retry batches when a batch's response is malformed.
+
+    Prefer splitting across existing prepared segments first. If only a single segment
+    remains, try to re-segment its diff text with a smaller budget. If neither produces
+    smaller work units, return the original batch unchanged.
+    """
+    retry_attempt = min(attempt, max_retries)
+    if len(batch.segments) > 1:
+        midpoint = len(batch.segments) // 2
+        return [
+            (_make_retry_batch(0, batch.segments[:midpoint]), retry_attempt),
+            (_make_retry_batch(1, batch.segments[midpoint:]), retry_attempt),
+        ]
+
+    if len(batch.segments) != 1:
+        return [(batch, retry_attempt)]
+
+    segment = batch.segments[0]
+    if segment.estimated_tokens <= 1:
+        return [(batch, retry_attempt)]
+    smaller_budget = max(1, segment.estimated_tokens // 2)
+    smaller_segments = split_file_diff_into_segments(
+        segment.path,
+        segment.diff_text,
+        segment_budget_tokens=smaller_budget,
+    )
+    if len(smaller_segments) <= 1:
+        return [(batch, retry_attempt)]
+    return [
+        (_make_retry_batch(index, (smaller_segment,)), retry_attempt)
+        for index, smaller_segment in enumerate(smaller_segments)
+    ]
+
+
 def _run_isolated_batches_with_retry(
     pr_ctx: PRContext,
     provider,
@@ -271,61 +329,84 @@ def _run_isolated_batches_with_retry(
     initial_retry_attempt: int = 0,
     max_retries: int = 2,
 ) -> list[runner_mod.FindingV1]:
-    """Run specified batches individually with retries for rate limits or parse failures."""
-    all_findings = []
-    for batch in batches_to_run:
-        batch_findings = []
-        for attempt in range(initial_retry_attempt, max_retries + 1):
-            session_id, _, runner = create_agent_and_runner(
-                pr_ctx,
-                provider,
-                review_standards,
-                [batch],
-                context_brief_attached=context_brief_attached,
-                review_visible_lines=review_visible_lines,
+    """Run specified batches individually with adaptive retries and scope shrinking."""
+    all_findings: list[runner_mod.FindingV1] = []
+    pending: list[tuple[ReviewBatch, int]] = [
+        (batch, initial_retry_attempt) for batch in batches_to_run
+    ]
+    while pending:
+        batch, attempt = pending.pop(0)
+        # single_batch_mode is intentionally NOT set here: the retry path must be as robust
+        # as possible. output_key + output_schema causes ADK to validate the LLM response
+        # during event iteration; if the response is truncated (MAX_TOKENS), the validation
+        # throws pydantic.ValidationError before the event is yielded, bypassing all retry
+        # logic. Without output_key, truncated responses flow through as normal text events
+        # and our existing parse-failure handling can retry them.
+        session_id, _session_service, runner = create_agent_and_runner(
+            pr_ctx,
+            provider,
+            review_standards,
+            [batch],
+            context_brief_attached=context_brief_attached,
+            review_visible_lines=review_visible_lines,
+        )
+        content = build_batch_review_content(
+            pr_ctx=pr_ctx,
+            batch_count=1,
+            prompt_suffix=prompt_suffix,
+            retry_attempt=attempt,
+        )
+        try:
+            responses = runner_mod._run_agent_and_collect_responses(
+                runner, session_id, content
             )
-            content = build_batch_review_content(
-                pr_ctx=pr_ctx,
-                batch_count=1,
-                prompt_suffix=prompt_suffix,
-                retry_attempt=attempt,
-            )
-            try:
-                responses = runner_mod._run_agent_and_collect_responses(
-                    runner, session_id, content
-                )
-            except runner_mod.PartialResponseCollectionError as exc:
-                if isinstance(exc.cause, runner_mod.RateLimitError):
-                    runner_mod.logger.warning(
-                        "Rate-limited on batch paths=%s (attempt %d/%d): %s",
-                        ", ".join(batch.paths),
-                        attempt + 1,
-                        max_retries + 1,
-                        exc.cause,
-                    )
-                    if attempt == max_retries:
-                        runner_mod.logger.warning(
-                            "Skipping batch after max retries due to rate limits."
-                        )
-                    continue
-                raise exc.cause from exc
-
-            findings, failed_indexes = findings_from_batch_responses(responses)
-            if failed_indexes:
+        except runner_mod.PartialResponseCollectionError as exc:
+            if isinstance(exc.cause, runner_mod.RateLimitError):
                 runner_mod.logger.warning(
-                    "JSON parse failed for batch paths=%s (attempt %d/%d).",
+                    "Rate-limited on batch paths=%s (attempt %d/%d): %s",
                     ", ".join(batch.paths),
                     attempt + 1,
                     max_retries + 1,
+                    exc.cause,
                 )
                 if attempt < max_retries:
-                    continue
+                    pending.insert(0, (batch, attempt + 1))
+                else:
+                    runner_mod.logger.warning(
+                        "Skipping batch after max retries due to rate limits."
+                    )
+                continue
+            raise exc.cause from exc
 
-            # Success or max retries exhausted
-            batch_findings.extend(findings)
-            break
+        findings, failed_indexes = findings_from_batch_responses(responses)
+        if not failed_indexes and responses:
+            all_findings.extend(findings)
+            continue
 
-        all_findings.extend(batch_findings)
+        runner_mod.logger.warning(
+            "JSON parse failed for batch paths=%s (attempt %d/%d).",
+            ", ".join(batch.paths),
+            attempt + 1,
+            max_retries + 1,
+        )
+        smaller_batches = _split_batch_for_retry(
+            batch, attempt=attempt, max_retries=max_retries
+        )
+        if len(smaller_batches) > 1:
+            runner_mod.logger.warning(
+                "Splitting malformed batch paths=%s segments=%d into %d smaller batch(es).",
+                ", ".join(batch.paths),
+                len(batch.segments),
+                len(smaller_batches),
+            )
+            pending = smaller_batches + pending
+            continue
+        if attempt < max_retries:
+            pending.insert(0, (batch, attempt + 1))
+            continue
+        runner_mod.logger.warning(
+            "Skipping batch after max retries due to malformed findings output."
+        )
     return all_findings
 
 

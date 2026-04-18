@@ -22,6 +22,8 @@ import json
 from code_review import observability
 from code_review.json_utils import iter_json_candidates
 from code_review.models import PRContext
+from pydantic import ValidationError as PydanticValidationError
+
 from code_review.providers.base import RateLimitError
 from code_review.schemas.findings import FindingsBatchV1, FindingV1
 
@@ -177,7 +179,10 @@ def _append_final_response_text(event, responses: list[tuple[str, str]]) -> None
 
 def _should_wrap_partial_response_error(exc: Exception, event_count: int) -> bool:
     """Return True when the caller should preserve partial responses with the error."""
-    return isinstance(exc, RateLimitError) or event_count > 0
+    # PydanticValidationError: ADK's output_schema validation failed on a truncated
+    # response (MAX_TOKENS). The event was never yielded, so event_count may be 0.
+    # Wrap it so callers see PartialResponseCollectionError instead of a bare crash.
+    return isinstance(exc, (RateLimitError, PydanticValidationError)) or event_count > 0
 
 
 def _raise_collection_error(
@@ -300,6 +305,54 @@ def _findings_from_response(response_text: str, *, raise_errors: bool = False) -
                 exc_info=True,
             )
         return []
+
+
+# ---------------------------------------------------------------------------
+# output_key session-state reader (Phase 0 durable improvement)
+# ---------------------------------------------------------------------------
+
+async def _read_output_key_findings_async(
+    session_service, session_id: str, output_key: str
+) -> list[FindingV1] | None:
+    """Read ADK validated findings from session state after a single-batch run.
+
+    Returns None when the state entry is missing, empty, or unparseable so the
+    caller can fall back to raw-text parsing without treating it as an error.
+    """
+    try:
+        session = await session_service.get_session(
+            app_name=APP_NAME, user_id=USER_ID, session_id=session_id
+        )
+    except Exception as exc:
+        logger.debug("output_key read: get_session failed session=%s: %s", session_id, exc)
+        return None
+    if session is None:
+        return None
+    raw = session.state.get(output_key) if hasattr(session, "state") else None
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, dict):
+            return FindingsBatchV1.model_validate(raw).findings
+        if hasattr(raw, "findings"):
+            return FindingsBatchV1.model_validate(raw, from_attributes=True).findings
+    except Exception as exc:
+        logger.debug(
+            "output_key read: failed to parse state value key=%s session=%s: %s",
+            output_key,
+            session_id,
+            exc,
+        )
+    return None
+
+
+def _get_output_key_findings(
+    session_service, session_id: str, output_key: str
+) -> list[FindingV1] | None:
+    """Synchronous wrapper: read ADK validated findings from session state."""
+    return asyncio.run(
+        _read_output_key_findings_async(session_service, session_id, output_key)
+    )
 
 
 # ---------------------------------------------------------------------------

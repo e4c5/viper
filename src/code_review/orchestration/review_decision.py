@@ -161,9 +161,9 @@ class ReviewDecisionHandler:
                 "Recomputing PR review decision from unresolved SCM state "
                 "despite empty review scope"
             )
-            gate_outcome = QualityGate(
-                provider, self.owner, self.repo, self.pr_number, cfg
-            ).evaluate([])
+            gate_outcome = QualityGate(provider, self.owner, self.repo, self.pr_number, cfg).evaluate(
+                []
+            )
             if gate_outcome is not None:
                 runner_mod._log_quality_gate_review_outcome("Empty-scope refresh", gate_outcome)
             else:

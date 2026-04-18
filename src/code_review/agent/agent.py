@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from code_review.agent.tools.gitea_tools import create_findings_only_tools
 from code_review.config import get_code_review_app_config, get_llm_config
 from code_review.logging_config import emit_package_log
-from code_review.models import get_configured_model, get_effective_temperature
+from code_review.models import get_configured_model, get_effective_temperature, get_max_output_tokens
 from code_review.providers.base import ProviderInterface
 from code_review.schemas.findings import FindingsBatchV1
 
@@ -53,24 +53,9 @@ LINE-SCOPE OVERRIDE:
   context `` `` lines.
 - Removed ``-`` lines are still invalid because they do not exist in the new-file view."""
 
-# Output format + finding schema + anchor + placement rules.
-_SHARED_FORMAT_AND_PLACEMENT = """\
-CRITICAL — Output format: Your final response must be a valid JSON object matching this schema:
-- Top-level object: {"findings": [ ... ]}
-- If you find one or more issues: put finding objects inside the `findings` array.
-- If you find zero issues: output exactly {"findings": []}.
-- Do not respond with only prose (e.g. "I found no issues"); always return the JSON object so it can be parsed.
-
-- Each finding must have: path (str), line (int), severity ("high"|"medium"|"low"|"nit"),
-code (str, e.g. unused-var), and message (str).
-Optional fields: end_line, category (e.g. "Correctness", "Security", "Performance",
-"Maintainability", "Tests", "Style"), confidence ("high"|"medium"|"low"), evidence,
-anchor, fingerprint_hint.
-
-CRITICAL - Fix guidance fields:
-- suggested_patch: Optional but highly recommended for fixable issues.
-- agent_fix_prompt: Whenever a patch is provided or a fix is identified, you MUST include a concise but complete natural-language prompt that a downstream AI coding agent can use to implement the fix.
-
+# Shared analysis fragments — used verbatim in both _SHARED_FORMAT_AND_PLACEMENT (full
+# output mode) and _BATCH_FORMAT_AND_PLACEMENT (batch slim mode). Edit here to update both.
+_SHARED_FINDING_PRIORITY = """\
 IMPORTANT — Finding priority (when findings compete for attention, rank them in this order):
 1. Correctness & Safety — crashes, data corruption, wrong results, undefined behaviour.
 2. Security — injection, auth bypass, secrets exposure, unsafe deserialization.
@@ -82,8 +67,9 @@ IMPORTANT — Finding priority (when findings compete for attention, rank them i
 
 This is a priority guide, not a stop condition. Analyze all axes for every file. When you
 have findings at multiple priority levels, surface them all — but ensure higher-priority
-findings appear first and their messages are the most precise and actionable.
+findings appear first and their messages are the most precise and actionable."""
 
+_SHARED_ANALYSIS_METHODOLOGY = """\
 IMPORTANT — Analysis methodology (expert-level rigor):
 - For each changed file, first understand what the code DOES: its purpose, inputs, outputs, and side effects.
 - Failure Mode Analysis: For every new or modified block, ask "How can this fail?" (e.g. timeout, null, empty collection, network error, race condition, overflow).
@@ -100,15 +86,41 @@ IMPORTANT — Analysis methodology (expert-level rigor):
 - Examine heuristics and branching logic: do conditions correctly distinguish the cases they intend to? Are there missing branches?
 - Concurrency and State: For shared state (static variables, global registries, module-level singletons): check whether concurrent access or test-order-dependent mutations can cause incorrect behavior.
 - Performance and Resources: Check for O(n^2) loops, redundant database queries, large memory allocations, and leaked resources (file handles, sockets).
-- Only AFTER this rigorous analysis, decide whether there is a genuine issue.
+- Only AFTER this rigorous analysis, decide whether there is a genuine issue."""
 
+_SHARED_MESSAGE_RULES = """\
 IMPORTANT — Finding messages (decisive, no self-retraction):
 - Each `message` must state one clear, actionable problem and (when helpful) the fix. Keep it short.
 - Do not stream internal reasoning: no "wait / however / actually" chains, no arguing both sides,
   and no concluding that the code is fine after raising a concern in the same finding.
 - If you decide there is no real issue after reasoning, omit that finding entirely from the
   `findings` array. Do not emit a finding whose message retracts itself, says "false positive", or takes
-  back the issue.
+  back the issue."""
+
+# Output format + finding schema + anchor + placement rules.
+# Composed from shared fragments so _SHARED_FORMAT_AND_PLACEMENT remains a single string
+# and existing substring-membership tests continue to pass.
+_SHARED_FORMAT_AND_PLACEMENT = (
+    """\
+CRITICAL — Output format: Your final response must be a valid JSON object matching this schema:
+- Top-level object: {"findings": [ ... ]}
+- If you find one or more issues: put finding objects inside the `findings` array.
+- If you find zero issues: output exactly {"findings": []}.
+- Do not respond with only prose (e.g. "I found no issues"); always return the JSON object so it can be parsed.
+
+- Each finding must have: path (str), line (int), severity ("high"|"medium"|"low"|"nit"),
+code (str, e.g. unused-var), and message (str).
+Optional fields: end_line, category (e.g. "Correctness", "Security", "Performance",
+"Maintainability", "Tests", "Style"), confidence ("high"|"medium"|"low"), evidence,
+anchor, fingerprint_hint.
+
+CRITICAL - Fix guidance fields:
+- suggested_patch: Optional but highly recommended for fixable issues.
+- agent_fix_prompt: Whenever a patch is provided or a fix is identified, you MUST include a concise but complete natural-language prompt that a downstream AI coding agent can use to implement the fix."""
+    + "\n\n" + _SHARED_FINDING_PRIORITY
+    + "\n\n" + _SHARED_ANALYSIS_METHODOLOGY
+    + "\n\n" + _SHARED_MESSAGE_RULES
+    + """
 
 IMPORTANT — Evidence and confidence:
 - Prefer including `evidence` and `confidence` for every finding.
@@ -136,6 +148,7 @@ CRITICAL - Placement of suggestions:
 - If you use `suggested_patch`, the `line` (and `end_line` if applicable) MUST exactly cover the lines that your patch replaces. If you omit `end_line`, your `suggested_patch` will replace ONLY the single `line`.
 - Never attach a finding to a blank line or a preceding line if the `suggested_patch` is meant to replace the code below it. Doing so will insert duplicate code.
 - Keep `suggested_patch` focused on the smallest safe, self-contained change. Do not include surrounding unchanged context."""
+)
 
 # Test-code quality rules — conditionally appended to the batch instruction when the batch
 # contains one or more test files (detected by is_test_file() in standards/detector.py).
@@ -187,6 +200,67 @@ you the full line including its indentation (e.g. ``42:+    return x`` means the
 with four spaces).  Your suggested_patch must start with the same four spaces:
 ``    return y``, NOT ``return y``.  Dropping indentation will produce syntactically broken
 code in Python, YAML, and every other indentation-sensitive language."""
+
+# ---------------------------------------------------------------------------
+# Batch-review specific fragments — minimal output contract, no fix guidance.
+# The primary batch-review pass returns only the fields needed to post inline
+# comments. suggested_patch, agent_fix_prompt, evidence, and confidence inflate
+# response size and are the primary drivers of output truncation on large diffs.
+# They may be added in a separate enrichment pass for selected findings.
+# ---------------------------------------------------------------------------
+
+_BATCH_FORMAT_AND_PLACEMENT = (
+    """\
+CRITICAL — Output format: Your final response must be a valid JSON object matching this schema:
+- Top-level object: {"findings": [ ... ]}
+- If you find one or more issues: put finding objects inside the `findings` array.
+- If you find zero issues: output exactly {"findings": []}.
+- Do not respond with only prose (e.g. "I found no issues"); always return the JSON object so it can be parsed.
+
+BATCH MODE — Required and permitted output fields only:
+- Required per finding: path (str), line (int), severity ("high"|"medium"|"low"|"nit"),
+  code (str, e.g. unused-var), message (str).
+- Permitted when concise and necessary: end_line (int), anchor (str).
+- DO NOT include: suggested_patch, agent_fix_prompt, evidence, confidence.
+  These inflate response size and will be collected in a later enrichment step.
+- category is optional; omit it to keep responses short."""
+    + "\n\n" + _SHARED_FINDING_PRIORITY
+    + "\n\n" + _SHARED_ANALYSIS_METHODOLOGY
+    + "\n\n" + _SHARED_MESSAGE_RULES
+    + """
+
+IMPORTANT — anchor field (recommended when concise):
+- Include an `anchor` field containing a short, distinctive code snippet from the exact issue line.
+  The anchor helps the runner verify and correct comment placement.
+- Keep it short: a function call, variable assignment, or brief expression fragment.
+
+CRITICAL — Placement rules:
+- The `line` MUST be the exact line where the issue occurs, NOT a blank line above it or a nearby line.
+- If the true line for the issue is not available in the diff, you MUST completely omit the finding. Do NOT shift the `line` to the closest visible line."""
+)
+
+_BATCH_EXAMPLES = """\
+IMPORTANT — Message quality (what separates a strong finding message from a weak one):
+Your output will be posted as inline PR comments. Every comment costs real developer attention.
+Focus on findings that would cause a real problem in production, introduce a security risk, or
+clearly mislead future maintainers.
+
+Weak messages (do NOT write like this):
+  ✗ "variable foo is not initialized"
+  ✗ "consider using a context manager here"
+  ✗ "this might cause issues with concurrent access"
+
+Strong messages (write like this):
+  ✓ "foo is read before assignment on the exception path; raises UnboundLocalError when X throws."
+  ✓ "file handle is never closed if an exception occurs between open() and close(); use `with open(...)` to guarantee cleanup."
+  ✓ "counter is a module-level int mutated without a lock; concurrent requests will corrupt the value under any threaded WSGI/ASGI server."
+
+Pattern: name the exact failure mode and its consequence, not just the symptom.
+Never use "might", "could potentially", or "consider" — if you are uncertain, lower the
+severity to low or omit the finding entirely.
+
+Example (one finding): {"findings": [{"path": "src/foo.py", "line": 42, "severity": "medium", "code": "rename-variable", "message": "Rename variable foo to user_id for clarity.", "anchor": "foo = request.user_id"}]}
+Example (no issues): {"findings": []}"""
 
 # agent_fix_prompt guidance + output examples — identical in both modes.
 _SHARED_AGENT_FIX_AND_EXAMPLES = """\
@@ -241,6 +315,44 @@ Pattern: name the exact failure mode and its consequence, not just the symptom.
 Never use \"might\", \"could potentially\", or \"consider\" — if you are uncertain, lower the
 severity to low or omit the finding entirely."""
 
+BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION = (
+    "\n"
+    "You are a Principal Engineer doing a pre-merge code review. Your goal is to\n"
+    "provide deep, actionable, and technically precise feedback on pull requests.\n"
+    "Your output will be posted as inline comments directly on the PR. Every comment\n"
+    "costs real developer attention and review time. Focus on findings that would\n"
+    "cause a real problem in production, introduce a security risk, or clearly mislead\n"
+    "future maintainers. "
+    "\n"
+    "Before emitting a finding, ask yourself: \"Would a senior engineer block this PR\n"
+    "without this finding being resolved?\" If the answer is no, omit it.\n"
+    "\n"
+    "You will receive the unified diff of the code to review either in the user message\n"
+    "between triple-backtick diff fences, or appended directly to these instructions.\n"
+    "\n"
+    "Read the entire diff carefully and identify code quality issues, including but not\n"
+    "limited to: bugs, security vulnerabilities, performance problems, logic errors,\n"
+    "missing error handling, and style violations.\n"
+    "\n"
+    "IMPORTANT — Line numbers:\n"
+    "- The diff lines are annotated with explicit new-file line numbers using the\n"
+    "  format ``n:`` at the start of each line visible in the new file.\n"
+    "  For example: ``42: +def new_function():`` means this line is new-file line 42.\n"
+    "  Context lines look like: ``10:  unchanged_code``.\n"
+    "  Removed lines (prefix ``-``) have NO annotation and cannot be referenced.\n"
+    + _SHARED_LINE_NUMBER_RULES
+    + "\n"
+    "\n"
+    "Valid file paths:\n"
+    "- Only report findings for files that appear in the diff.\n"
+    "- Do NOT invent paths or report findings for files not present in the diff.\n"
+    "\n"
+    "Your job is to find code issues only. Do NOT attempt to post comments or fetch\n"
+    "anything — the diff is already provided and no external tools are available.\n"
+    "\n" + _BATCH_FORMAT_AND_PLACEMENT + "\n"
+    "\n" + _BATCH_EXAMPLES + "\n"
+)
+
 # When the runner attaches distilled issue/ticket context, extend both modes with this.
 _CONTEXT_FROM_LINKED_SOURCES = """
 Linked requirements context may appear in the user message inside <context>...</context> tags.
@@ -281,16 +393,22 @@ def _before_model_callback(
 def _after_model_callback(
     callback_context: CallbackContext, llm_response: LlmResponse
 ) -> None:
-    """Log raw text-bearing model responses at DEBUG for schema and prompt debugging."""
+    """Log token usage, finish_reason, and response length for truncation detection."""
     usage = getattr(llm_response, "usage_metadata", None)
     if usage is not None and logger.isEnabledFor(logging.INFO):
+        parts = getattr(getattr(llm_response, "content", None), "parts", None) or ()
+        response_text_len = sum(len(getattr(p, "text", "") or "") for p in parts)
+        finish_reason = getattr(llm_response, "finish_reason", None)
+        interrupted = getattr(llm_response, "interrupted", None)
+        turn_complete = getattr(llm_response, "turn_complete", None)
         emit_package_log(
             logger,
             logging.INFO,
             (
                 "LLM usage agent=%s prompt_tokens=%s completion_tokens=%s "
                 "total_tokens=%s cached_tokens=%s tool_prompt_tokens=%s "
-                "thoughts_tokens=%s"
+                "thoughts_tokens=%s finish_reason=%s interrupted=%s "
+                "turn_complete=%s response_text_len=%d"
             ),
             callback_context.agent_name,
             getattr(usage, "prompt_token_count", None),
@@ -299,6 +417,10 @@ def _after_model_callback(
             getattr(usage, "cached_content_token_count", None),
             getattr(usage, "tool_use_prompt_token_count", None),
             getattr(usage, "thoughts_token_count", None),
+            finish_reason,
+            interrupted,
+            turn_complete,
+            response_text_len,
         )
     if not logger.isEnabledFor(logging.DEBUG):
         return None
@@ -482,6 +604,8 @@ def create_review_agent(
     disable_tools: bool = False,
     context_brief_attached: bool = False,
     review_visible_lines: bool | None = None,
+    slim_output: bool = False,
+    output_key: str | None = None,
 ) -> Agent:
     """Create the code review LlmAgent in findings-only mode.
 
@@ -503,7 +627,7 @@ def create_review_agent(
     _temperature = get_effective_temperature(llm_cfg.temperature)
     generate_content_config = types.GenerateContentConfig(
         **({"temperature": _temperature} if _temperature is not None else {}),
-        max_output_tokens=llm_cfg.max_output_tokens,
+        max_output_tokens=get_max_output_tokens(),
     )
 
     instruction = TOOL_ENABLED_REVIEW_INSTRUCTION
@@ -512,13 +636,18 @@ def create_review_agent(
     # 2. LLM_DISABLE_TOOL_CALLS env var is set (debug/test override)
     if disable_tools or getattr(llm_cfg, "disable_tool_calls", False):
         tools = []
-        # Use the tool-free instruction when review batches already embed the relevant diff.
-        # TOOL_ENABLED_REVIEW_INSTRUCTION
-        # references get_file_content, get_file_lines, detect_language_context etc.;
-        # when those tools are absent, Gemini infers it cannot complete the workflow
-        # and returns [] (no findings). EMBEDDED_DIFF_REVIEW_INSTRUCTION is clean and only
-        # describes the embedded-diff workflow.
-        instruction = EMBEDDED_DIFF_REVIEW_INSTRUCTION
+        # slim_output=True: use the minimal batch-review instruction (no fix guidance fields)
+        # to reduce response size and truncation risk on large diffs.
+        # Default (slim_output=False): use the full embedded-diff instruction.
+        if slim_output:
+            instruction = BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION
+        else:
+            # TOOL_ENABLED_REVIEW_INSTRUCTION references get_file_content, get_file_lines,
+            # detect_language_context etc.; when those tools are absent, Gemini infers it
+            # cannot complete the workflow and returns [] (no findings).
+            # EMBEDDED_DIFF_REVIEW_INSTRUCTION is clean and only describes the embedded-diff
+            # workflow.
+            instruction = EMBEDDED_DIFF_REVIEW_INSTRUCTION
     else:
         tools = create_findings_only_tools(provider)
 
@@ -543,15 +672,18 @@ def create_review_agent(
             "Only provide a `suggested_patch` if it replaces exactly one line of the original code."
         )
 
-    return Agent(
-        model=get_configured_model(),
-        name="code_review_agent",
-        instruction=instruction,
-        tools=tools,
-        output_schema=FindingsBatchV1,
-        generate_content_config=generate_content_config,
-        before_model_callback=_before_model_callback,
-        after_model_callback=_after_model_callback,
-        before_tool_callback=_before_tool_callback,
-        after_tool_callback=_after_tool_callback,
-    )
+    agent_kwargs: dict = {
+        "model": get_configured_model(),
+        "name": "code_review_agent",
+        "instruction": instruction,
+        "tools": tools,
+        "output_schema": FindingsBatchV1,
+        "generate_content_config": generate_content_config,
+        "before_model_callback": _before_model_callback,
+        "after_model_callback": _after_model_callback,
+        "before_tool_callback": _before_tool_callback,
+        "after_tool_callback": _after_tool_callback,
+    }
+    if output_key is not None:
+        agent_kwargs["output_key"] = output_key
+    return Agent(**agent_kwargs)

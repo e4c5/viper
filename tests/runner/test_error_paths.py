@@ -137,6 +137,29 @@ def _final_batch_event(author: str, findings_json: str) -> MagicMock:
     return event
 
 
+def _create_test_batch(batch_index: int = 0, paths: tuple[str, ...] = ("a.py", "b.py")):
+    """Build a deterministic ReviewBatch fixture for batch-mode tests."""
+    from code_review.batching import ReviewBatch, ReviewSegment
+
+    segments = tuple(
+        ReviewSegment(
+            path=path,
+            diff_text=f"diff --git a/{path} b/{path}",
+            estimated_tokens=10,
+            segment_index=0,
+            total_segments=1,
+            split_strategy="whole_file",
+        )
+        for path in paths
+    )
+    return ReviewBatch(
+        batch_index=batch_index,
+        estimated_tokens=len(paths) * 10,
+        segments=segments,
+        paths=paths,
+    )
+
+
 @patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
@@ -247,9 +270,10 @@ def test_batch_mode_rate_limit_error_is_fatal(
     def run_async_side_effect(*, new_message, **kwargs):
         del new_message, kwargs
         calls["count"] += 1
+        current_call = calls["count"]
 
         async def _agen():
-            if calls["count"] == 1:
+            if current_call == 1:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x",'
@@ -284,11 +308,12 @@ def test_batch_mode_propagates_rate_limit_error_for_whole_run(
     def run_async_side_effect(*, new_message, **kwargs):
         del new_message, kwargs
         calls["count"] += 1
+        current_call = calls["count"]
 
         async def _agen():
-            if calls["count"] == 1:
+            if current_call == 1:
                 raise RateLimitError("HTTP 429 Too Many Requests")
-            if calls["count"] == 2:
+            if current_call == 2:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x",'
@@ -342,61 +367,32 @@ def test_batch_mode_retries_malformed_completed_batches_before_rate_limit(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
     """A malformed completed batch must be retried even if a later batch hits a rate limit."""
-    from code_review.batching import ReviewBatch, ReviewSegment
-
     calls = {"count": 0}
     forced_batches = [
-        ReviewBatch(
-            batch_index=0,
-            estimated_tokens=10,
-            segments=(
-                ReviewSegment(
-                    path="a.py",
-                    diff_text="diff --git a/a.py b/a.py",
-                    estimated_tokens=10,
-                    segment_index=0,
-                    total_segments=1,
-                    split_strategy="whole_file",
-                ),
-            ),
-            paths=("a.py",),
-        ),
-        ReviewBatch(
-            batch_index=1,
-            estimated_tokens=10,
-            segments=(
-                ReviewSegment(
-                    path="b.py",
-                    diff_text="diff --git a/b.py b/b.py",
-                    estimated_tokens=10,
-                    segment_index=0,
-                    total_segments=1,
-                    split_strategy="whole_file",
-                ),
-            ),
-            paths=("b.py",),
-        ),
+        _create_test_batch(batch_index=0, paths=("a.py",)),
+        _create_test_batch(batch_index=1, paths=("b.py",)),
     ]
 
     def run_async_side_effect(*, new_message, **kwargs):
         del new_message, kwargs
         calls["count"] += 1
+        current_call = calls["count"]
 
         async def _agen():
-            if calls["count"] == 1:
+            if current_call == 1:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"a.py","line":1},{"not":"valid"}]}',
                 )
                 raise RateLimitError("HTTP 429 Too Many Requests")
-            if calls["count"] == 2:
+            if current_call == 2:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x",'
                     '"message":"Retry malformed batch."}]}',
                 )
                 return
-            if calls["count"] == 3:
+            if current_call == 3:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"b.py","line":1,"severity":"medium","code":"y",'
@@ -424,6 +420,203 @@ def test_batch_mode_retries_malformed_completed_batches_before_rate_limit(
         ("a.py", "Retry malformed batch."),
         ("b.py", "Review remaining batch."),
     ]
+
+
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
+def test_batch_mode_splits_malformed_batch_into_smaller_batches(
+    mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
+):
+    """Malformed batch recovery should shrink scope before retrying the same payload again."""
+    calls = {"count": 0}
+    forced_batches = [_create_test_batch()]
+
+    def run_async_side_effect(*, new_message, **kwargs):
+        del new_message, kwargs
+        calls["count"] += 1
+        current_call = calls["count"]
+
+        async def _agen():
+            if current_call == 1:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"a.py","line":1},{"not":"valid"}]}',
+                )
+                return
+            if current_call == 2:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"a.py","line":1},{"not":"valid"}]}',
+                )
+                return
+            if current_call == 3:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x",'
+                    '"message":"Recovered split batch A."}]}',
+                )
+                return
+            if current_call == 4:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"b.py","line":1,"severity":"medium","code":"y",'
+                    '"message":"Recovered split batch B."}]}',
+                )
+                return
+            raise AssertionError(f"unexpected run_async call #{calls['count']}")
+
+        return _agen()
+
+    with patch(
+        "code_review.orchestration.standard_review.execution_mod.build_review_batches_for_scope",
+        return_value=forced_batches,
+    ):
+        findings = _exercise_batch_mode_failure(
+            mock_get_scm_config,
+            mock_get_provider,
+            mock_get_llm_config,
+            mock_get_context_window,
+            run_async_side_effect,
+            dry_run=True,
+        )
+
+    assert [(finding.path, finding.message) for finding in findings] == [
+        ("a.py", "Recovered split batch A."),
+        ("b.py", "Recovered split batch B."),
+    ]
+
+
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
+def test_batch_mode_retries_empty_isolated_batch_response(
+    mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
+):
+    """An empty isolated-batch response must retry instead of being treated as success."""
+    calls = {"count": 0}
+    forced_batches = [_create_test_batch()]
+
+    def run_async_side_effect(*, new_message, **kwargs):
+        del new_message, kwargs
+        calls["count"] += 1
+        current_call = calls["count"]
+
+        async def _agen():
+            if current_call == 1:
+                raise RateLimitError("HTTP 429 Too Many Requests")
+            if current_call == 2:
+                return
+            if current_call == 3:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x",'
+                    '"message":"Recovered split batch A after empty response."}]}',
+                )
+                return
+            if current_call == 4:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"b.py","line":1,"severity":"medium","code":"y",'
+                    '"message":"Recovered split batch B after empty response."}]}',
+                )
+                return
+            raise AssertionError(f"unexpected run_async call #{calls['count']}")
+
+        return _agen()
+
+    with patch(
+        "code_review.orchestration.standard_review.execution_mod.build_review_batches_for_scope",
+        return_value=forced_batches,
+    ):
+        findings = _exercise_batch_mode_failure(
+            mock_get_scm_config,
+            mock_get_provider,
+            mock_get_llm_config,
+            mock_get_context_window,
+            run_async_side_effect,
+            dry_run=True,
+        )
+
+    assert [(finding.path, finding.message) for finding in findings] == [
+        ("a.py", "Recovered split batch A after empty response."),
+        ("b.py", "Recovered split batch B after empty response."),
+    ]
+
+
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
+def test_batch_mode_split_batches_preserve_retry_attempt(
+    mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
+):
+    """Split malformed batches should inherit the current retry attempt."""
+    calls = {"count": 0}
+    prompt_texts: list[str] = []
+    forced_batches = [_create_test_batch()]
+
+    def run_async_side_effect(*, new_message, **kwargs):
+        del kwargs
+        prompt_texts.append(new_message.parts[0].text)
+        calls["count"] += 1
+        current_call = calls["count"]
+
+        async def _agen():
+            if current_call == 1:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"a.py","line":1},{"not":"valid"}]}',
+                )
+                return
+            if current_call == 2:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"a.py","line":1},{"not":"valid"}]}',
+                )
+                return
+            if current_call == 3:
+                yield _final_batch_event(
+                    "batch_review_1",
+                    '{"findings":[{"path":"b.py","line":1,"severity":"medium","code":"y",'
+                    '"message":"Recovered split batch B after retry."}]}',
+                )
+                return
+            if current_call == 4:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x",'
+                    '"message":"Recovered split batch A after retry."}]}',
+                )
+                return
+            raise AssertionError(f"unexpected run_async call #{current_call}")
+
+        return _agen()
+
+    with patch(
+        "code_review.orchestration.standard_review.execution_mod.build_review_batches_for_scope",
+        return_value=forced_batches,
+    ):
+        findings = _exercise_batch_mode_failure(
+            mock_get_scm_config,
+            mock_get_provider,
+            mock_get_llm_config,
+            mock_get_context_window,
+            run_async_side_effect,
+            dry_run=True,
+        )
+
+    assert [(finding.path, finding.message) for finding in findings] == [
+        ("b.py", "Recovered split batch B after retry."),
+        ("a.py", "Recovered split batch A after retry."),
+    ]
+    retry_note = "Your previous response was interrupted and resulted in invalid, truncated JSON."
+    assert retry_note not in prompt_texts[0]
+    assert retry_note in prompt_texts[1]
+    assert retry_note in prompt_texts[2]
+    assert retry_note in prompt_texts[3]
 
 
 @patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")

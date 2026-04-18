@@ -1,6 +1,7 @@
 """ADK agent module."""
 
 from code_review.agent.agent import (
+    BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION,
     EMBEDDED_DIFF_REVIEW_INSTRUCTION,
     TOOL_ENABLED_REVIEW_INSTRUCTION,
     create_review_agent,
@@ -18,4 +19,5 @@ __all__ = [
     "REPLY_DISMISSAL_INSTRUCTION",
     "reply_dismissal_verdict_from_llm_text",
     "EMBEDDED_DIFF_REVIEW_INSTRUCTION",
+    "BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION",
 ]

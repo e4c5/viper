@@ -144,6 +144,45 @@ def test_get_pr_commit_messages():
     assert msgs == ["first\n\nbody", "second line"]
 
 
+def test_get_incremental_pr_commit_messages_uses_compare_commits():
+    client = MagicMock()
+    repo = MagicMock()
+    repo.compare.return_value = SimpleNamespace(
+        files=[_fake_file("foo.py")],
+        commits=[
+            SimpleNamespace(commit=SimpleNamespace(message="inc one"), raw_data={}),
+            SimpleNamespace(commit=SimpleNamespace(message="inc two"), raw_data={}),
+        ],
+    )
+    client.get_repo.return_value = repo
+    p = GitHubProvider("https://api.github.com", "tok")
+
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        msgs = p.get_incremental_pr_commit_messages("owner", "repo", 3, "base123", "head456")
+
+    assert msgs == ["inc one", "inc two"]
+    repo.compare.assert_called_once_with("base123", "head456")
+
+
+def test_get_incremental_pr_commit_messages_fall_back_to_full_pr_commits():
+    client = MagicMock()
+    repo = MagicMock()
+    repo.compare.side_effect = GithubException(404, {"message": "compare failed"})
+    pull = MagicMock()
+    pull.get_commits.return_value = [
+        SimpleNamespace(commit=SimpleNamespace(message="full one"), raw_data={}),
+        SimpleNamespace(commit=SimpleNamespace(message="full two"), raw_data={}),
+    ]
+    client.get_repo.return_value = repo
+    client.get_pull.return_value = pull
+    p = GitHubProvider("https://api.github.com", "tok")
+
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        msgs = p.get_incremental_pr_commit_messages("owner", "repo", 3, "base123", "head456")
+
+    assert msgs == ["full one", "full two"]
+
+
 def test_get_pr_files():
     client = MagicMock()
     pull = MagicMock()
@@ -614,6 +653,30 @@ def test_get_bot_attribution_identity_github():
         bid = p.get_bot_attribution_identity("o", "r", 1)
     assert bid.login == "mybot"
     assert bid.id_str == "42"
+
+
+def test_get_bot_attribution_identity_falls_back_to_configured_bot_identity():
+    client = MagicMock()
+    client.get_authenticated_user.side_effect = RuntimeError("403")
+    p = GitHubProvider("https://api.github.com", "tok", bot_identity="MyBot")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        bid = p.get_bot_attribution_identity("o", "r", 1)
+    assert bid.login == "mybot"
+    assert bid.id_str == ""
+
+
+def test_get_bot_blocking_state_falls_back_to_configured_bot_identity():
+    client = MagicMock()
+    client.get_authenticated_user.side_effect = RuntimeError("403")
+    pull = MagicMock()
+    pull.get_reviews.return_value = [_fake_review(7, "CHANGES_REQUESTED", "mybot")]
+    client.get_pull.return_value = pull
+    p = GitHubProvider("https://api.github.com", "tok", bot_identity="MyBot")
+
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        state = p.get_bot_blocking_state("o", "r", 1)
+
+    assert state == "BLOCKING"
 
 
 def test_post_review_thread_reply_github():
