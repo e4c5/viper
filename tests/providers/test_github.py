@@ -3,7 +3,6 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import httpx
 from github.GithubException import GithubException
 
 from code_review.providers import get_provider
@@ -81,7 +80,9 @@ def test_get_incremental_pr_diff_falls_back_to_full_pr_diff_on_compare_error():
     repo = MagicMock()
     repo.compare.side_effect = GithubException(404, {"message": "compare failed"})
     client.get_repo.return_value = repo
-    client.request_text.return_value = "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
+    client.request_text.return_value = (
+        "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
+    )
     p = GitHubProvider("https://api.github.com", "tok")
     with patch.object(GitHubProvider, "_client", return_value=client):
         diff = p.get_incremental_pr_diff("owner", "repo", 1, "base123", "head456")
@@ -101,7 +102,9 @@ def test_get_incremental_pr_diff_falls_back_to_full_pr_diff_when_compare_files_t
         files=[_fake_file(f"file_{index}.py") for index in range(300)]
     )
     client.get_repo.return_value = repo
-    client.request_text.return_value = "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
+    client.request_text.return_value = (
+        "diff --git a/full.py b/full.py\n--- a/full.py\n+++ b/full.py"
+    )
     p = GitHubProvider("https://api.github.com", "tok")
 
     with patch.object(GitHubProvider, "_client", return_value=client):
@@ -139,6 +142,45 @@ def test_get_pr_commit_messages():
     with patch.object(GitHubProvider, "_client", return_value=client):
         msgs = p.get_pr_commit_messages("owner", "repo", 3)
     assert msgs == ["first\n\nbody", "second line"]
+
+
+def test_get_incremental_pr_commit_messages_uses_compare_commits():
+    client = MagicMock()
+    repo = MagicMock()
+    repo.compare.return_value = SimpleNamespace(
+        files=[_fake_file("foo.py")],
+        commits=[
+            SimpleNamespace(commit=SimpleNamespace(message="inc one"), raw_data={}),
+            SimpleNamespace(commit=SimpleNamespace(message="inc two"), raw_data={}),
+        ],
+    )
+    client.get_repo.return_value = repo
+    p = GitHubProvider("https://api.github.com", "tok")
+
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        msgs = p.get_incremental_pr_commit_messages("owner", "repo", 3, "base123", "head456")
+
+    assert msgs == ["inc one", "inc two"]
+    repo.compare.assert_called_once_with("base123", "head456")
+
+
+def test_get_incremental_pr_commit_messages_fall_back_to_full_pr_commits():
+    client = MagicMock()
+    repo = MagicMock()
+    repo.compare.side_effect = GithubException(404, {"message": "compare failed"})
+    pull = MagicMock()
+    pull.get_commits.return_value = [
+        SimpleNamespace(commit=SimpleNamespace(message="full one"), raw_data={}),
+        SimpleNamespace(commit=SimpleNamespace(message="full two"), raw_data={}),
+    ]
+    client.get_repo.return_value = repo
+    client.get_pull.return_value = pull
+    p = GitHubProvider("https://api.github.com", "tok")
+
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        msgs = p.get_incremental_pr_commit_messages("owner", "repo", 3, "base123", "head456")
+
+    assert msgs == ["full one", "full two"]
 
 
 def test_get_pr_files():
@@ -193,7 +235,9 @@ def test_get_pr_diff_for_file_falls_back_to_full_diff_when_github_omits_patch():
     )
     p = GitHubProvider("https://api.github.com", "tok")
     with patch.object(GitHubProvider, "_client", return_value=client):
-        with patch.object(GitHubProvider, "get_pr_diff", return_value=full_diff) as mock_get_pr_diff:
+        with patch.object(
+            GitHubProvider, "get_pr_diff", return_value=full_diff
+        ) as mock_get_pr_diff:
             diff = p.get_pr_diff_for_file("owner", "repo", 1, "src/Foo.java")
 
     assert "diff --git a/src/Foo.java b/src/Foo.java" in diff
@@ -223,7 +267,9 @@ def test_get_incremental_pr_files_fall_back_to_full_pr_files_on_compare_error():
     repo.compare.side_effect = GithubException(404, {"message": "compare failed"})
     client.get_repo.return_value = repo
     pull = MagicMock()
-    pull.get_files.return_value = [_fake_file("full.py", status="modified", additions=2, deletions=1)]
+    pull.get_files.return_value = [
+        _fake_file("full.py", status="modified", additions=2, deletions=1)
+    ]
     client.get_pull.return_value = pull
     p = GitHubProvider("https://api.github.com", "tok")
     with patch.object(GitHubProvider, "_client", return_value=client):
@@ -241,7 +287,9 @@ def test_get_incremental_pr_files_fall_back_to_full_pr_files_when_compare_files_
     )
     client.get_repo.return_value = repo
     pull = MagicMock()
-    pull.get_files.return_value = [_fake_file("full.py", status="modified", additions=2, deletions=1)]
+    pull.get_files.return_value = [
+        _fake_file("full.py", status="modified", additions=2, deletions=1)
+    ]
     client.get_pull.return_value = pull
     p = GitHubProvider("https://api.github.com", "tok")
 
@@ -605,6 +653,30 @@ def test_get_bot_attribution_identity_github():
         bid = p.get_bot_attribution_identity("o", "r", 1)
     assert bid.login == "mybot"
     assert bid.id_str == "42"
+
+
+def test_get_bot_attribution_identity_falls_back_to_configured_bot_identity():
+    client = MagicMock()
+    client.get_authenticated_user.side_effect = RuntimeError("403")
+    p = GitHubProvider("https://api.github.com", "tok", bot_identity="MyBot")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        bid = p.get_bot_attribution_identity("o", "r", 1)
+    assert bid.login == "mybot"
+    assert bid.id_str == ""
+
+
+def test_get_bot_blocking_state_falls_back_to_configured_bot_identity():
+    client = MagicMock()
+    client.get_authenticated_user.side_effect = RuntimeError("403")
+    pull = MagicMock()
+    pull.get_reviews.return_value = [_fake_review(7, "CHANGES_REQUESTED", "mybot")]
+    client.get_pull.return_value = pull
+    p = GitHubProvider("https://api.github.com", "tok", bot_identity="MyBot")
+
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        state = p.get_bot_blocking_state("o", "r", 1)
+
+    assert state == "BLOCKING"
 
 
 def test_post_review_thread_reply_github():
