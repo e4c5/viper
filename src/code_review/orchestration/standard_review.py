@@ -517,10 +517,7 @@ class StandardReviewHandler:
         description_was_empty = not (getattr(env.pr_info, "description", "") or "").strip()
         is_initial_review = not env.incremental_base_sha
 
-        # For incremental reviews or PRs that already have a description, only run when there
-        # are findings (preserve current behaviour).
-        if not (description_was_empty and is_initial_review) and not to_post:
-            return
+
 
         try:
             summary_text = self._generate_summary_text(provider, env, to_post)
