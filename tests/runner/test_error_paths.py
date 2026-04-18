@@ -270,9 +270,10 @@ def test_batch_mode_rate_limit_error_is_fatal(
     def run_async_side_effect(*, new_message, **kwargs):
         del new_message, kwargs
         calls["count"] += 1
+        current_call = calls["count"]
 
         async def _agen():
-            if calls["count"] == 1:
+            if current_call == 1:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x",'
@@ -307,11 +308,12 @@ def test_batch_mode_propagates_rate_limit_error_for_whole_run(
     def run_async_side_effect(*, new_message, **kwargs):
         del new_message, kwargs
         calls["count"] += 1
+        current_call = calls["count"]
 
         async def _agen():
-            if calls["count"] == 1:
+            if current_call == 1:
                 raise RateLimitError("HTTP 429 Too Many Requests")
-            if calls["count"] == 2:
+            if current_call == 2:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x",'
@@ -374,22 +376,23 @@ def test_batch_mode_retries_malformed_completed_batches_before_rate_limit(
     def run_async_side_effect(*, new_message, **kwargs):
         del new_message, kwargs
         calls["count"] += 1
+        current_call = calls["count"]
 
         async def _agen():
-            if calls["count"] == 1:
+            if current_call == 1:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"a.py","line":1},{"not":"valid"}]}',
                 )
                 raise RateLimitError("HTTP 429 Too Many Requests")
-            if calls["count"] == 2:
+            if current_call == 2:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x",'
                     '"message":"Retry malformed batch."}]}',
                 )
                 return
-            if calls["count"] == 3:
+            if current_call == 3:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"b.py","line":1,"severity":"medium","code":"y",'
@@ -433,28 +436,29 @@ def test_batch_mode_splits_malformed_batch_into_smaller_batches(
     def run_async_side_effect(*, new_message, **kwargs):
         del new_message, kwargs
         calls["count"] += 1
+        current_call = calls["count"]
 
         async def _agen():
-            if calls["count"] == 1:
+            if current_call == 1:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"a.py","line":1},{"not":"valid"}]}',
                 )
                 return
-            if calls["count"] == 2:
+            if current_call == 2:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"a.py","line":1},{"not":"valid"}]}',
                 )
                 return
-            if calls["count"] == 3:
+            if current_call == 3:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x",'
                     '"message":"Recovered split batch A."}]}',
                 )
                 return
-            if calls["count"] == 4:
+            if current_call == 4:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"b.py","line":1,"severity":"medium","code":"y",'
@@ -498,20 +502,21 @@ def test_batch_mode_retries_empty_isolated_batch_response(
     def run_async_side_effect(*, new_message, **kwargs):
         del new_message, kwargs
         calls["count"] += 1
+        current_call = calls["count"]
 
         async def _agen():
-            if calls["count"] == 1:
+            if current_call == 1:
                 raise RateLimitError("HTTP 429 Too Many Requests")
-            if calls["count"] == 2:
+            if current_call == 2:
                 return
-            if calls["count"] == 3:
+            if current_call == 3:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x",'
                     '"message":"Recovered split batch A after empty response."}]}',
                 )
                 return
-            if calls["count"] == 4:
+            if current_call == 4:
                 yield _final_batch_event(
                     "batch_review_0",
                     '{"findings":[{"path":"b.py","line":1,"severity":"medium","code":"y",'

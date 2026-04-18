@@ -335,7 +335,7 @@ async def _read_output_key_findings_async(
         if isinstance(raw, dict):
             return FindingsBatchV1.model_validate(raw).findings
         if hasattr(raw, "findings"):
-            return list(raw.findings)
+            return FindingsBatchV1.model_validate(raw, from_attributes=True).findings
     except Exception as exc:
         logger.debug(
             "output_key read: failed to parse state value key=%s session=%s: %s",

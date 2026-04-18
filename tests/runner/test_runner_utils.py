@@ -127,6 +127,23 @@ async def test_read_output_key_findings_returns_findings_from_dict():
 
 
 @pytest.mark.asyncio
+async def test_read_output_key_findings_validates_object_state_from_attributes():
+    raw = SimpleNamespace(
+        findings=[
+            SimpleNamespace(path="a.py", line=1, severity="medium", code="x", message="m")
+        ]
+    )
+    svc = _make_session_service(_make_session({"findings_result": raw}))
+
+    result = await _read_output_key_findings_async(svc, "sid", "findings_result")
+
+    assert result is not None
+    assert len(result) == 1
+    assert isinstance(result[0], FindingV1)
+    assert result[0].path == "a.py"
+
+
+@pytest.mark.asyncio
 async def test_read_output_key_findings_returns_none_when_session_missing():
     svc = _make_session_service(session=None)
 
@@ -156,6 +173,16 @@ async def test_read_output_key_findings_returns_none_on_get_session_error():
 @pytest.mark.asyncio
 async def test_read_output_key_findings_returns_none_on_invalid_schema():
     raw = {"findings": [{"bad": "schema"}]}
+    svc = _make_session_service(_make_session({"findings_result": raw}))
+
+    result = await _read_output_key_findings_async(svc, "sid", "findings_result")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_read_output_key_findings_returns_none_on_invalid_object_schema():
+    raw = SimpleNamespace(findings=[SimpleNamespace(bad="schema")])
     svc = _make_session_service(_make_session({"findings_result": raw}))
 
     result = await _read_output_key_findings_async(svc, "sid", "findings_result")
