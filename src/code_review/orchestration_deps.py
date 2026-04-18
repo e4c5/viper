@@ -126,6 +126,7 @@ from code_review.orchestration.runner_utils import (  # noqa: E402
     PartialResponseCollectionError,  # noqa: F401
     _bypass_adk_templating,  # noqa: F401
     _findings_from_response,  # noqa: F401
+    _get_output_key_findings,  # noqa: F401
     _log_run_complete,  # noqa: F401
     _parse_findings_json,  # noqa: F401
     _run_agent_and_collect_response,  # noqa: F401

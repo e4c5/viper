@@ -29,6 +29,7 @@ def create_agent_and_runner(
     *,
     context_brief_attached: bool = False,
     review_visible_lines: bool | None = None,
+    single_batch_mode: bool = False,
 ):
     """Build the batch-review SequentialAgent, session service, and ADK Runner."""
     from google.adk.runners import Runner
@@ -43,6 +44,7 @@ def create_agent_and_runner(
         head_sha=pr_ctx.head_sha,
         context_brief_attached=context_brief_attached,
         review_visible_lines=review_visible_lines,
+        use_output_key=single_batch_mode,
     )
     session_id = (
         f"{pr_ctx.owner}/{pr_ctx.repo}/pr-{pr_ctx.pr_number}"
@@ -322,13 +324,14 @@ def _run_isolated_batches_with_retry(
     ]
     while pending:
         batch, attempt = pending.pop(0)
-        session_id, _, runner = create_agent_and_runner(
+        session_id, session_service, runner = create_agent_and_runner(
             pr_ctx,
             provider,
             review_standards,
             [batch],
             context_brief_attached=context_brief_attached,
             review_visible_lines=review_visible_lines,
+            single_batch_mode=True,
         )
         content = build_batch_review_content(
             pr_ctx=pr_ctx,
@@ -357,6 +360,24 @@ def _run_isolated_batches_with_retry(
                     )
                 continue
             raise exc.cause from exc
+
+        # Prefer validated session-state output (output_key path) over raw-text parsing.
+        # If unavailable (ADK didn't write it, or session lookup failed), fall back to text.
+        state_findings = runner_mod._get_output_key_findings(
+            session_service, session_id, "findings_result"
+        )
+        if state_findings is not None:
+            raw_findings, raw_failed = findings_from_batch_responses(responses)
+            if not raw_failed and len(raw_findings) != len(state_findings):
+                runner_mod.logger.debug(
+                    "[batch] output_key and raw-text finding counts differ paths=%s "
+                    "(state=%d raw=%d); using validated state output.",
+                    ", ".join(batch.paths),
+                    len(state_findings),
+                    len(raw_findings),
+                )
+            all_findings.extend(state_findings)
+            continue
 
         findings, failed_indexes = findings_from_batch_responses(responses)
         if not failed_indexes:

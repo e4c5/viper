@@ -75,12 +75,16 @@ def create_sequential_batch_review_agent(
     head_sha: str = "",
     context_brief_attached: bool = False,
     review_visible_lines: bool | None = None,
+    use_output_key: bool = False,
 ):
     """Build a SequentialAgent that reviews prepared diff batches one after another."""
     from google.adk.agents import SequentialAgent
 
     sub_agents = []
     for index, batch in enumerate(batches):
+        # output_key only safe for single-batch sessions: multiple sub-agents sharing
+        # a session would overwrite each other's state entry.
+        output_key = "findings_result" if (use_output_key and len(batches) == 1) else None
         agent = create_review_agent(
             provider,
             review_standards,
@@ -88,6 +92,8 @@ def create_sequential_batch_review_agent(
             disable_tools=True,
             context_brief_attached=context_brief_attached,
             review_visible_lines=review_visible_lines,
+            slim_output=True,
+            output_key=output_key,
         )
         agent.name = f"batch_review_{index}"
         agent.instruction = agent.instruction.rstrip() + "\n\n" + _batch_instruction_suffix(

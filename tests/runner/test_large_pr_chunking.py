@@ -124,6 +124,7 @@ def _capture_create_batch_agent(batch_agents_created):
         head_sha="",
         context_brief_attached=False,
         review_visible_lines=None,
+        use_output_key=False,
     ):
         batch_agents_created.append(
             {

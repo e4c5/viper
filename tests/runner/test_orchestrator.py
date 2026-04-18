@@ -358,6 +358,7 @@ def test_create_agent_and_runner_uses_sequential_batch_workflow(
         head_sha="sha1",
         context_brief_attached=False,
         review_visible_lines=None,
+        use_output_key=False,
     )
 
 
@@ -818,6 +819,7 @@ def test_create_agent_and_runner_returns_session_id_service_runner():
             head_sha="",
             context_brief_attached=False,
             review_visible_lines=None,
+            use_output_key=False,
         )
     assert session_id.startswith("o/r/pr-42/")
     assert len(session_id) > len("o/r/pr-42/")

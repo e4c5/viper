@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from code_review.agent import (
+    BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION,
     EMBEDDED_DIFF_REVIEW_INSTRUCTION,
     TOOL_ENABLED_REVIEW_INSTRUCTION,
     create_review_agent,
@@ -481,3 +482,153 @@ def test_after_model_callback_logs_usage_metadata(caplog) -> None:
     assert "prompt_tokens=123" in caplog.text
     assert "completion_tokens=45" in caplog.text
     assert "total_tokens=168" in caplog.text
+    assert "finish_reason=" in caplog.text
+    assert "response_text_len=0" in caplog.text
+
+
+def test_after_model_callback_logs_finish_reason_when_present(caplog) -> None:
+    llm_response = SimpleNamespace(
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=10,
+            candidates_token_count=5,
+            total_token_count=15,
+            cached_content_token_count=0,
+            tool_use_prompt_token_count=0,
+            thoughts_token_count=0,
+        ),
+        finish_reason="MAX_TOKENS",
+        interrupted=True,
+        turn_complete=False,
+        content=SimpleNamespace(parts=[SimpleNamespace(text='{"findings":[]}')]),
+    )
+
+    caplog.set_level(logging.INFO, logger="code_review.agent.agent")
+    _after_model_callback(SimpleNamespace(agent_name="batch_review_0"), llm_response)
+
+    assert "finish_reason=MAX_TOKENS" in caplog.text
+    assert "interrupted=True" in caplog.text
+    assert "turn_complete=False" in caplog.text
+    assert "response_text_len=15" in caplog.text
+
+
+# --- Batch instruction tests ---
+
+
+def test_batch_embedded_diff_instruction_excludes_fix_guidance():
+    """BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION must forbid suggested_patch and agent_fix_prompt."""
+    instr = BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION
+    # Both field names appear only in the prohibition list, not as required/recommended fields.
+    assert "DO NOT include" in instr, (
+        "batch instruction must explicitly forbid fix-guidance fields"
+    )
+    # Must NOT encourage or require them — phrases from the full instruction.
+    assert "highly recommended for fixable" not in instr, (
+        "batch instruction must not call suggested_patch 'highly recommended'"
+    )
+    assert "MANDATORY whenever" not in instr, (
+        "batch instruction must not mark agent_fix_prompt as mandatory"
+    )
+
+
+def test_batch_embedded_diff_instruction_excludes_evidence_confidence():
+    """BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION must not encourage evidence/confidence."""
+    instr = BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION
+    assert "Prefer including `evidence`" not in instr
+    assert "Prefer including evidence" not in instr
+
+
+def test_batch_embedded_diff_instruction_retains_required_fields():
+    """BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION must require path, line, severity, code, message."""
+    instr = BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION
+    for field in ("path", "line", "severity", "code", "message"):
+        assert field in instr, f"batch instruction missing required field: {field}"
+
+
+def test_batch_embedded_diff_instruction_retains_analysis_methodology():
+    """BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION must retain rigorous analysis guidance."""
+    instr = BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION
+    assert "Failure Mode Analysis" in instr
+    assert "data flow" in instr
+
+
+def test_batch_embedded_diff_instruction_no_tool_references():
+    """BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION must not reference tools."""
+    instr = BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION
+    assert "get_file_content" not in instr
+    assert "get_pr_diff_for_file" not in instr
+
+
+@patch("google.adk.agents.Agent")
+@patch("code_review.agent.agent.create_findings_only_tools")
+@patch("code_review.agent.agent.get_llm_config")
+def test_create_review_agent_slim_output_uses_batch_instruction(
+    mock_get_llm_config, mock_create_tools, mock_agent_cls
+) -> None:
+    """slim_output=True with disable_tools=True must use BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION."""
+    provider = MagicMock()
+    mock_get_llm_config.return_value = MagicMock(
+        temperature=0.0,
+        max_output_tokens=65_000,
+        disable_tool_calls=False,
+    )
+    mock_create_tools.return_value = []
+    mock_agent_cls.return_value = MagicMock()
+
+    create_review_agent(
+        provider, review_standards="", findings_only=True, disable_tools=True, slim_output=True
+    )
+
+    _, kwargs = mock_agent_cls.call_args
+    assert kwargs["instruction"] == BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION
+    assert "output_key" not in kwargs
+
+
+@patch("google.adk.agents.Agent")
+@patch("code_review.agent.agent.create_findings_only_tools")
+@patch("code_review.agent.agent.get_llm_config")
+def test_create_review_agent_output_key_passed_when_set(
+    mock_get_llm_config, mock_create_tools, mock_agent_cls
+) -> None:
+    """output_key is forwarded to Agent when provided."""
+    provider = MagicMock()
+    mock_get_llm_config.return_value = MagicMock(
+        temperature=0.0,
+        max_output_tokens=65_000,
+        disable_tool_calls=False,
+    )
+    mock_create_tools.return_value = []
+    mock_agent_cls.return_value = MagicMock()
+
+    create_review_agent(
+        provider,
+        review_standards="",
+        findings_only=True,
+        disable_tools=True,
+        slim_output=True,
+        output_key="findings_result",
+    )
+
+    _, kwargs = mock_agent_cls.call_args
+    assert kwargs.get("output_key") == "findings_result"
+
+
+@patch("google.adk.agents.Agent")
+@patch("code_review.agent.agent.create_findings_only_tools")
+@patch("code_review.agent.agent.get_llm_config")
+def test_create_review_agent_output_key_omitted_when_none(
+    mock_get_llm_config, mock_create_tools, mock_agent_cls
+) -> None:
+    """output_key is not forwarded to Agent when None."""
+    provider = MagicMock()
+    mock_get_llm_config.return_value = MagicMock(
+        temperature=0.0,
+        max_output_tokens=65_000,
+        disable_tool_calls=False,
+    )
+    mock_create_tools.return_value = []
+    mock_agent_cls.return_value = MagicMock()
+
+    create_review_agent(provider, review_standards="", findings_only=True, disable_tools=True)
+
+    _, kwargs = mock_agent_cls.call_args
+    assert "output_key" not in kwargs

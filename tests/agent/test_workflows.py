@@ -76,6 +76,8 @@ def test_create_sequential_batch_review_agent_builds_one_sub_agent_per_batch(
         disable_tools=True,
         context_brief_attached=True,
         review_visible_lines=None,
+        slim_output=True,
+        output_key=None,
     )
     _, kwargs = mock_sequential_agent_cls.call_args
     assert kwargs["name"] == "sequential_batch_review_agent"

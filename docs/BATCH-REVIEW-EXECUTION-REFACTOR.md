@@ -101,7 +101,7 @@ These are signs that the execution boundary is in the wrong place.
 ## 4. Additional Investigation Findings
 
 Further investigation of the current implementation and the installed Google ADK version
-(`1.28.1`) produced these important findings:
+(`1.31.0`) produced these important findings:
 
 ### 4.1 ADK Is Already Sending Native Structured Output for Tool-Free Agents
 
@@ -146,44 +146,63 @@ the response budget safely supports.
 
 ### 4.3 We Do Not Yet Log Enough Response Metadata
 
-The current batch collectors log parse failures, but they do not systematically surface:
+The current batch collectors log parse failures, but they do not systematically surface all the
+metadata needed to diagnose truncation.
 
-- `finish_reason`
-- token usage / `usage_metadata`
-- whether the final event ended due to max tokens
+Token usage **is** already logged. `_after_model_callback` in `agent.py` emits prompt, completion,
+cached, tool-use, and thoughts token counts at INFO level for every model call. That part of the
+observability gap is closed.
+
+What is still missing:
+
+- `finish_reason` — not extracted or logged anywhere. Without it, truncation caused by
+  `max_output_tokens` is indistinguishable from a model-generated malformed response. The current
+  retry and split logic treats both cases identically, even though the right response differs.
 - response text length per batch
+- whether the final event ended due to max tokens
 
-Without that, we can suspect truncation but cannot prove it reliably from runtime logs.
+Until `finish_reason` is logged, we can suspect truncation but cannot prove it reliably from
+runtime logs, and the split heuristic is guessing at the wrong level.
 
 ### 4.4 We Are Parsing Raw Text Even Though ADK Can Validate Output Into State
 
 ADK's `LlmAgent` supports `output_key`, and when both `output_key` and `output_schema`
 are set, ADK validates the final response and writes the parsed result into session state.
 
-We currently do not use `output_key`, so even successful structured responses are consumed by
-reparsing raw text from final events. That is unnecessary coupling to transport text for the
-success path.
+We currently set `output_schema=FindingsBatchV1` but not `output_key`. As a result, even
+successful structured responses are consumed by searching for JSON in raw response text
+(`iter_json_candidates()` → `json.loads()` → `FindingsBatchV1.model_validate()`). The Pydantic
+validation step does catch schema violations, but the JSON extraction heuristic that precedes it
+is unnecessary coupling to transport text on the success path.
 
 This does not solve truncation by itself, but it is a cleaner success-path integration and
 should be part of the longer-term refactor.
 
 ### 4.5 Essential Near-Term Reliability Fixes
 
-Before or alongside the coordinator refactor, the plan should include these essential fixes:
+Phase 0 is where almost all of the reliability gain lives. The full coordinator refactor
+(Phases 1–4) is an architectural improvement worth doing, but the failures seen in production
+— truncated JSON, oversized responses, silent batch drops — are primarily caused by the three
+items below. These should be addressed first and measured before committing to the larger refactor.
 
-1. **Slim the batch-review output contract.**
+1. **Slim the batch-review output contract** *(highest leverage).*
+   The current instruction marks `agent_fix_prompt` as mandatory (“MUST include”) whenever a
+   patch is identified, making it effectively required on most findings. Combined with
+   `suggested_patch`, this substantially inflates response token counts on large diffs and is
+   the most likely driver of truncation.
    For batch review, return only the minimal fields needed to post a high-quality finding:
    - required: `path`, `line`, `severity`, `code`, `message`
    - allowed when concise and necessary: `end_line`, `anchor`
    - defer `evidence`, `confidence`, `suggested_patch`, and `agent_fix_prompt`
      from the batch-review path unless explicitly reintroduced under a separate, budgeted step
 
-2. **Detect truncation explicitly.**
-   Log `finish_reason`, usage metadata, and response text length for every batch execution.
+2. **Detect truncation explicitly** *(high leverage, low effort).*
+   Log `finish_reason` and response text length for every batch execution.
+   Token usage is already logged (§4.3); `finish_reason` is the missing piece.
    If the model stopped for a token-limit-like reason, classify the outcome as truncation and
    split the scope immediately instead of repeating the same batch with only prompt nudges.
 
-3. **Use ADK's validated output path for success cases.**
+3. **Use ADK's validated output path for success cases** *(moderate effort).*
    Add `output_key` for single-batch workers and prefer reading validated structured output from
    session state on success. Keep raw-text parsing as a diagnostic / fallback path.
 
@@ -525,6 +544,10 @@ This keeps the success path clean while preserving enough evidence to debug mode
 ## 12. Migration Plan
 
 Implement in small, reviewable steps.
+
+**ADK version:** this document targets `1.31.0` (`google-adk>=1.31.0` is now the minimum
+constraint). Versions 1.28–1.31 introduced no breaking changes to `LlmAgent`, `SequentialAgent`,
+`Runner`, or the `SingleFlow` structured-output path, so the plan applies directly.
 
 ### Phase 0: Immediate Reliability Mitigations
 
