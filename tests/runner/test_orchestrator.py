@@ -1181,6 +1181,54 @@ def test_build_review_batches_for_scope_falls_back_when_diff_budget_is_zero():
     assert batches[0].segments[0].estimated_tokens > 0
 
 
+def test_split_batch_for_retry_resegments_single_large_segment():
+    from code_review.batching import ReviewBatch, ReviewSegment
+    from code_review.diff.utils import estimate_tokens
+    from code_review.orchestration.execution import _split_batch_for_retry
+
+    first_hunk = "\n".join(
+        f"+very_long_added_line_number_{i:02d}_with_extra_context_to_force_segmentation"
+        for i in range(1, 25)
+    )
+    second_hunk = "\n".join(
+        f"+second_hunk_long_added_line_number_{i:02d}_with_extra_context_to_force_segmentation"
+        for i in range(25, 49)
+    )
+    diff_text = (
+        "diff --git a/foo.py b/foo.py\n"
+        "--- a/foo.py\n"
+        "+++ b/foo.py\n"
+        "@@ -1,1 +1,25 @@\n"
+        "-old_line\n"
+        f"{first_hunk}\n"
+        "@@ -40,1 +64,25 @@\n"
+        "-old_line_2\n"
+        f"{second_hunk}\n"
+    )
+    estimated_tokens = estimate_tokens(diff_text)
+    batch = ReviewBatch(
+        batch_index=0,
+        estimated_tokens=estimated_tokens,
+        segments=(
+            ReviewSegment(
+                path="foo.py",
+                diff_text=diff_text,
+                estimated_tokens=estimated_tokens,
+                segment_index=0,
+                total_segments=1,
+                split_strategy="whole_file",
+            ),
+        ),
+        paths=("foo.py",),
+    )
+
+    split_batches = _split_batch_for_retry(batch)
+
+    assert len(split_batches) > 1
+    assert all(len(split_batch.segments) == 1 for split_batch in split_batches)
+    assert all(split_batch.paths == ("foo.py",) for split_batch in split_batches)
+
+
 # --- Multiline suggested_patch enforcement at post_inline ---
 
 

@@ -430,6 +430,97 @@ def test_batch_mode_retries_malformed_completed_batches_before_rate_limit(
 @patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
 @patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
+def test_batch_mode_splits_malformed_batch_into_smaller_batches(
+    mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
+):
+    """Malformed batch recovery should shrink scope before retrying the same payload again."""
+    from code_review.batching import ReviewBatch, ReviewSegment
+
+    calls = {"count": 0}
+    forced_batches = [
+        ReviewBatch(
+            batch_index=0,
+            estimated_tokens=20,
+            segments=(
+                ReviewSegment(
+                    path="a.py",
+                    diff_text="diff --git a/a.py b/a.py",
+                    estimated_tokens=10,
+                    segment_index=0,
+                    total_segments=1,
+                    split_strategy="whole_file",
+                ),
+                ReviewSegment(
+                    path="b.py",
+                    diff_text="diff --git a/b.py b/b.py",
+                    estimated_tokens=10,
+                    segment_index=0,
+                    total_segments=1,
+                    split_strategy="whole_file",
+                ),
+            ),
+            paths=("a.py", "b.py"),
+        )
+    ]
+
+    def run_async_side_effect(*, new_message, **kwargs):
+        del new_message, kwargs
+        calls["count"] += 1
+
+        async def _agen():
+            if calls["count"] == 1:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"a.py","line":1},{"not":"valid"}]}',
+                )
+                return
+            if calls["count"] == 2:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"a.py","line":1},{"not":"valid"}]}',
+                )
+                return
+            if calls["count"] == 3:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"a.py","line":1,"severity":"medium","code":"x",'
+                    '"message":"Recovered split batch A."}]}',
+                )
+                return
+            if calls["count"] == 4:
+                yield _final_batch_event(
+                    "batch_review_0",
+                    '{"findings":[{"path":"b.py","line":1,"severity":"medium","code":"y",'
+                    '"message":"Recovered split batch B."}]}',
+                )
+                return
+            raise AssertionError(f"unexpected run_async call #{calls['count']}")
+
+        return _agen()
+
+    with patch(
+        "code_review.orchestration.standard_review.execution_mod.build_review_batches_for_scope",
+        return_value=forced_batches,
+    ):
+        findings = _exercise_batch_mode_failure(
+            mock_get_scm_config,
+            mock_get_provider,
+            mock_get_llm_config,
+            mock_get_context_window,
+            run_async_side_effect,
+            dry_run=True,
+        )
+
+    assert [(finding.path, finding.message) for finding in findings] == [
+        ("a.py", "Recovered split batch A."),
+        ("b.py", "Recovered split batch B."),
+    ]
+
+
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_llm_config")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
 def test_batch_mode_authentication_error_is_fatal(
     mock_get_scm_config, mock_get_provider, mock_get_llm_config, mock_get_context_window
 ):
