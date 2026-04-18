@@ -134,11 +134,11 @@ def create_verification_agent():
     from google.genai import types
 
     from code_review.config import get_llm_config
-    from code_review.models import get_configured_model
+    from code_review.models import get_configured_model, get_effective_temperature
 
     llm_cfg = get_llm_config()
     generate_content_config = types.GenerateContentConfig(
-        temperature=0.1,  # deterministic: this is a binary confirm/reject task
+        temperature=get_effective_temperature(0.1),  # deterministic: this is a binary confirm/reject task
         max_output_tokens=min(llm_cfg.max_output_tokens, 4096),
     )
     return Agent(

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from code_review.config import get_llm_config
 from code_review.json_utils import iter_json_candidates
-from code_review.models import get_configured_model
+from code_review.models import get_configured_model, get_effective_temperature
 from code_review.schemas.reply_dismissal import ReplyDismissalVerdictV1
 
 if TYPE_CHECKING:
@@ -79,7 +79,7 @@ def create_reply_dismissal_agent() -> Agent:
 
     llm_cfg = get_llm_config()
     generate_content_config = types.GenerateContentConfig(
-        temperature=llm_cfg.temperature,
+        temperature=get_effective_temperature(llm_cfg.temperature),
         max_output_tokens=llm_cfg.max_output_tokens,
     )
     return Agent(

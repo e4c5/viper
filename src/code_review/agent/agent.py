@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from code_review.agent.tools.gitea_tools import create_findings_only_tools
 from code_review.config import get_code_review_app_config, get_llm_config
 from code_review.logging_config import emit_package_log
-from code_review.models import get_configured_model
+from code_review.models import get_configured_model, get_effective_temperature
 from code_review.providers.base import ProviderInterface
 from code_review.schemas.findings import FindingsBatchV1
 
@@ -501,7 +501,7 @@ def create_review_agent(
 
     llm_cfg = get_llm_config()
     generate_content_config = types.GenerateContentConfig(
-        temperature=llm_cfg.temperature,
+        temperature=get_effective_temperature(llm_cfg.temperature),
         max_output_tokens=llm_cfg.max_output_tokens,
     )
 

@@ -255,3 +255,34 @@ def get_max_output_tokens() -> int:
         if metadata and metadata.max_output_tokens_default is not None:
             return metadata.max_output_tokens_default
     return config.max_output_tokens
+
+
+# Models that only support temperature=1 (any other value raises UnsupportedParamsError).
+_FIXED_TEMPERATURE_MODELS: frozenset[str] = frozenset({"gpt-5", "gpt-5-codex"})
+_FIXED_TEMPERATURE_PREFIXES: tuple[str, ...] = ("gpt-5",)
+
+
+def get_effective_temperature(requested: float) -> float:
+    """Return the temperature to use for the currently configured model.
+
+    Some models (e.g. gpt-5 and gpt-5-codex) only support temperature=1.
+    Passing any other value causes litellm.UnsupportedParamsError at runtime.
+    This helper normalises the requested temperature to whatever the model
+    actually accepts, logging a warning when clamping is required.
+    """
+    import logging
+
+    config = get_llm_config()
+    resolved = _MODEL_ALIASES.get((config.provider, config.model), config.model)
+
+    needs_fixed = resolved in _FIXED_TEMPERATURE_MODELS or any(
+        resolved.startswith(p) for p in _FIXED_TEMPERATURE_PREFIXES
+    )
+    if needs_fixed and requested != 1.0:
+        logging.getLogger(__name__).warning(
+            "Model %r only supports temperature=1; overriding requested temperature=%.2f",
+            resolved,
+            requested,
+        )
+        return 1.0
+    return requested

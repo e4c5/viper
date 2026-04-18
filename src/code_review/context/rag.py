@@ -9,7 +9,7 @@ import litellm
 
 from code_review.config import get_llm_config
 from code_review.context.distiller import _litellm_model_name
-from code_review.models import get_configured_model
+from code_review.models import get_configured_model, get_effective_temperature
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ def build_semantic_query_from_diff(diff_text: str, max_diff_chars: int = 14_000)
                 {"role": "user", "content": user},
             ],
             max_tokens=256,
-            temperature=llm.temperature,
+            temperature=get_effective_temperature(llm.temperature),
         )
         choices = (
             resp["choices"] if isinstance(resp, dict) else getattr(resp, "choices", None)
