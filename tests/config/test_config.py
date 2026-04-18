@@ -33,6 +33,7 @@ def test_scm_config_bitbucket_server_user_slug_stripped():
         {
             "SCM_URL": "https://gitea.example.com",
             "SCM_TOKEN": "x",
+            "SCM_BOT_IDENTITY": "",
             "SCM_BITBUCKET_SERVER_USER_SLUG": "  \t  ",
         },
         clear=False,
@@ -45,6 +46,7 @@ def test_scm_config_bitbucket_server_user_slug_stripped():
         {
             "SCM_URL": "https://gitea.example.com",
             "SCM_TOKEN": "x",
+            "SCM_BOT_IDENTITY": "",
             "SCM_BITBUCKET_SERVER_USER_SLUG": "  buildbot  ",
         },
         clear=False,

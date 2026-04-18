@@ -63,18 +63,43 @@ def test_findings_from_response_invalid_skipped():
     assert len(findings) == 0
 
 
+def test_findings_from_response_invalid_schema_raises_value_error():
+    """Schema-invalid JSON must raise when raise_errors=True so batch retry logic can recover."""
+    text = '{"findings":[{"path":"p","line":1},{"not":"valid"}]}'
+    with pytest.raises(ValueError, match="Failed to validate structured findings JSON"):
+        _findings_from_response(text, raise_errors=True)
+
+
+def test_findings_from_response_non_object_raises_value_error():
+    """A top-level JSON array is malformed for the findings contract when raise_errors=True."""
+    text = '[{"path":"p","line":1,"severity":"high","code":"x","message":"fix it"}]'
+    with pytest.raises(
+        ValueError, match="expected top-level object, got list"
+    ):
+        _findings_from_response(text, raise_errors=True)
+
+
 def test_findings_from_response_malformed_json_raises_value_error():
-    """Malformed JSON from agent must raise so the orchestrator does not treat it as clean."""
+    """Malformed JSON from agent must raise when raise_errors=True."""
     text = '{"path": "missing array wrapper"'  # invalid JSON
     with pytest.raises(ValueError, match="Failed to parse structured findings JSON"):
-        _findings_from_response(text)
+        _findings_from_response(text, raise_errors=True)
 
 
 def test_findings_from_batch_responses_propagates_parse_failure():
-    """Batch parsing must surface malformed responses instead of returning zero findings."""
+    """Batch parsing must surface malformed responses by returning failed indexes."""
     responses = [("batch_review_0", '{"path": "missing array wrapper"')]
-    with pytest.raises(ValueError, match="Failed to parse structured findings JSON"):
-        findings_from_batch_responses(responses)
+    findings, failed_indexes = findings_from_batch_responses(responses)
+    assert len(findings) == 0
+    assert failed_indexes == [0]
+
+
+def test_findings_from_batch_responses_returns_failed_indexes_for_schema_errors():
+    """Batch parsing must mark schema-invalid JSON for retry, not silently drop it."""
+    responses = [("batch_review_0", '{"findings":[{"path":"p","line":1},{"not":"valid"}]}')]
+    findings, failed_indexes = findings_from_batch_responses(responses)
+    assert findings == []
+    assert failed_indexes == [0]
 
 
 def test_build_commit_messages_block_respects_remaining_char_budget():

@@ -117,24 +117,78 @@ def _run_sequential_batch_review_mode(
         )
     except runner_mod.PartialResponseCollectionError as exc:
         if isinstance(exc.cause, runner_mod.RateLimitError):
-            return _recover_rate_limited_batches(
-                pr_ctx,
-                provider,
-                review_standards,
-                batches,
-                completed_responses=exc.responses,
-                context_brief_attached=context_brief_attached,
-                prompt_suffix=prompt_suffix,
-                error=exc.cause,
-                review_visible_lines=review_visible_lines,
+            response_indexes = {
+                idx
+                for author, _ in exc.responses
+                if (idx := batch_index_from_author(author)) is not None
+            }
+            logger.warning(
+                "Batch review hit rate limit after %d/%d completed batch response(s); "
+                "continuing remaining batches individually: %s",
+                len(response_indexes),
+                batch_count,
+                exc.cause,
             )
+            findings, failed_indexes = findings_from_batch_responses(exc.responses)
+            failed_set = set(failed_indexes)
+            completed_successfully = response_indexes - failed_set
+            failed_batches = [batches[i] for i in failed_indexes if i < len(batches)]
+            remaining_batches = [
+                b for i, b in enumerate(batches) if i not in completed_successfully and i not in failed_set
+            ]
+            if failed_batches:
+                logger.warning(
+                    "Recovering %d completed batch(es) that returned malformed findings before the rate limit.",
+                    len(failed_batches),
+                )
+                findings.extend(
+                    _run_isolated_batches_with_retry(
+                        pr_ctx,
+                        provider,
+                        review_standards,
+                        failed_batches,
+                        context_brief_attached=context_brief_attached,
+                        prompt_suffix=prompt_suffix,
+                        review_visible_lines=review_visible_lines,
+                        initial_retry_attempt=1,
+                    )
+                )
+            findings.extend(
+                _run_isolated_batches_with_retry(
+                    pr_ctx,
+                    provider,
+                    review_standards,
+                    remaining_batches,
+                    context_brief_attached=context_brief_attached,
+                    prompt_suffix=prompt_suffix,
+                    review_visible_lines=review_visible_lines,
+                )
+            )
+            return findings
         raise exc.cause from exc
     logger.info(
         "[batch] SequentialAgent runner returned: session=%s responses=%d",
         session_id,
         len(responses),
     )
-    return findings_from_batch_responses(responses)
+
+    findings, failed_indexes = findings_from_batch_responses(responses)
+    if failed_indexes:
+        logger.warning("Recovering %d batch(es) that failed JSON parsing.", len(failed_indexes))
+        failed_batches = [batches[i] for i in failed_indexes if i < len(batches)]
+        findings.extend(
+            _run_isolated_batches_with_retry(
+                pr_ctx,
+                provider,
+                review_standards,
+                failed_batches,
+                context_brief_attached=context_brief_attached,
+                prompt_suffix=prompt_suffix,
+                review_visible_lines=review_visible_lines,
+                initial_retry_attempt=1,
+            )
+        )
+    return findings
 
 
 
@@ -143,6 +197,7 @@ def build_batch_review_content(
     pr_ctx: PRContext,
     batch_count: int,
     prompt_suffix: str = "",
+    retry_attempt: int = 0,
 ):
     """Build the user message used to execute a prepared batch-review workflow."""
     msg = (
@@ -151,6 +206,12 @@ def build_batch_review_content(
         + (f" head_sha={pr_ctx.head_sha}." if pr_ctx.head_sha else "")
         + f" Prepared batch count: {batch_count}."
     )
+    if retry_attempt > 0:
+        msg += (
+            "\n\nNote: Your previous response was interrupted and resulted in invalid, truncated JSON. "
+            "Please be concise, omit overly long code snippets in the description, "
+            "and ensure all JSON strings and arrays are fully closed."
+        )
     if prompt_suffix:
         msg += "\n\n" + prompt_suffix
     if runner_mod.get_code_review_app_config().log_prompts:
@@ -172,12 +233,21 @@ def build_batch_review_content(
 
 def findings_from_batch_responses(
     responses: list[tuple[str, str]],
-) -> list[runner_mod.FindingV1]:
-    """Parse structured findings from a list of batch response texts."""
+) -> tuple[list[runner_mod.FindingV1], list[int]]:
+    """Parse structured findings from a list of batch response texts, returning (findings, failed_indexes)."""
     all_findings: list[runner_mod.FindingV1] = []
-    for _author, response_text in responses:
-        all_findings.extend(runner_mod._findings_from_response(response_text))
-    return all_findings
+    failed_indexes: list[int] = []
+    for author, response_text in responses:
+        try:
+            all_findings.extend(
+                runner_mod._findings_from_response(response_text, raise_errors=True)
+            )
+        except ValueError as e:
+            idx = batch_index_from_author(author)
+            runner_mod.logger.warning("Batch %s response failed to parse: %s", idx, e)
+            if idx is not None:
+                failed_indexes.append(idx)
+    return all_findings, failed_indexes
 
 
 def batch_index_from_author(author: str) -> int | None:
@@ -189,64 +259,73 @@ def batch_index_from_author(author: str) -> int | None:
     return int(suffix) if suffix.isdigit() else None
 
 
-def _recover_rate_limited_batches(
+def _run_isolated_batches_with_retry(
     pr_ctx: PRContext,
     provider,
     review_standards: str,
-    batches: list[ReviewBatch],
+    batches_to_run: list[ReviewBatch],
     *,
-    completed_responses: list[tuple[str, str]],
     context_brief_attached: bool,
     prompt_suffix: str,
-    error: runner_mod.RateLimitError,
     review_visible_lines: bool | None = None,
+    initial_retry_attempt: int = 0,
+    max_retries: int = 2,
 ) -> list[runner_mod.FindingV1]:
-    """Keep successful batch responses and isolate the remaining batches one-by-one."""
-    completed_batch_indexes = {
-        batch_index
-        for author, _text in completed_responses
-        if (batch_index := batch_index_from_author(author)) is not None
-    }
-    runner_mod.logger.warning(
-        "Batch review hit rate limit after %d/%d completed batch response(s); "
-        "continuing remaining batches individually: %s",
-        len(completed_batch_indexes),
-        len(batches),
-        error,
-    )
-    all_findings = findings_from_batch_responses(completed_responses)
-    for batch_index, batch in enumerate(batches):
-        if batch_index in completed_batch_indexes:
-            continue
-        session_id, _, runner = create_agent_and_runner(
-            pr_ctx,
-            provider,
-            review_standards,
-            [batch],
-            context_brief_attached=context_brief_attached,
-            review_visible_lines=review_visible_lines,
-        )
-        content = build_batch_review_content(
-            pr_ctx=pr_ctx,
-            batch_count=1,
-            prompt_suffix=prompt_suffix,
-        )
-        try:
-            responses = runner_mod._run_agent_and_collect_responses(
-                runner, session_id, content
+    """Run specified batches individually with retries for rate limits or parse failures."""
+    all_findings = []
+    for batch in batches_to_run:
+        batch_findings = []
+        for attempt in range(initial_retry_attempt, max_retries + 1):
+            session_id, _, runner = create_agent_and_runner(
+                pr_ctx,
+                provider,
+                review_standards,
+                [batch],
+                context_brief_attached=context_brief_attached,
+                review_visible_lines=review_visible_lines,
             )
-        except runner_mod.PartialResponseCollectionError as exc:
-            if isinstance(exc.cause, runner_mod.RateLimitError):
-                runner_mod.logger.warning(
-                    "Skipping rate-limited batch %d/%d paths=%s: %s",
-                    batch_index + 1,
-                    len(batches),
-                    ", ".join(batch.paths),
-                    exc.cause,
+            content = build_batch_review_content(
+                pr_ctx=pr_ctx,
+                batch_count=1,
+                prompt_suffix=prompt_suffix,
+                retry_attempt=attempt,
+            )
+            try:
+                responses = runner_mod._run_agent_and_collect_responses(
+                    runner, session_id, content
                 )
-                continue
-            raise exc.cause from exc
-        all_findings.extend(findings_from_batch_responses(responses))
+            except runner_mod.PartialResponseCollectionError as exc:
+                if isinstance(exc.cause, runner_mod.RateLimitError):
+                    runner_mod.logger.warning(
+                        "Rate-limited on batch paths=%s (attempt %d/%d): %s",
+                        ", ".join(batch.paths),
+                        attempt + 1,
+                        max_retries + 1,
+                        exc.cause,
+                    )
+                    if attempt == max_retries:
+                        runner_mod.logger.warning(
+                            "Skipping batch after max retries due to rate limits."
+                        )
+                    continue
+                raise exc.cause from exc
+
+            findings, failed_indexes = findings_from_batch_responses(responses)
+            if failed_indexes:
+                runner_mod.logger.warning(
+                    "JSON parse failed for batch paths=%s (attempt %d/%d).",
+                    ", ".join(batch.paths),
+                    attempt + 1,
+                    max_retries + 1,
+                )
+                if attempt < max_retries:
+                    continue
+
+            # Success or max retries exhausted
+            batch_findings.extend(findings)
+            break
+
+        all_findings.extend(batch_findings)
     return all_findings
 
 

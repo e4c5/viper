@@ -267,14 +267,31 @@ def _parse_findings_json(text: str) -> object:
     )
 
 
-def _findings_from_response(response_text: str) -> list[FindingV1]:
+def _findings_from_response(response_text: str, *, raise_errors: bool = False) -> list[FindingV1]:
     """Parse response text into validated findings."""
-    raw = _parse_findings_json(response_text)
+    try:
+        raw = _parse_findings_json(response_text)
+    except ValueError as e:
+        if raise_errors:
+            raise
+        logger.warning("Dropping agent response due to unparseable JSON findings: %s", e)
+        return []
+
     if not isinstance(raw, dict):
+        if raise_errors:
+            raise ValueError(
+                "Failed to validate structured findings JSON from agent response: "
+                f"expected top-level object, got {type(raw).__name__}."
+            )
         return []
     try:
         return FindingsBatchV1.model_validate(raw).findings
     except Exception as e:
+        if raise_errors:
+            raise ValueError(
+                "Failed to validate structured findings JSON from agent response: "
+                f"{e}"
+            ) from e
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "Failed to parse structured findings response: %r (error: %s)",
