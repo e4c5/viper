@@ -37,6 +37,24 @@ def test_build_review_batch_budget_reserves_output_and_prompt_capacity():
     assert budget.prompt_budget_tokens == 86_784
 
 
+def test_build_review_batch_budget_ratio_capped_by_max_diff_budget():
+    """At ratio=0.5 with a 128K window, requested exceeds max_diff_budget so max wins.
+
+    context=128_000, max_output=65_536, safety=1_024 → effective_input=61_440
+    max_diff = 61_440 - 2_048 (prompt) = 59_392
+    requested  = 128_000 × 0.5 = 64_000  > 59_392 → capped at 59_392
+    """
+    budget = build_review_batch_budget(
+        context_window_tokens=128_000,
+        max_output_tokens=65_536,
+        diff_budget_ratio=0.5,
+    )
+
+    assert budget.effective_input_budget_tokens == 61_440
+    assert budget.effective_diff_budget_tokens == 59_392
+    assert budget.prompt_budget_tokens == 2_048
+
+
 def test_build_review_batches_groups_multiple_files_in_stable_order():
     diff_a = _file_diff("a.py", "-old_a\n+new_a")
     diff_b = _file_diff("b.py", "-old_b\n+new_b")

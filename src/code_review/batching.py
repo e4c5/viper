@@ -21,7 +21,6 @@ class ReviewBatchBudget:
     model_context_window_tokens: int
     max_output_tokens_reserved: int
     prompt_token_reserve: int
-    tool_token_reserve: int
     context_brief_token_reserve: int
     safety_margin_tokens: int
     diff_budget_ratio: float
@@ -58,7 +57,6 @@ def build_review_batch_budget(
     max_output_tokens: int,
     diff_budget_ratio: float,
     prompt_token_reserve: int = 2_048,
-    tool_token_reserve: int = 2_048,
     context_brief_token_reserve: int = 0,
     safety_margin_tokens: int = 1_024,
 ) -> ReviewBatchBudget:
@@ -79,7 +77,6 @@ def build_review_batch_budget(
         0,
         effective_input_budget
         - prompt_token_reserve
-        - tool_token_reserve
         - context_brief_token_reserve,
     )
     effective_diff_budget = min(requested_diff_budget, max_diff_budget)
@@ -89,7 +86,6 @@ def build_review_batch_budget(
         model_context_window_tokens=context_window_tokens,
         max_output_tokens_reserved=max_output_tokens,
         prompt_token_reserve=prompt_token_reserve,
-        tool_token_reserve=tool_token_reserve,
         context_brief_token_reserve=context_brief_token_reserve,
         safety_margin_tokens=safety_margin_tokens,
         diff_budget_ratio=diff_budget_ratio,

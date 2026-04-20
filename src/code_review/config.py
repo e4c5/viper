@@ -131,10 +131,6 @@ class LLMConfig(BaseSettings):
     )
     max_output_tokens: int = Field(default=4096, description="Max output tokens")
     temperature: float = Field(default=0.0, description="0 or very low for deterministic review")
-    disable_tool_calls: bool = Field(
-        default=False,
-        description="Disable tool calls for debugging runner logic",
-    )
     timeout_seconds: float = Field(
         default=60.0,
         description=(

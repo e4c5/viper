@@ -72,8 +72,6 @@ def test_create_sequential_batch_review_agent_builds_one_sub_agent_per_batch(
     mock_create_review_agent.assert_any_call(
         provider,
         "review standards",
-        findings_only=True,
-        disable_tools=True,
         context_brief_attached=True,
         review_visible_lines=None,
         slim_output=True,

@@ -74,12 +74,8 @@ def test_filter_drops_retracted_keeps_normal():
 
 
 def test_agent_instructions_discourage_self_retracting_messages():
-    from code_review.agent.agent import (
-        EMBEDDED_DIFF_REVIEW_INSTRUCTION,
-        TOOL_ENABLED_REVIEW_INSTRUCTION,
-    )
+    from code_review.agent.agent import EMBEDDED_DIFF_REVIEW_INSTRUCTION
 
-    for text in (TOOL_ENABLED_REVIEW_INSTRUCTION, EMBEDDED_DIFF_REVIEW_INSTRUCTION):
-        lowered = text.lower()
-        assert "false positive" in lowered
-        assert "retract" in lowered
+    lowered = EMBEDDED_DIFF_REVIEW_INSTRUCTION.lower()
+    assert "false positive" in lowered
+    assert "retract" in lowered

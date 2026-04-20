@@ -1076,7 +1076,7 @@ def test_run_batch_mode_message_includes_head_sha_and_batch_count():
             skip_label="",
             skip_title_pattern="",
         )
-        mock_llm.return_value = MagicMock(disable_tool_calls=False)
+        mock_llm.return_value = MagicMock()
         provider = MagicMock()
         provider.get_pr_files.return_value = [FileInfo(path="src/foo.py", status="modified")]
         provider.get_pr_diff.return_value = (

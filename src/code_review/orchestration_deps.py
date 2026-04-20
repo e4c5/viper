@@ -90,12 +90,12 @@ USER_ID = "reviewer"
 AGENT_VERSION = getattr(code_review, "__version__", "0.1.0")
 logger = logging.getLogger(__name__)
 
-# Fraction of context window reserved for diff content; rest for system prompt, tools, response.
+# Fraction of context window reserved for diff content; rest for system prompt and response.
 # Configurable via LLM_DIFF_BUDGET_RATIO env var.
 try:
-    DIFF_TOKEN_BUDGET_RATIO = float(os.getenv("LLM_DIFF_BUDGET_RATIO", "0.25"))
+    DIFF_TOKEN_BUDGET_RATIO = float(os.getenv("LLM_DIFF_BUDGET_RATIO", "0.5"))
 except ValueError:
-    DIFF_TOKEN_BUDGET_RATIO = 0.25
+    DIFF_TOKEN_BUDGET_RATIO = 0.5
 
 # ---------------------------------------------------------------------------
 # Re-exports from focused submodules (canonical implementations live there).

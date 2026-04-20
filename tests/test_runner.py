@@ -661,7 +661,6 @@ def test_run_review_builds_multiple_batches_when_diff_exceeds_single_batch_budge
     llm_cfg = _llm_config(
         temperature=0.0,
         max_output_tokens=1024,
-        disable_tool_calls=False,
     )
     mock_get_scm_config.return_value = scm_cfg
     mock_get_llm_config.return_value = llm_cfg

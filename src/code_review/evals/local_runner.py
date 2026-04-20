@@ -97,7 +97,6 @@ def _run_one_golden_pr_review_case_adk(case: GoldenPrReviewCase) -> EvalCaseResu
         agent = create_review_agent(
             _EvalProvider(),
             get_review_standards(case.language, None),
-            disable_tools=True,
         )
         response_text = _run_agent_text(
             agent,

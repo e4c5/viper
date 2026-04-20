@@ -88,8 +88,6 @@ def create_sequential_batch_review_agent(
         agent = create_review_agent(
             provider,
             review_standards,
-            findings_only=True,
-            disable_tools=True,
             context_brief_attached=context_brief_attached,
             review_visible_lines=review_visible_lines,
             slim_output=True,
