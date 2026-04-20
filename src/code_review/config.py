@@ -178,9 +178,9 @@ class TaskLLMConfig(BaseSettings):
     api_key: SecretStr | None = None
     model: str | None = None
 
-    @field_validator("provider", mode="before")
+    @field_validator("provider", "model", mode="before")
     @classmethod
-    def _normalize_provider(cls, v: str | None) -> str | None:
+    def _normalize_string_field(cls, v: str | None) -> str | None:
         if v is None:
             return None
         normalized = str(v).strip()
@@ -196,15 +196,6 @@ class TaskLLMConfig(BaseSettings):
         if not normalized:
             return None
         return SecretStr(normalized)
-
-    @field_validator("model", mode="before")
-    @classmethod
-    def _normalize_model(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        normalized = str(v).strip()
-        return normalized or None
-
 
 class SummaryLLMConfig(TaskLLMConfig):
     """Optional LLM overrides for PR summary generation."""
