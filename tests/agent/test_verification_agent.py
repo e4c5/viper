@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from code_review.agent.verification_agent import create_verification_agent
 
 
@@ -26,7 +28,7 @@ def test_create_verification_agent_uses_verification_model_helper(
     _, kwargs = mock_agent_cls.call_args
     assert kwargs["model"] == "cheap-verification-model"
     assert kwargs["name"] == "verification_agent"
-    assert kwargs["generate_content_config"].temperature == 0.1
+    assert kwargs["generate_content_config"].temperature == pytest.approx(0.1)
     mock_get_verification_model.assert_called_once()
 
 
@@ -34,7 +36,7 @@ def test_create_verification_agent_uses_verification_model_helper(
 @patch("code_review.config.get_verification_llm_config")
 @patch("code_review.config.get_llm_config")
 @patch("google.adk.agents.Agent")
-def test_create_verification_agent_omits_temperature_for_verification_override_fixed_temperature_model(
+def test_create_verification_agent_omits_temperature_for_fixed_temperature_override(
     mock_agent_cls, mock_get_llm_cfg, mock_get_verification_cfg, mock_get_verification_model
 ):
     mock_get_llm_cfg.return_value = MagicMock(

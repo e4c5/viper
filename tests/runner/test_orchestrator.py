@@ -929,9 +929,8 @@ def test_maybe_post_started_review_comment_posts_when_description_missing():
     """Post a short 'reviewing…' note when description is missing; no description update."""
     provider = MagicMock()
     pr_info = MagicMock(title="T", description="")
-    paths = ["foo.py", "bar.py"]
 
-    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info, paths)
+    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info)
 
     provider.post_pr_summary_comment.assert_called_once()
     args, _ = provider.post_pr_summary_comment.call_args
@@ -948,9 +947,8 @@ def test_maybe_post_started_review_comment_does_not_update_description():
     """post_started_review_comment never calls update_pr_description (LLM does that later)."""
     provider = MagicMock()
     pr_info = MagicMock(title="kafka", description="")
-    paths = ["AGENTS.md", "README.md"]
 
-    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info, paths)
+    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info)
 
     # No description update — the LLM will write it after analysis
     provider.update_pr_description.assert_not_called()
@@ -968,9 +966,8 @@ def test_maybe_post_started_review_comment_skips_when_description_present():
         title="T",
         description="This is an existing, sufficiently detailed description for the PR.",
     )
-    paths = ["foo.py"]
 
-    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info, paths)
+    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info)
 
     provider.post_pr_summary_comment.assert_not_called()
     provider.update_pr_description.assert_not_called()
@@ -983,9 +980,8 @@ def test_maybe_post_started_review_comment_skips_when_description_is_short_but_i
         title="T",
         description="WIP fix.",
     )
-    paths = ["foo.py"]
 
-    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info, paths)
+    _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info)
 
     provider.update_pr_description.assert_not_called()
     provider.post_pr_summary_comment.assert_not_called()

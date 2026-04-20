@@ -384,7 +384,7 @@ class StandardReviewHandler:
             getattr(app_cfg, "started_review_comment_posted", False)
         )
         if not self.dry_run and not started_notice_already_posted:
-            CommentPoster(provider, self.pr_ctx).post_started_review_comment(pr_info, paths)
+            CommentPoster(provider, self.pr_ctx).post_started_review_comment(pr_info)
 
         return self._ReviewEnv(files, paths, full_diff, incremental_base_sha, pr_info)
 

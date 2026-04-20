@@ -144,7 +144,7 @@ class CommentPoster:
     # Public methods
     # ------------------------------------------------------------------
 
-    def post_started_review_comment(self, pr_info, paths: list[str] | None = None) -> bool:
+    def post_started_review_comment(self, pr_info) -> bool:
         """Post a started-review note when PR has no description.
 
         The description is filled later by the LLM.

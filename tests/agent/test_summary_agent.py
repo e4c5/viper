@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from code_review.agent.summary_agent import (
     SUMMARY_INSTRUCTION,
     create_summary_agent,
@@ -31,7 +33,7 @@ def test_create_summary_agent_uses_summary_model_helper(
     assert kwargs["model"] == "cheap-summary-model"
     assert kwargs["name"] == "summary_agent"
     assert kwargs["instruction"] == SUMMARY_INSTRUCTION
-    assert kwargs["generate_content_config"].temperature == 0.2
+    assert kwargs["generate_content_config"].temperature == pytest.approx(0.2)
     mock_get_summary_model.assert_called_once()
 
 

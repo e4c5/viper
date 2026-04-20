@@ -159,7 +159,9 @@ def test_get_effective_temperature_for_model_omits_fixed_temperature_models():
 
 
 def test_get_effective_temperature_for_model_keeps_regular_models():
-    assert get_effective_temperature_for_model("gemini", "gemini-3.1", 0.2) == 0.2
+    assert get_effective_temperature_for_model("gemini", "gemini-3.1", 0.2) == pytest.approx(
+        0.2
+    )
 
 
 @patch("code_review.models.get_llm_config")
