@@ -93,7 +93,7 @@ Loaded via `LLMConfig` (`env_prefix="LLM_"`).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_DIFF_BUDGET_RATIO` | `0.25` | Fraction of `LLM_CONTEXT_WINDOW` reserved for the unified diff; above this the runner switches to file-by-file review. |
+| `LLM_DIFF_BUDGET_RATIO` | `0.5` | Fraction of `LLM_CONTEXT_WINDOW` reserved for the unified diff; above this the runner switches to file-by-file review. |
 
 ---
 

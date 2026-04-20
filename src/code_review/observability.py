@@ -130,7 +130,7 @@ def _init_otel() -> bool:
             except ImportError:
                 pass
         # Use global provider (ours or app's); get_tracer works with no-op if none set
-        _otel_tracer = trace.get_tracer("code-review-agent", "1.0.2.2")
+        _otel_tracer = trace.get_tracer("code-review-agent", "1.0.5")
         return True
     except ImportError:
         logger.debug("OpenTelemetry export requested but opentelemetry not installed")
