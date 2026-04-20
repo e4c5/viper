@@ -6,8 +6,11 @@ import logging
 import re
 from typing import Any
 
-from code_review.config import get_llm_config
-from code_review.models import get_configured_model, get_effective_temperature
+from code_review.config import get_llm_config, get_summary_llm_config
+from code_review.models import (
+    get_configured_summary_model,
+    get_effective_temperature_for_model,
+)
 from code_review.schemas.findings import FindingV1
 
 logger = logging.getLogger(__name__)
@@ -90,14 +93,19 @@ def create_summary_agent():
     from google.genai import types
 
     llm_cfg = get_llm_config()
-    _temperature = get_effective_temperature(0.2)  # lower temperature for objective summaries
+    summary_cfg = get_summary_llm_config()
+    provider = summary_cfg.provider or llm_cfg.provider
+    model = summary_cfg.model or llm_cfg.model
+    _temperature = get_effective_temperature_for_model(
+        provider, model, 0.2
+    )  # lower temperature for objective summaries
     generate_content_config = types.GenerateContentConfig(
         **({"temperature": _temperature} if _temperature is not None else {}),
         max_output_tokens=llm_cfg.max_output_tokens,
     )
 
     return Agent(
-        model=get_configured_model(),
+        model=get_configured_summary_model(),
         name="summary_agent",
         instruction=SUMMARY_INSTRUCTION,
         generate_content_config=generate_content_config,

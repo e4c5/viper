@@ -8,7 +8,10 @@ import pytest
 import code_review.models as model_factory
 from code_review.models import (
     get_configured_model,
+    get_configured_summary_model,
+    get_configured_verification_model,
     get_context_window,
+    get_effective_temperature_for_model,
     get_max_output_tokens,
     get_model_metadata,
     get_model_metadata_catalog,
@@ -147,8 +150,18 @@ def test_get_model_metadata_refreshed_gemini_limits():
     metadata = get_model_metadata("gemini", "gemini-3.1")
 
     assert metadata is not None
-    assert metadata.context_window_tokens == 1_048_576
+    assert metadata.context_window_tokens == 200_000
     assert metadata.max_output_tokens_default == 65_536
+
+
+def test_get_effective_temperature_for_model_omits_fixed_temperature_models():
+    assert get_effective_temperature_for_model("openai", "gpt-5.4", 0.2) is None
+
+
+def test_get_effective_temperature_for_model_keeps_regular_models():
+    assert get_effective_temperature_for_model("gemini", "gemini-3.1", 0.2) == pytest.approx(
+        0.2
+    )
 
 
 @patch("code_review.models.get_llm_config")
@@ -156,6 +169,129 @@ def test_get_configured_model_gemini_alias_resolves_to_runtime_model(mock_get_co
     mock_get_config.return_value = MagicMock(provider="gemini", model="gemini-3.1", api_key=None)
 
     assert get_configured_model() == "gemini-3-flash-preview"
+
+
+@patch("code_review.models.get_summary_llm_config")
+@patch("code_review.models.get_llm_config")
+def test_get_configured_summary_model_falls_back_to_primary(mock_get_config, mock_get_summary):
+    from pydantic import SecretStr
+
+    mock_get_config.return_value = MagicMock(
+        provider="gemini",
+        model="gemini-3.1",
+        api_key=SecretStr("primary-key"),
+    )
+    mock_get_summary.return_value = MagicMock(provider=None, model=None, api_key=None)
+
+    assert get_configured_summary_model() == "gemini-3-flash-preview"
+
+
+@patch("code_review.models.get_summary_llm_config")
+@patch("code_review.models.get_llm_config")
+def test_get_configured_summary_model_uses_task_override(mock_get_config, mock_get_summary):
+    mock_get_config.return_value = MagicMock(provider="gemini", model="gemini-3.1", api_key=None)
+    mock_get_summary.return_value = MagicMock(
+        provider="gemini",
+        model="gemini-3-flash-lite-preview",
+        api_key=None,
+    )
+
+    assert get_configured_summary_model() == "gemini-3-flash-lite-preview"
+
+
+@patch("code_review.models.get_verification_llm_config")
+@patch("code_review.models.get_llm_config")
+def test_get_configured_verification_model_falls_back_to_primary(
+    mock_get_config, mock_get_verification
+):
+    mock_get_config.return_value = MagicMock(provider="gemini", model="gemini-3.1", api_key=None)
+    mock_get_verification.return_value = MagicMock(provider=None, model=None, api_key=None)
+
+    assert get_configured_verification_model() == "gemini-3-flash-preview"
+
+
+@patch("code_review.models.get_verification_llm_config")
+@patch("code_review.models.get_llm_config")
+def test_get_configured_verification_model_uses_task_override(
+    mock_get_config, mock_get_verification
+):
+    mock_get_config.return_value = MagicMock(provider="gemini", model="gemini-3.1", api_key=None)
+    mock_get_verification.return_value = MagicMock(
+        provider="openai",
+        model="gpt-5-mini",
+        api_key=None,
+    )
+
+    result = get_configured_verification_model()
+    if hasattr(result, "model"):
+        assert result.model == "openai/gpt-5-mini"
+    else:
+        assert result == "gpt-5-mini"
+
+
+@patch("code_review.models.get_summary_llm_config")
+@patch("code_review.models.get_llm_config")
+def test_get_configured_summary_model_uses_task_api_key(mock_get_config, mock_get_summary):
+    from pydantic import SecretStr
+
+    mock_get_config.return_value = MagicMock(
+        provider="gemini",
+        model="gemini-3.1",
+        api_key=SecretStr("primary-key"),
+    )
+    mock_get_summary.return_value = MagicMock(
+        provider="openrouter",
+        model="google/gemini-3-flash-lite-preview",
+        api_key=SecretStr("summary-key"),
+    )
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("OPENROUTER_API_KEY", None)
+        result = get_configured_summary_model()
+        assert os.environ.get("OPENROUTER_API_KEY") == "summary-key"
+        if hasattr(result, "model"):
+            assert result.model == "openrouter/google/gemini-3-flash-lite-preview"
+
+
+@patch("code_review.models.get_verification_llm_config")
+@patch("code_review.models.get_llm_config")
+def test_get_configured_verification_model_falls_back_to_primary_api_key(
+    mock_get_config, mock_get_verification
+):
+    from pydantic import SecretStr
+
+    mock_get_config.return_value = MagicMock(
+        provider="openai",
+        model="gpt-5-mini",
+        api_key=SecretStr("primary-key"),
+    )
+    mock_get_verification.return_value = MagicMock(provider=None, model=None, api_key=None)
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("OPENAI_API_KEY", None)
+        get_configured_verification_model()
+        assert os.environ.get("OPENAI_API_KEY") == "primary-key"
+
+
+@patch("code_review.models.get_summary_llm_config")
+@patch("code_review.models.get_llm_config")
+def test_get_configured_summary_model_does_not_reuse_primary_api_key_for_different_provider(
+    mock_get_config, mock_get_summary
+):
+    from pydantic import SecretStr
+
+    mock_get_config.return_value = MagicMock(
+        provider="openai",
+        model="gpt-5-mini",
+        api_key=SecretStr("openai-key"),
+    )
+    mock_get_summary.return_value = MagicMock(
+        provider="gemini",
+        model="gemini-3.1",
+        api_key=None,
+    )
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("GEMINI_API_KEY", None)
+        get_configured_summary_model()
+        assert "GEMINI_API_KEY" not in os.environ
 
 
 @patch("code_review.models.get_llm_config")
@@ -283,17 +419,12 @@ def test_get_configured_model_sets_provider_env_var_from_llm_api_key(mock_get_co
         model="anthropic/claude-3.5-sonnet",
         api_key=SecretStr("sk-fake"),
     )
-    previous_api_key = os.environ.get("OPENROUTER_API_KEY")
-    try:
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("OPENROUTER_API_KEY", None)
         result = get_configured_model()
         assert os.environ.get("OPENROUTER_API_KEY") == "sk-fake"
         if hasattr(result, "model"):
             assert result.model == "openrouter/anthropic/claude-3.5-sonnet"
-    finally:
-        if previous_api_key is None:
-            os.environ.pop("OPENROUTER_API_KEY", None)
-        else:
-            os.environ["OPENROUTER_API_KEY"] = previous_api_key
 
 
 @patch("code_review.models.get_llm_config")
@@ -301,21 +432,14 @@ def test_get_configured_model_ignores_blank_api_key(mock_get_config):
     """Blank API keys must not overwrite provider-specific credentials."""
     from pydantic import SecretStr
 
-    previous_api_key = os.environ.get("OPENROUTER_API_KEY")
-    os.environ["OPENROUTER_API_KEY"] = "existing-token"
     mock_get_config.return_value = MagicMock(
         provider="openrouter",
         model="anthropic/claude-3.5-sonnet",
         api_key=SecretStr("   "),
     )
-    try:
+    with patch.dict(os.environ, {"OPENROUTER_API_KEY": "existing-token"}, clear=False):
         get_configured_model()
         assert os.environ.get("OPENROUTER_API_KEY") == "existing-token"
-    finally:
-        if previous_api_key is None:
-            os.environ.pop("OPENROUTER_API_KEY", None)
-        else:
-            os.environ["OPENROUTER_API_KEY"] = previous_api_key
 
 
 @patch("code_review.models.get_llm_config")
@@ -323,28 +447,21 @@ def test_get_configured_model_clears_injected_key_on_provider_switch(mock_get_co
     """Injected provider key should not leak after switching providers."""
     from pydantic import SecretStr
 
-    previous_openrouter = os.environ.get("OPENROUTER_API_KEY")
-    previous_openai = os.environ.get("OPENAI_API_KEY")
     mock_get_config.side_effect = [
         MagicMock(provider="openrouter", model="claude", api_key=SecretStr("sk-openrouter")),
         MagicMock(provider="openai", model="gpt-4o", api_key=SecretStr("sk-openai")),
     ]
-    try:
+    with patch.dict(
+        os.environ,
+        {
+            "OPENROUTER_API_KEY": "previous-openrouter",
+            "OPENAI_API_KEY": "previous-openai",
+        },
+        clear=False,
+    ):
         get_configured_model()
         assert os.environ.get("OPENROUTER_API_KEY") == "sk-openrouter"
 
         get_configured_model()
-        if previous_openrouter is None:
-            assert "OPENROUTER_API_KEY" not in os.environ
-        else:
-            assert os.environ.get("OPENROUTER_API_KEY") == previous_openrouter
+        assert os.environ.get("OPENROUTER_API_KEY") == "previous-openrouter"
         assert os.environ.get("OPENAI_API_KEY") == "sk-openai"
-    finally:
-        if previous_openrouter is None:
-            os.environ.pop("OPENROUTER_API_KEY", None)
-        else:
-            os.environ["OPENROUTER_API_KEY"] = previous_openrouter
-        if previous_openai is None:
-            os.environ.pop("OPENAI_API_KEY", None)
-        else:
-            os.environ["OPENAI_API_KEY"] = previous_openai

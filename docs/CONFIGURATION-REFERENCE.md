@@ -75,17 +75,45 @@ Loaded via `LLMConfig` (`env_prefix="LLM_"`).
 |----------|---------|-------------|
 | `LLM_PROVIDER` | `gemini` | `gemini` \| `openai` \| `anthropic` \| `ollama` \| `vertex` \| `openrouter` |
 | `LLM_MODEL` | `gemini-2.5-flash` | Model identifier for the provider. |
-| `LLM_API_KEY` | — | Single universal API key. Passed directly to the ADK `LiteLlm` constructor (no `os.environ` injection). |
+| `LLM_API_KEY` | — | Single universal API key. Applied to the provider-specific runtime env var used by ADK / LiteLLM. |
 | `LLM_CONTEXT_WINDOW` | `128000` | Context window in tokens (used for chunking / budgets). |
 | `LLM_MAX_OUTPUT_TOKENS` | `4096` | Max output tokens for generation. |
 | `LLM_TEMPERATURE` | `0.0` | Sampling temperature. |
-| `LLM_DISABLE_TOOL_CALLS` | `false` | Debug: disable tool calls in the agent. |
 | `LLM_TIMEOUT_SECONDS` | `60.0` | **Configuration-only** for now; not wired through ADK in all paths. |
 | `LLM_MAX_RETRIES` | `3` | **Configuration-only** for now. |
 
 **Ollama:** No API key required. `OLLAMA_API_BASE` (default `http://localhost:11434`) is the usual convention for LiteLLM/Ollama; see `docs/DEVELOPER_GUIDE.md`.
 
-**Unified API Key handling:** `LLM_API_KEY` is passed directly to the `LiteLlm` constructor for all providers. Provider-specific properties like `GOOGLE_API_KEY` are **no longer supported or injected**.
+### 3.1 Secondary task models
+
+Summary generation and finding verification can use cheaper models than the main review model.
+Each task-specific field falls back to the primary `LLM_*` value when unset.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_SUMMARY_PROVIDER` | `LLM_PROVIDER` | Optional provider for PR summary generation. |
+| `LLM_SUMMARY_MODEL` | `LLM_MODEL` | Optional model for PR summary generation. |
+| `LLM_SUMMARY_API_KEY` | `LLM_API_KEY` | Optional API key for PR summary generation. |
+| `LLM_VERIFICATION_PROVIDER` | `LLM_PROVIDER` | Optional provider for the finding verification agent. |
+| `LLM_VERIFICATION_MODEL` | `LLM_MODEL` | Optional model for the finding verification agent. |
+| `LLM_VERIFICATION_API_KEY` | `LLM_API_KEY` | Optional API key for the finding verification agent. |
+
+Example:
+
+```bash
+LLM_PROVIDER=gemini
+LLM_MODEL=gemini-3-flash-preview
+
+LLM_SUMMARY_PROVIDER=gemini
+LLM_SUMMARY_MODEL=gemini-3-flash-lite-preview
+
+LLM_VERIFICATION_PROVIDER=gemini
+LLM_VERIFICATION_MODEL=gemini-3-flash-lite-preview
+```
+
+The summary model affects PR summary wording. The verification model affects false-positive
+filtering, so use a stronger verification model if it rejects valid findings or keeps too many
+weak findings.
 
 ---
 

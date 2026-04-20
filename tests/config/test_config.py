@@ -9,8 +9,12 @@ from code_review.config import (
     CodeReviewAppConfig,
     LLMConfig,
     SCMConfig,
+    SummaryLLMConfig,
+    VerificationLLMConfig,
     get_llm_config,
     get_scm_config,
+    get_summary_llm_config,
+    get_verification_llm_config,
     reset_config_cache,
 )
 from code_review.orchestration.orchestrator import ReviewOrchestrator
@@ -112,6 +116,61 @@ def test_llm_config_blank_api_key_normalized_to_none():
         assert cfg.api_key is None
 
 
+def test_summary_llm_config_reads_optional_overrides():
+    with patch.dict(
+        os.environ,
+        {
+            "LLM_SUMMARY_PROVIDER": "gemini",
+            "LLM_SUMMARY_MODEL": "gemini-3-flash-lite-preview",
+            "LLM_SUMMARY_API_KEY": "  summary-key  ",
+        },
+        clear=True,
+    ):
+        cfg = SummaryLLMConfig()
+        assert cfg.provider == "gemini"
+        assert cfg.model == "gemini-3-flash-lite-preview"
+        assert cfg.api_key is not None
+        assert cfg.api_key.get_secret_value() == "summary-key"
+
+
+def test_verification_llm_config_reads_optional_overrides():
+    with patch.dict(
+        os.environ,
+        {
+            "LLM_VERIFICATION_PROVIDER": "openai",
+            "LLM_VERIFICATION_MODEL": "gpt-5-mini",
+            "LLM_VERIFICATION_API_KEY": "  verification-key  ",
+        },
+        clear=True,
+    ):
+        cfg = VerificationLLMConfig()
+        assert cfg.provider == "openai"
+        assert cfg.model == "gpt-5-mini"
+        assert cfg.api_key is not None
+        assert cfg.api_key.get_secret_value() == "verification-key"
+
+
+def test_task_llm_config_blank_values_are_unset():
+    with patch.dict(
+        os.environ,
+        {
+            "LLM_SUMMARY_PROVIDER": "   ",
+            "LLM_SUMMARY_MODEL": "   ",
+            "LLM_SUMMARY_API_KEY": "   ",
+            "LLM_VERIFICATION_PROVIDER": "   ",
+            "LLM_VERIFICATION_MODEL": "   ",
+            "LLM_VERIFICATION_API_KEY": "   ",
+        },
+        clear=True,
+    ):
+        assert SummaryLLMConfig().provider is None
+        assert SummaryLLMConfig().model is None
+        assert SummaryLLMConfig().api_key is None
+        assert VerificationLLMConfig().provider is None
+        assert VerificationLLMConfig().model is None
+        assert VerificationLLMConfig().api_key is None
+
+
 def test_reset_config_cache_clears_both():
     """reset_config_cache() clears SCM and LLM caches so next get_* creates new instances."""
     reset_config_cache()
@@ -123,6 +182,8 @@ def test_reset_config_cache_clears_both():
         scm1 = get_scm_config()
     with patch.dict(os.environ, {}, clear=False):
         llm1 = get_llm_config()
+        summary1 = get_summary_llm_config()
+        verification1 = get_verification_llm_config()
     reset_config_cache()
     with patch.dict(
         os.environ,
@@ -132,8 +193,12 @@ def test_reset_config_cache_clears_both():
         scm2 = get_scm_config()
     with patch.dict(os.environ, {}, clear=False):
         llm2 = get_llm_config()
+        summary2 = get_summary_llm_config()
+        verification2 = get_verification_llm_config()
     assert scm1 is not scm2
     assert llm1 is not llm2
+    assert summary1 is not summary2
+    assert verification1 is not verification2
     reset_config_cache()
 
 
@@ -224,6 +289,16 @@ def test_code_review_app_log_prompts_from_env():
     with patch.dict(os.environ, {"CODE_REVIEW_LOG_PROMPTS": "true"}, clear=True):
         cfg = CodeReviewAppConfig()
         assert cfg.log_prompts is True
+
+
+def test_code_review_app_started_review_comment_posted_from_env():
+    with patch.dict(
+        os.environ,
+        {"CODE_REVIEW_STARTED_REVIEW_COMMENT_POSTED": "true"},
+        clear=True,
+    ):
+        cfg = CodeReviewAppConfig()
+        assert cfg.started_review_comment_posted is True
 
 
 def test_code_review_app_reply_dismissal_enabled_by_default():

@@ -147,6 +147,15 @@ jobs:
       LLM_MODEL: google/gemini-3.1-flash-lite-preview
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
 
+      # Optional: use cheaper models for secondary tasks. If unset, these
+      # tasks fall back to LLM_PROVIDER / LLM_MODEL / LLM_API_KEY.
+      LLM_SUMMARY_PROVIDER: openrouter
+      LLM_SUMMARY_MODEL: google/gemini-3.1-flash-lite-preview
+      # LLM_SUMMARY_API_KEY: ${{ secrets.LLM_SUMMARY_API_KEY }}
+      LLM_VERIFICATION_PROVIDER: openrouter
+      LLM_VERIFICATION_MODEL: google/gemini-3.1-flash-lite-preview
+      # LLM_VERIFICATION_API_KEY: ${{ secrets.LLM_VERIFICATION_API_KEY }}
+
       CODE_REVIEW_LOG_LEVEL: INFO
 
     steps:
@@ -166,6 +175,12 @@ jobs:
             -e LLM_PROVIDER \
             -e LLM_MODEL \
             -e LLM_API_KEY \
+            -e LLM_SUMMARY_PROVIDER \
+            -e LLM_SUMMARY_MODEL \
+            -e LLM_SUMMARY_API_KEY \
+            -e LLM_VERIFICATION_PROVIDER \
+            -e LLM_VERIFICATION_MODEL \
+            -e LLM_VERIFICATION_API_KEY \
             -e CODE_REVIEW_LOG_LEVEL \
             "$IMAGE" \
             --owner "$SCM_OWNER" \

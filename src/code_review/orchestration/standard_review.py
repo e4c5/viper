@@ -358,6 +358,7 @@ class StandardReviewHandler:
         self,
         provider: ProviderInterface,
         cfg: Any,
+        app_cfg: Any,
         run_observability: ReviewRunObservability,
         incremental_base_sha_fn: Callable[[Any, str], str],
     ) -> _ReviewEnv:
@@ -379,8 +380,11 @@ class StandardReviewHandler:
         if empty_scope_result is not None:
             return self._ReviewEnv([], [], "", "", None, early_exit_result=empty_scope_result)
 
-        if not self.dry_run:
-            CommentPoster(provider, self.pr_ctx).post_started_review_comment(pr_info, paths)
+        started_notice_already_posted = bool(
+            getattr(app_cfg, "started_review_comment_posted", False)
+        )
+        if not self.dry_run and not started_notice_already_posted:
+            CommentPoster(provider, self.pr_ctx).post_started_review_comment(pr_info)
 
         return self._ReviewEnv(files, paths, full_diff, incremental_base_sha, pr_info)
 
@@ -512,6 +516,7 @@ class StandardReviewHandler:
     ) -> None:
         """Generate and post a PR summary; update PR description for initial reviews without one."""
         if self.dry_run:
+            logger.info("Dry run: skipping LLM-generated PR summary")
             return
 
         description_was_empty = not (getattr(env.pr_info, "description", "") or "").strip()
@@ -525,7 +530,7 @@ class StandardReviewHandler:
                 provider, env, summary_text, description_was_empty, is_initial_review, to_post
             )
         except Exception as e:
-            logger.warning("Failed to generate/post PR summary: %s", e)
+            logger.warning("Failed to generate/post PR summary: %s", e, exc_info=True)
 
     def _generate_summary_text(
         self,
@@ -555,6 +560,11 @@ class StandardReviewHandler:
             pr_info_for_summary = pr_info_for_summary.model_copy(update={"description": ""})
 
         posted_findings = [f for f, _ in to_post]
+        logger.info(
+            "Generating PR summary via LLM for %d changed file(s), %d posted finding(s)",
+            len(env.paths),
+            len(posted_findings),
+        )
         summary_agent = create_summary_agent()
         return generate_pr_summary(
             summary_agent,
@@ -667,7 +677,7 @@ class StandardReviewHandler:
             return early_exit_result
 
         env = self._setup_review_environment(
-            provider, cfg, run_observability, incremental_base_sha_fn
+            provider, cfg, app_cfg, run_observability, incremental_base_sha_fn
         )
         if env.early_exit_result is not None:
             return env.early_exit_result

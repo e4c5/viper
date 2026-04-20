@@ -11,6 +11,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SCM_CONFIG: "SCMConfig | None" = None
 _LLM_CONFIG: "LLMConfig | None" = None
+_SUMMARY_LLM_CONFIG: "TaskLLMConfig | None" = None
+_VERIFICATION_LLM_CONFIG: "TaskLLMConfig | None" = None
 _CONTEXT_AWARE_CONFIG: "ContextAwareReviewConfig | None" = None
 _CODE_REVIEW_APP_CONFIG: "CodeReviewAppConfig | None" = None
 
@@ -161,6 +163,52 @@ class LLMConfig(BaseSettings):
         return SecretStr(normalized)
 
 
+class TaskLLMConfig(BaseSettings):
+    """Optional task-specific LLM overrides.
+
+    Blank values are treated as unset so task-specific configs can fall back to
+    the primary ``LLM_*`` settings field by field.
+    """
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+    provider: Literal["gemini", "openai", "anthropic", "ollama", "vertex", "openrouter"] | None = (
+        None
+    )
+    api_key: SecretStr | None = None
+    model: str | None = None
+
+    @field_validator("provider", "model", mode="before")
+    @classmethod
+    def _normalize_string_field(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = str(v).strip()
+        return normalized or None
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _normalize_api_key(cls, v: str | SecretStr | None) -> SecretStr | None:
+        if v is None:
+            return None
+        raw = v.get_secret_value() if isinstance(v, SecretStr) else str(v)
+        normalized = raw.strip()
+        if not normalized:
+            return None
+        return SecretStr(normalized)
+
+class SummaryLLMConfig(TaskLLMConfig):
+    """Optional LLM overrides for PR summary generation."""
+
+    model_config = SettingsConfigDict(env_prefix="LLM_SUMMARY_", extra="ignore")
+
+
+class VerificationLLMConfig(TaskLLMConfig):
+    """Optional LLM overrides for finding verification."""
+
+    model_config = SettingsConfigDict(env_prefix="LLM_VERIFICATION_", extra="ignore")
+
+
 class ContextAwareReviewConfig(BaseSettings):
     """Optional context enrichment (issues, Jira, Confluence).
 
@@ -304,6 +352,14 @@ class CodeReviewAppConfig(BaseSettings):
         validation_alias="CODE_REVIEW_LOG_PROMPTS",
         description="Log the assembled LLM instruction and user prompt for debugging.",
     )
+    started_review_comment_posted: bool = Field(
+        default=False,
+        validation_alias="CODE_REVIEW_STARTED_REVIEW_COMMENT_POSTED",
+        description=(
+            "When true, skip posting the temporary 'review started' PR comment. "
+            "Used by CI workflows that already posted the notice before invoking the reviewer."
+        ),
+    )
     disable_idempotency: bool = Field(
         default=False,
         validation_alias="CODE_REVIEW_DISABLE_IDEMPOTENCY",
@@ -340,6 +396,22 @@ def get_llm_config() -> LLMConfig:
     return _LLM_CONFIG
 
 
+def get_summary_llm_config() -> SummaryLLMConfig:
+    """Return cached summary LLM override config."""
+    global _SUMMARY_LLM_CONFIG
+    if _SUMMARY_LLM_CONFIG is None:
+        _SUMMARY_LLM_CONFIG = SummaryLLMConfig()
+    return _SUMMARY_LLM_CONFIG
+
+
+def get_verification_llm_config() -> VerificationLLMConfig:
+    """Return cached verification LLM override config."""
+    global _VERIFICATION_LLM_CONFIG
+    if _VERIFICATION_LLM_CONFIG is None:
+        _VERIFICATION_LLM_CONFIG = VerificationLLMConfig()
+    return _VERIFICATION_LLM_CONFIG
+
+
 def get_context_aware_config() -> ContextAwareReviewConfig:
     """Return cached context-aware review config."""
     global _CONTEXT_AWARE_CONFIG
@@ -358,8 +430,11 @@ def get_code_review_app_config() -> CodeReviewAppConfig:
 
 def reset_config_cache() -> None:
     """Reset cached config instances. Intended for use in tests."""
-    global _SCM_CONFIG, _LLM_CONFIG, _CONTEXT_AWARE_CONFIG, _CODE_REVIEW_APP_CONFIG
+    global _SCM_CONFIG, _LLM_CONFIG, _SUMMARY_LLM_CONFIG, _VERIFICATION_LLM_CONFIG
+    global _CONTEXT_AWARE_CONFIG, _CODE_REVIEW_APP_CONFIG
     _SCM_CONFIG = None
     _LLM_CONFIG = None
+    _SUMMARY_LLM_CONFIG = None
+    _VERIFICATION_LLM_CONFIG = None
     _CONTEXT_AWARE_CONFIG = None
     _CODE_REVIEW_APP_CONFIG = None

@@ -237,10 +237,9 @@ def _maybe_post_started_review_comment(
     provider,
     pr_ctx: PRContext,
     pr_info,
-    paths: list[str],
-) -> None:
+) -> bool:
     """Compatibility shim — delegates to CommentPoster."""
-    CommentPoster(provider, pr_ctx).post_started_review_comment(pr_info, paths)
+    return CommentPoster(provider, pr_ctx).post_started_review_comment(pr_info)
 
 
 def _resolve_stale_comments_if_supported(

@@ -1,7 +1,59 @@
 from unittest.mock import MagicMock, patch
 
-from code_review.agent.summary_agent import generate_pr_summary, split_summary_for_pr_description
+import pytest
+
+from code_review.agent.summary_agent import (
+    SUMMARY_INSTRUCTION,
+    create_summary_agent,
+    generate_pr_summary,
+    split_summary_for_pr_description,
+)
 from code_review.schemas.findings import FindingV1
+
+
+@patch("code_review.agent.summary_agent.get_configured_summary_model")
+@patch("code_review.agent.summary_agent.get_summary_llm_config")
+@patch("code_review.agent.summary_agent.get_llm_config")
+@patch("google.adk.agents.Agent")
+def test_create_summary_agent_uses_summary_model_helper(
+    mock_agent_cls, mock_get_llm_cfg, mock_get_summary_cfg, mock_get_summary_model
+):
+    mock_get_llm_cfg.return_value = MagicMock(
+        provider="gemini", model="gemini-3.1", max_output_tokens=2048
+    )
+    mock_get_summary_cfg.return_value = MagicMock(provider=None, model=None)
+    mock_get_summary_model.return_value = "cheap-summary-model"
+    inst = MagicMock()
+    mock_agent_cls.return_value = inst
+
+    out = create_summary_agent()
+
+    assert out is inst
+    _, kwargs = mock_agent_cls.call_args
+    assert kwargs["model"] == "cheap-summary-model"
+    assert kwargs["name"] == "summary_agent"
+    assert kwargs["instruction"] == SUMMARY_INSTRUCTION
+    assert kwargs["generate_content_config"].temperature == pytest.approx(0.2)
+    mock_get_summary_model.assert_called_once()
+
+
+@patch("code_review.agent.summary_agent.get_configured_summary_model")
+@patch("code_review.agent.summary_agent.get_summary_llm_config")
+@patch("code_review.agent.summary_agent.get_llm_config")
+@patch("google.adk.agents.Agent")
+def test_create_summary_agent_omits_temperature_for_summary_override_fixed_temperature_model(
+    mock_agent_cls, mock_get_llm_cfg, mock_get_summary_cfg, mock_get_summary_model
+):
+    mock_get_llm_cfg.return_value = MagicMock(
+        provider="gemini", model="gemini-3.1", max_output_tokens=2048
+    )
+    mock_get_summary_cfg.return_value = MagicMock(provider="openai", model="gpt-5.4")
+    mock_get_summary_model.return_value = "openai/gpt-5.4"
+
+    create_summary_agent()
+
+    _, kwargs = mock_agent_cls.call_args
+    assert kwargs["generate_content_config"].temperature is None
 
 
 def test_generate_pr_summary_incremental_prompt():

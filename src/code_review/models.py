@@ -8,7 +8,9 @@ from functools import lru_cache
 from importlib import resources
 from typing import Any
 
-from code_review.config import get_llm_config
+from pydantic import SecretStr
+
+from code_review.config import get_llm_config, get_summary_llm_config, get_verification_llm_config
 
 # Env var name per provider (used when LLM_API_KEY is set; Ollama has no key).
 _PROVIDER_API_KEY_ENV: dict[str, str] = {
@@ -186,18 +188,52 @@ def _clear_injected_provider_api_env() -> None:
     _PREVIOUS_PROVIDER_API_VALUE = None
 
 
-def get_configured_model() -> Any:
+def _secret_value(secret: SecretStr | str | None) -> str:
+    if secret is None:
+        return ""
+    raw = secret.get_secret_value() if isinstance(secret, SecretStr) else str(secret)
+    return raw.strip()
+
+
+def _get_task_value(primary: Any, task: Any, field: str) -> Any:
+    value = getattr(task, field, None)
+    if value is not None:
+        return value
+    return getattr(primary, field)
+
+
+def _task_config(primary: Any, task: Any) -> Any:
+    """Return a small config-like object with task overrides resolved."""
+    from types import SimpleNamespace
+
+    provider = _get_task_value(primary, task, "provider")
+    task_api_key = getattr(task, "api_key", None)
+    if task_api_key is not None:
+        api_key = task_api_key
+    elif provider == getattr(primary, "provider"):
+        api_key = getattr(primary, "api_key")
+    else:
+        api_key = None
+
+    return SimpleNamespace(
+        provider=provider,
+        model=_get_task_value(primary, task, "model"),
+        api_key=api_key,
+    )
+
+
+def _get_configured_model_from_config(config: Any) -> Any:
     """
-    Return the configured LLM instance for ADK.
-    Reads LLM_PROVIDER, LLM_MODEL, and LLM_API_KEY from env/config.
-    When LLM_API_KEY is set, it is applied to the provider-specific env var so ADK/LiteLLM see it.
-    Uses LiteLLM for OpenAI/Anthropic/Ollama/OpenRouter; string for Gemini/Vertex (ADK registry).
+    Return the configured LLM instance for ADK from a config-like object.
+
+    When an API key is set, it is applied to the provider-specific env var so
+    ADK/LiteLLM see it. Gemini/Vertex return model strings for ADK's native
+    registry; other providers use ADK LiteLLM when available.
     """
     global _INJECTED_PROVIDER_API_ENV, _PREVIOUS_PROVIDER_API_VALUE
 
-    config = get_llm_config()
     env_var = _PROVIDER_API_KEY_ENV.get(config.provider)
-    api_key = config.api_key.get_secret_value().strip() if config.api_key is not None else ""
+    api_key = _secret_value(config.api_key)
 
     # Keep injected provider credentials scoped to the current config/provider call.
     if _INJECTED_PROVIDER_API_ENV and (_INJECTED_PROVIDER_API_ENV != env_var or not api_key):
@@ -234,6 +270,29 @@ def get_configured_model() -> Any:
         return config.model
 
 
+def get_configured_model() -> Any:
+    """
+    Return the primary configured review LLM instance for ADK.
+
+    Reads LLM_PROVIDER, LLM_MODEL, and LLM_API_KEY from env/config.
+    """
+    return _get_configured_model_from_config(get_llm_config())
+
+
+def get_configured_summary_model() -> Any:
+    """Return the configured summary LLM, falling back to the primary LLM field by field."""
+    return _get_configured_model_from_config(
+        _task_config(get_llm_config(), get_summary_llm_config())
+    )
+
+
+def get_configured_verification_model() -> Any:
+    """Return the configured verification LLM, falling back to the primary LLM field by field."""
+    return _get_configured_model_from_config(
+        _task_config(get_llm_config(), get_verification_llm_config())
+    )
+
+
 def get_context_window() -> int:
     """
     Return context window size in tokens for runner chunking.
@@ -262,8 +321,8 @@ def get_max_output_tokens() -> int:
 _FIXED_TEMPERATURE_PREFIXES: tuple[str, ...] = ("gpt-5",)
 
 
-def get_effective_temperature(requested: float) -> float | None:
-    """Return the temperature to pass for the currently configured model, or None to omit it.
+def get_effective_temperature_for_model(provider: str, model: str, requested: float) -> float | None:
+    """Return the temperature to pass for a provider/model pair, or None to omit it.
 
     Some models (e.g. the gpt-5 family) only support a fixed temperature value
     that is also their default. Passing any other value raises
@@ -271,9 +330,16 @@ def get_effective_temperature(requested: float) -> float | None:
     explicitly is redundant. This helper returns None for those models so
     callers can skip the parameter entirely.
     """
-    config = get_llm_config()
-    resolved = _MODEL_ALIASES.get((config.provider, config.model), config.model)
+    provider_key = (provider or "").strip().lower()
+    model_key = (model or "").strip()
+    resolved = _MODEL_ALIASES.get((provider_key, model_key), model_key)
 
     if any(resolved.startswith(p) for p in _FIXED_TEMPERATURE_PREFIXES):
         return None
     return requested
+
+
+def get_effective_temperature(requested: float) -> float | None:
+    """Return the temperature to pass for the primary configured model."""
+    config = get_llm_config()
+    return get_effective_temperature_for_model(config.provider, config.model, requested)

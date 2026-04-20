@@ -2,7 +2,7 @@
   {
     "provider": "gemini",
     "model": "gemini-3.1-pro-preview",
-    "context_window_tokens": 1000000,
+    "context_window_tokens": 200000,
     "max_output_tokens_default": 64000,
     "input_cost_per_million_tokens": 4.0,
     "output_cost_per_million_tokens": 18,
@@ -12,8 +12,8 @@
   },
   {
     "provider": "gemini",
-    "model": "Gemini 3.1 Flash-Lite Preview",
-    "context_window_tokens": 1000000,
+    "model": "gemini-3.1-flash-lite-preview",
+    "context_window_tokens": 200000,
     "max_output_tokens_default": 64000,
     "input_cost_per_million_tokens": 0.5,
     "output_cost_per_million_tokens": 3.0,
@@ -24,7 +24,7 @@
   {
     "provider": "gemini",
     "model": "gemini-3-flash-preview",
-    "context_window_tokens": 1048576,
+    "context_window_tokens": 200000,
     "max_output_tokens_default": 65536,
     "input_cost_per_million_tokens": 1.0,
     "output_cost_per_million_tokens": 3.0,
@@ -167,7 +167,7 @@
   {
     "provider": "openrouter",
     "model": "google/gemini-3.1-flash-lite-preview",
-    "context_window_tokens": 1000000,
+    "context_window_tokens": 200000,
     "max_output_tokens_default": 64000,
     "input_cost_per_million_tokens": 0.5,
     "output_cost_per_million_tokens": 3.0,
@@ -178,7 +178,7 @@
   {
     "provider": "openrouter",
     "model": "google/gemini-3.1-pro-preview",
-    "context_window_tokens": 1000000,
+    "context_window_tokens": 200000,
     "max_output_tokens_default": 64000,
     "input_cost_per_million_tokens": 4.0,
     "output_cost_per_million_tokens": 18,
