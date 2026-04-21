@@ -27,8 +27,9 @@ This feature is optional and disabled by default.
 When enabled, the runner:
 
 1. Scans PR title, PR description, and PR commit messages for references.
-2. Fetches and caches matching documents in PostgreSQL (`pgvector` schema).
-3. Chooses one of two paths:
+2. Fetches matching documents from enabled sources.
+3. If `CONTEXT_AWARE_REVIEW_DB_URL` is not set, clamps fetched text to `CONTEXT_MAX_BYTES` and distills it directly.
+4. If `CONTEXT_AWARE_REVIEW_DB_URL` is set, caches documents in PostgreSQL and chooses one of two paths:
    - Under size budget: distill all fetched text directly.
    - Over size budget: retrieve relevant chunks (RAG), then distill.
 4. Adds the distilled brief to the review prompt inside `<context>...</context>`.
@@ -45,7 +46,6 @@ Use this when `SCM_PROVIDER=github` and you want the lightest setup.
 
 ```bash
 CONTEXT_AWARE_REVIEW_ENABLED=true
-CONTEXT_AWARE_REVIEW_DB_URL=postgresql://user:pass@host:5432/code_review
 
 # Recommended explicit enablement for clarity:
 CONTEXT_GITHUB_ISSUES_ENABLED=true
@@ -57,7 +57,6 @@ The runner uses `SCM_TOKEN` for GitHub API access when `SCM_PROVIDER=github`.
 
 ```bash
 CONTEXT_AWARE_REVIEW_ENABLED=true
-CONTEXT_AWARE_REVIEW_DB_URL=postgresql://user:pass@host:5432/code_review
 CONTEXT_GITHUB_ISSUES_ENABLED=true
 
 CONTEXT_JIRA_ENABLED=true
@@ -120,7 +119,7 @@ All variables are optional unless marked required by the source you enable.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CONTEXT_AWARE_REVIEW_ENABLED` | `false` | Master switch. |
-| `CONTEXT_AWARE_REVIEW_DB_URL` | — | Required when context-aware review is enabled. PostgreSQL DSN. |
+| `CONTEXT_AWARE_REVIEW_DB_URL` | — | Optional PostgreSQL DSN. Enables document cache and RAG for oversized context. When omitted, linked documents are fetched and distilled directly. |
 | `CONTEXT_GITHUB_ISSUES_ENABLED` | `false` | Enable GitHub issue fetching. |
 | `CONTEXT_GITLAB_ISSUES_ENABLED` | `false` | Enable GitLab issue fetching. |
 | `CONTEXT_JIRA_ENABLED` | `false` | Enable Jira fetching. |
@@ -132,7 +131,7 @@ All variables are optional unless marked required by the source you enable.
 | `CONTEXT_CONFLUENCE_URL` | — | Confluence base URL. |
 | `CONTEXT_CONFLUENCE_EMAIL` | — | Confluence account email. |
 | `CONTEXT_CONFLUENCE_TOKEN` | — | Confluence API token. |
-| `CONTEXT_MAX_BYTES` | `20000` | Byte threshold for direct distillation vs RAG path. |
+| `CONTEXT_MAX_BYTES` | `20000` | Byte budget for context sent to distillation. Without DB, direct-mode input is clamped to this size; with DB/RAG enabled, over-budget context uses retrieval first. |
 | `CONTEXT_DISTILLED_MAX_TOKENS` | `4000` | Max output tokens for distilled context brief. |
 | `CONTEXT_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model used by RAG path. |
 | `CONTEXT_EMBEDDING_DIMENSIONS` | `1536` | Embedding vector dimensions used for pgvector schema/search. |
@@ -168,7 +167,6 @@ This prevents one temporarily unavailable external system from blocking all PR r
 
 Check required variables for every enabled source:
 
-- Always: `CONTEXT_AWARE_REVIEW_DB_URL`
 - Jira: `CONTEXT_JIRA_URL`, `CONTEXT_JIRA_EMAIL`, `CONTEXT_JIRA_TOKEN`
 - Confluence: `CONTEXT_CONFLUENCE_URL`, `CONTEXT_CONFLUENCE_EMAIL`, `CONTEXT_CONFLUENCE_TOKEN`
 - GitHub/GitLab with non-matching SCM provider: source-specific token vars
@@ -185,10 +183,12 @@ Verify:
 
 Tune:
 
-- `CONTEXT_MAX_BYTES` (lower to trigger RAG sooner, higher to do more direct distillation)
+- `CONTEXT_MAX_BYTES` (without DB: lower to clamp direct context sooner; with DB/RAG: lower to trigger RAG sooner)
 - `CONTEXT_DISTILLED_MAX_TOKENS` (controls final brief size)
 
 ### Database errors
+
+Only applies when `CONTEXT_AWARE_REVIEW_DB_URL` is configured.
 
 Ensure:
 
@@ -228,4 +228,3 @@ CONTEXT_DISTILLED_MAX_TOKENS=2500
 ```
 
 This tends to produce shorter context briefs and can improve review prompt efficiency.
-

@@ -164,12 +164,12 @@ Set `SCM_REVIEW_DECISION_ENABLED=true` on the job so the quality-gate decision i
 
 ## 6. Context-aware review (`CONTEXT_*`)
 
-Loaded via `ContextAwareReviewConfig` (case-insensitive env names). Optional feature: linked GitHub/GitLab issues, Jira, Confluence → cache in PostgreSQL → distill → `<context>` in prompt.
+Loaded via `ContextAwareReviewConfig` (case-insensitive env names). Optional feature: linked GitHub/GitLab issues, Jira, Confluence → direct distill → `<context>` in prompt. Configure PostgreSQL when you also want cache/RAG for oversized context.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CONTEXT_AWARE_REVIEW_ENABLED` | `false` | Master switch. |
-| `CONTEXT_AWARE_REVIEW_DB_URL` | — | PostgreSQL DSN when context-aware review is enabled (required). |
+| `CONTEXT_AWARE_REVIEW_DB_URL` | — | Optional PostgreSQL DSN. Enables cache and RAG for oversized context; omit for direct fetch + distillation. |
 | `CONTEXT_GITHUB_ISSUES_ENABLED` | `false` | Fetch GitHub issue content for extracted refs. |
 | `CONTEXT_GITLAB_ISSUES_ENABLED` | `false` | Fetch GitLab issue content for extracted refs. |
 | `CONTEXT_JIRA_ENABLED` | `false` | Fetch Jira issues. |
@@ -181,7 +181,7 @@ Loaded via `ContextAwareReviewConfig` (case-insensitive env names). Optional fea
 | `CONTEXT_CONFLUENCE_URL` | `""` | Confluence base URL. |
 | `CONTEXT_CONFLUENCE_EMAIL` | `""` | Confluence API user email. |
 | `CONTEXT_CONFLUENCE_TOKEN` | — | Confluence API token. |
-| `CONTEXT_MAX_BYTES` | `20000` | Byte threshold: under = direct distillation; over = RAG path. |
+| `CONTEXT_MAX_BYTES` | `20000` | Byte budget for context sent to distillation. Without DB, direct-mode input is clamped to this size; with DB/RAG enabled, over-budget context uses retrieval first. |
 | `CONTEXT_DISTILLED_MAX_TOKENS` | `4000` | Max output tokens for distilled context brief. |
 | `CONTEXT_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model (RAG path; litellm). |
 | `CONTEXT_EMBEDDING_DIMENSIONS` | `1536` | Vector dimensions for `pgvector` (must match model and schema). |

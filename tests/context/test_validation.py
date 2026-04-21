@@ -55,20 +55,18 @@ def test_disabled_returns_immediately():
 
 
 # ---------------------------------------------------------------------------
-# db_url requirement
+# optional db_url
 # ---------------------------------------------------------------------------
 
 
-def test_missing_db_url_raises():
+def test_missing_db_url_passes_direct_distillation_mode():
     ctx = _make_ctx(db_url="")
-    with pytest.raises(ContextAwareFatalError, match="DB_URL"):
-        validate_context_aware_sources(ctx, _make_scm())
+    validate_context_aware_sources(ctx, _make_scm())  # must not raise
 
 
-def test_whitespace_db_url_raises():
+def test_whitespace_db_url_passes_direct_distillation_mode():
     ctx = _make_ctx(db_url="   ")
-    with pytest.raises(ContextAwareFatalError, match="DB_URL"):
-        validate_context_aware_sources(ctx, _make_scm())
+    validate_context_aware_sources(ctx, _make_scm())  # must not raise
 
 
 # ---------------------------------------------------------------------------

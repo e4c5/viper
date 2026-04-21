@@ -70,15 +70,14 @@ def validate_context_aware_sources(
     scm: SCMConfig,
 ) -> None:
     """
-    When CONTEXT_AWARE_REVIEW_ENABLED is true, require DB URL and complete
-    configuration for every enabled source.
+    When CONTEXT_AWARE_REVIEW_ENABLED is true, require complete configuration
+    for every enabled source.
+
+    CONTEXT_AWARE_REVIEW_DB_URL is optional. When omitted, context documents are
+    fetched directly and distilled without cache/RAG storage.
     """
     if not ctx.enabled:
         return
-    _require(
-        bool(ctx.db_url and ctx.db_url.strip()),
-        "CONTEXT_AWARE_REVIEW_ENABLED is true but CONTEXT_AWARE_REVIEW_DB_URL is missing.",
-    )
     _validate_enabled_github_source(ctx, scm)
     _validate_enabled_gitlab_source(ctx, scm)
     _validate_enabled_jira_source(ctx)

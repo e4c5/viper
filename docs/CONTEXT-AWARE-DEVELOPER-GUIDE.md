@@ -32,8 +32,8 @@ Context-aware review is runner-orchestrated and optional:
 
 1. Runner fetches PR metadata and commit messages.
 2. Reference extraction scans title/description/commits.
-3. Applicable references are fetched (or loaded from cache) into PostgreSQL.
-4. Content is distilled directly, or via retrieval + distillation if over budget.
+3. Applicable references are fetched directly, or fetched/loaded through PostgreSQL when a DB URL is configured.
+4. Content is distilled directly after byte-budget clamping; with DB/RAG enabled, oversized context uses retrieval + distillation.
 5. Distilled brief is appended to prompt in `<context>...</context>`.
 6. Agent instruction is conditionally enhanced when context is attached.
 
@@ -52,11 +52,11 @@ Primary modules:
 - `src/code_review/context/fetchers.py`
   - Source-specific fetchers + dispatcher + normalization.
 - `src/code_review/context/store.py`
-  - PostgreSQL/pgvector schema, cache reads/writes, chunk search.
+  - Optional PostgreSQL/pgvector schema, cache reads/writes, chunk search.
 - `src/code_review/context/rag.py`
   - Diff-to-query transform, chunking, embedding helpers.
 - `src/code_review/context/pipeline.py`
-  - Orchestrates fetch/cache/budget/retrieval/distillation and returns context brief.
+  - Orchestrates direct fetch/distillation or fetch/cache/budget/retrieval/distillation and returns context brief.
 - `src/code_review/runner.py`
   - Integrates context pipeline into main review flow.
 
@@ -86,20 +86,21 @@ High-level sequence:
 Inside `build_context_brief_for_pr(...)`:
 
 1. Filter refs by enabled source.
-2. Reuse/create `ContextStore` from module-level cache.
-3. Open one DB connection and ensure schema.
-4. For each applicable ref:
+2. If `ctx.db_url` is empty, fetch each applicable reference directly, clamp the combined text to `ctx.max_bytes`, and distill it.
+3. If `ctx.db_url` is set, reuse/create `ContextStore` from module-level cache.
+4. Open one DB connection and ensure schema.
+5. For each applicable ref:
    - resolve source row
    - cache lookup by `(source_id, external_id)`
    - fetch on miss/stale, then upsert
-5. Combine resolved docs.
-6. If over `max_bytes`, run retrieval path:
+6. Combine resolved docs.
+7. If over `max_bytes`, run retrieval path:
    - build semantic query from diff
    - embed query
    - ensure chunk embeddings for docs
    - similarity search (scoped to current docs)
-7. Distill selected text to final brief.
-8. Return `<context>\n...\n</context>` or `None`.
+8. Distill selected text to final brief.
+9. Return `<context>\n...\n</context>` or `None`.
 
 ---
 
@@ -130,7 +131,7 @@ Caching behavior:
 
 ## 5. RAG path details
 
-RAG is only used when combined resolved text exceeds `CONTEXT_MAX_BYTES`.
+RAG is only available when `CONTEXT_AWARE_REVIEW_DB_URL` is configured. It is only used when combined resolved text exceeds `CONTEXT_MAX_BYTES`.
 
 Implementation details:
 
@@ -238,9 +239,8 @@ Design guidance:
 
 ## 10. Operational notes
 
-- PostgreSQL with `pgvector` is required when context-aware review is enabled.
+- PostgreSQL with `pgvector` is optional; configure `CONTEXT_AWARE_REVIEW_DB_URL` when cache/RAG is needed.
 - Embedding dimension mismatches will fail chunk persistence.
-- Distillation and semantic-query generation both consume model tokens; monitor costs.
+- Distillation consumes model tokens in all modes; semantic-query generation and embeddings add cost only in the RAG path.
 - Observability includes a `context_aware` Prometheus label so adoption can be tracked.
 - For very noisy context sources, tune `CONTEXT_MAX_BYTES` and `CONTEXT_DISTILLED_MAX_TOKENS`.
-

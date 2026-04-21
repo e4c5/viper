@@ -150,14 +150,13 @@ def _clear_context_env(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.delenv(key, raising=False)
 
 
-def test_validate_requires_db_when_enabled(monkeypatch):
+def test_validate_allows_missing_db_when_enabled(monkeypatch):
     _clear_context_env(monkeypatch)
     monkeypatch.setenv("CONTEXT_AWARE_REVIEW_ENABLED", "true")
     monkeypatch.delenv("CONTEXT_AWARE_REVIEW_DB_URL", raising=False)
     reset_config_cache()
     ctx = get_context_aware_config()
-    with pytest.raises(ContextAwareFatalError, match="CONTEXT_AWARE_REVIEW_DB_URL"):
-        validate_context_aware_sources(ctx, SCMConfig(url="https://gitea/x", token="t"))
+    validate_context_aware_sources(ctx, SCMConfig(url="https://gitea/x", token="t"))
 
 
 def test_validate_github_issues_non_github_without_token(monkeypatch):
