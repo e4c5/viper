@@ -9,7 +9,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from code_review.config import get_code_review_app_config, get_llm_config
-from code_review.logging_config import emit_package_log
+from code_review.llm_telemetry import log_adk_llm_usage
 from code_review.models import (
     get_configured_model,
     get_effective_temperature,
@@ -387,34 +387,12 @@ def _before_model_callback(
 def _after_model_callback(
     callback_context: CallbackContext, llm_response: LlmResponse
 ) -> None:
-    """Log token usage, finish_reason, and response length for truncation detection."""
-    usage = getattr(llm_response, "usage_metadata", None)
-    if usage is not None and logger.isEnabledFor(logging.INFO):
-        parts = getattr(getattr(llm_response, "content", None), "parts", None) or ()
-        response_text_len = sum(len(getattr(p, "text", "") or "") for p in parts)
-        finish_reason = getattr(llm_response, "finish_reason", None)
-        interrupted = getattr(llm_response, "interrupted", None)
-        turn_complete = getattr(llm_response, "turn_complete", None)
-        emit_package_log(
+    """Log normalized LLM usage and debug response text."""
+    if logger.isEnabledFor(logging.INFO):
+        log_adk_llm_usage(
             logger,
-            logging.INFO,
-            (
-                "LLM usage agent=%s prompt_tokens=%s completion_tokens=%s "
-                "total_tokens=%s cached_tokens=%s tool_prompt_tokens=%s "
-                "thoughts_tokens=%s finish_reason=%s interrupted=%s "
-                "turn_complete=%s response_text_len=%d"
-            ),
-            callback_context.agent_name,
-            getattr(usage, "prompt_token_count", None),
-            getattr(usage, "candidates_token_count", None),
-            getattr(usage, "total_token_count", None),
-            getattr(usage, "cached_content_token_count", None),
-            getattr(usage, "tool_use_prompt_token_count", None),
-            getattr(usage, "thoughts_token_count", None),
-            finish_reason,
-            interrupted,
-            turn_complete,
-            response_text_len,
+            task=callback_context.agent_name,
+            response=llm_response,
         )
     if not logger.isEnabledFor(logging.DEBUG):
         return None

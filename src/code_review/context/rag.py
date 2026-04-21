@@ -9,6 +9,7 @@ import litellm
 
 from code_review.config import get_llm_config
 from code_review.context.distiller import _litellm_model_name
+from code_review.llm_telemetry import log_llm_usage, usage_from_litellm_response
 from code_review.models import get_configured_model, get_effective_temperature
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,14 @@ def build_semantic_query_from_diff(diff_text: str, max_diff_chars: int = 14_000)
             ],
             max_tokens=256,
             **({"temperature": _temperature} if _temperature is not None else {}),
+        )
+        log_llm_usage(
+            logger,
+            task="semantic_query",
+            provider=llm.provider,
+            model=llm.model,
+            usage=usage_from_litellm_response(resp),
+            response_text_len=None,
         )
         choices = (
             resp["choices"] if isinstance(resp, dict) else getattr(resp, "choices", None)

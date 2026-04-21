@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from code_review.config import get_llm_config, get_summary_llm_config
+from code_review.llm_telemetry import log_adk_llm_usage
 from code_review.models import (
     get_configured_summary_model,
     get_effective_temperature_for_model,
@@ -109,6 +110,13 @@ def create_summary_agent():
         name="summary_agent",
         instruction=SUMMARY_INSTRUCTION,
         generate_content_config=generate_content_config,
+        after_model_callback=lambda _ctx, response: log_adk_llm_usage(
+            logger,
+            task="summary",
+            response=response,
+            provider=provider,
+            model=model,
+        ),
     )
 
 def generate_pr_summary(

@@ -6,6 +6,7 @@ import logging
 import uuid
 
 from code_review.config import get_llm_config
+from code_review.llm_telemetry import log_adk_llm_usage
 from code_review.models import get_configured_model, get_effective_temperature
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,13 @@ def _create_context_distillation_agent(max_output_tokens: int):
         instruction=_DISTILL_INSTRUCTION,
         tools=[],
         generate_content_config=generate_content_config,
+        after_model_callback=lambda _ctx, response: log_adk_llm_usage(
+            logger,
+            task="context_distillation",
+            response=response,
+            provider=llm.provider,
+            model=llm.model,
+        ),
     )
 
 

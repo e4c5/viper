@@ -253,7 +253,9 @@ def test_after_model_callback_logs_usage_metadata(caplog) -> None:
     caplog.set_level(logging.INFO, logger="code_review.agent.agent")
     _after_model_callback(SimpleNamespace(agent_name="batch_review_0"), llm_response)
 
-    assert "LLM usage agent=batch_review_0" in caplog.text
+    assert "llm_usage task=batch_review_0" in caplog.text
+    assert "provider=" in caplog.text
+    assert "model=" in caplog.text
     assert "prompt_tokens=123" in caplog.text
     assert "completion_tokens=45" in caplog.text
     assert "total_tokens=168" in caplog.text
