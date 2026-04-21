@@ -91,10 +91,10 @@ def create_reply_dismissal_agent() -> Agent:
         tools=[],
         output_schema=ReplyDismissalVerdictV1,
         generate_content_config=generate_content_config,
-        after_model_callback=lambda _ctx, response: log_adk_llm_usage(
+        after_model_callback=lambda callback_context, llm_response: log_adk_llm_usage(
             logger,
             task="reply_dismissal",
-            response=response,
+            response=llm_response,
             provider=llm_cfg.provider,
             model=llm_cfg.model,
         ),

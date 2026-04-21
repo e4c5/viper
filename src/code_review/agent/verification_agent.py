@@ -156,10 +156,10 @@ def create_verification_agent():
         instruction=_VERIFICATION_INSTRUCTION,
         output_schema=_VerificationResult,
         generate_content_config=generate_content_config,
-        after_model_callback=lambda _ctx, response: log_adk_llm_usage(
+        after_model_callback=lambda callback_context, llm_response: log_adk_llm_usage(
             logger,
             task="verification",
-            response=response,
+            response=llm_response,
             provider=provider,
             model=model,
         ),

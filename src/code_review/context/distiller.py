@@ -83,10 +83,10 @@ def _create_context_distillation_agent(max_output_tokens: int):
         instruction=_DISTILL_INSTRUCTION,
         tools=[],
         generate_content_config=generate_content_config,
-        after_model_callback=lambda _ctx, response: log_adk_llm_usage(
+        after_model_callback=lambda callback_context, llm_response: log_adk_llm_usage(
             logger,
             task="context_distillation",
-            response=response,
+            response=llm_response,
             provider=llm.provider,
             model=llm.model,
         ),

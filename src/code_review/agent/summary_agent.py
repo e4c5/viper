@@ -110,10 +110,10 @@ def create_summary_agent():
         name="summary_agent",
         instruction=SUMMARY_INSTRUCTION,
         generate_content_config=generate_content_config,
-        after_model_callback=lambda _ctx, response: log_adk_llm_usage(
+        after_model_callback=lambda callback_context, llm_response: log_adk_llm_usage(
             logger,
             task="summary",
-            response=response,
+            response=llm_response,
             provider=provider,
             model=model,
         ),
