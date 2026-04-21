@@ -262,8 +262,8 @@ def test_startup_config_snapshot_logs_models_and_redacts_secrets():
             "SCM_URL": "https://gitea.example.com/api",
             "SCM_TOKEN": "super-secret-scm",
             "SCM_REVIEW_DECISION_ENABLED": "true",
-            "LLM_PROVIDER": "openai",
-            "LLM_MODEL": "gpt-5.4",
+            "LLM_PROVIDER": "gemini",
+            "LLM_MODEL": "gemini-3.1-pro-preview",
             "LLM_API_KEY": "super-secret-llm",
             "LLM_SUMMARY_PROVIDER": "anthropic",
             "LLM_SUMMARY_MODEL": "claude-sonnet-4-5",
@@ -277,19 +277,25 @@ def test_startup_config_snapshot_logs_models_and_redacts_secrets():
         snapshot = startup_config_snapshot()
     reset_config_cache()
 
-    assert snapshot["llm"]["primary"] == {"provider": "openai", "model": "gpt-5.4"}
+    assert snapshot["llm"]["primary"] == {
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+    }
     assert snapshot["llm"]["summary"] == {
         "provider": "anthropic",
         "model": "claude-sonnet-4-5",
     }
     assert snapshot["llm"]["verification"] == {
-        "provider": "openai",
-        "model": "gpt-5.4",
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
     }
+    assert snapshot["llm"]["max_output_tokens"] == 64000
+    assert snapshot["llm"]["context_window"] == 200000
     assert snapshot["context_aware"]["enabled"] is True
     assert snapshot["context_aware"]["jira_enabled"] is True
-    assert snapshot["scm"]["configured"] is True
-    assert snapshot["scm"]["url_host"] == "gitea.example.com"
+    assert snapshot["scm"]["provider"] == "gitea"
+    assert "url_host" not in snapshot["scm"]
+    assert "bot_identity_configured" not in snapshot["scm"]
     rendered = str(snapshot)
     assert "super-secret" not in rendered
     assert "api_key" not in rendered

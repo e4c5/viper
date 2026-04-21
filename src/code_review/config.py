@@ -445,38 +445,63 @@ def _scm_startup_snapshot() -> dict[str, object]:
             "configured": False,
             "reason": exc.__class__.__name__,
         }
-    parsed_url = urlparse(scm.url)
-    return {
-        "configured": True,
+    snapshot: dict[str, object] = {
         "provider": scm.provider,
-        "url_host": parsed_url.netloc,
         "skip_label_enabled": bool(scm.skip_label),
         "skip_title_pattern_enabled": bool(scm.skip_title_pattern),
         "review_decision_enabled": scm.review_decision_enabled,
-        "review_decision_high_threshold": scm.review_decision_high_threshold,
-        "review_decision_medium_threshold": scm.review_decision_medium_threshold,
-        "allowed_hosts_configured": bool(scm.allowed_hosts),
-        "bot_identity_configured": bool(scm.bot_identity),
     }
+    if scm.review_decision_enabled:
+        snapshot.update(
+            {
+                "review_decision_high_threshold": scm.review_decision_high_threshold,
+                "review_decision_medium_threshold": scm.review_decision_medium_threshold,
+            }
+        )
+    return snapshot
 
 
 def startup_config_snapshot() -> dict[str, object]:
     """Return a redacted, curated snapshot of startup-critical configuration."""
+    from code_review.models import get_context_window, get_max_output_tokens
+
     llm = get_llm_config()
     summary_llm = get_summary_llm_config()
     verification_llm = get_verification_llm_config()
     context = get_context_aware_config()
     app = get_code_review_app_config()
+    effective_context_window = get_context_window()
+    effective_max_output_tokens = get_max_output_tokens()
+    context_snapshot: dict[str, object] = {
+        "enabled": context.enabled,
+    }
+    if context.enabled:
+        context_snapshot.update(
+            {
+                "github_issues_enabled": context.github_issues_enabled,
+                "gitlab_issues_enabled": context.gitlab_issues_enabled,
+                "jira_enabled": context.jira_enabled,
+                "confluence_enabled": context.confluence_enabled,
+                "db_cache_enabled": bool(context.db_url),
+                "max_bytes": context.max_bytes,
+                "distilled_max_tokens": context.distilled_max_tokens,
+            }
+        )
+        if context.db_url:
+            context_snapshot.update(
+                {
+                    "embedding_model": context.embedding_model,
+                    "embedding_dimensions": context.embedding_dimensions,
+                }
+            )
     return {
         "llm": {
             "primary": {"provider": llm.provider, "model": llm.model},
             "summary": _effective_task_llm(llm, summary_llm),
             "verification": _effective_task_llm(llm, verification_llm),
-            "context_window": llm.context_window,
-            "max_output_tokens": llm.max_output_tokens,
+            "context_window": effective_context_window,
+            "max_output_tokens": effective_max_output_tokens,
             "temperature": llm.temperature,
-            "timeout_seconds": llm.timeout_seconds,
-            "max_retries": llm.max_retries,
         },
         "review": {
             "include_commit_messages_in_prompt": app.include_commit_messages_in_prompt,
@@ -485,18 +510,7 @@ def startup_config_snapshot() -> dict[str, object]:
             "reply_dismissal_enabled": app.reply_dismissal_enabled,
             "disable_idempotency": app.disable_idempotency,
         },
-        "context_aware": {
-            "enabled": context.enabled,
-            "github_issues_enabled": context.github_issues_enabled,
-            "gitlab_issues_enabled": context.gitlab_issues_enabled,
-            "jira_enabled": context.jira_enabled,
-            "confluence_enabled": context.confluence_enabled,
-            "db_cache_enabled": bool(context.db_url),
-            "max_bytes": context.max_bytes,
-            "distilled_max_tokens": context.distilled_max_tokens,
-            "embedding_model": context.embedding_model,
-            "embedding_dimensions": context.embedding_dimensions,
-        },
+        "context_aware": context_snapshot,
         "scm": _scm_startup_snapshot(),
     }
 
