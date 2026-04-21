@@ -164,7 +164,7 @@ Set `SCM_REVIEW_DECISION_ENABLED=true` on the job so the quality-gate decision i
 
 ## 6. Context-aware review (`CONTEXT_*`)
 
-Loaded via `ContextAwareReviewConfig` (case-insensitive env names). Optional feature: linked GitHub/GitLab issues, Jira, Confluence → direct distill → `<context>` in prompt. Configure PostgreSQL when you also want cache/RAG for oversized context.
+Loaded via `ContextAwareReviewConfig` (case-insensitive env names). Optional feature: linked GitHub/GitLab issues, Jira, Confluence → direct distill → `Linked Work Item Context` prompt section. Configure PostgreSQL when you also want cache/RAG for oversized context.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

@@ -32,7 +32,7 @@ When enabled, the runner:
 4. If `CONTEXT_AWARE_REVIEW_DB_URL` is set, caches documents in PostgreSQL and chooses one of two paths:
    - Under size budget: distill all fetched text directly.
    - Over size budget: retrieve relevant chunks (RAG), then distill.
-4. Adds the distilled brief to the review prompt inside `<context>...</context>`.
+4. Adds the distilled brief to the review prompt as a `Linked Work Item Context` section with reviewer guidance.
 
 If no references are found, review runs normally without context.
 

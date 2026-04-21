@@ -5,9 +5,11 @@ import pytest
 from code_review.comments.manager import _build_ignore_set
 from code_review.formatters.comment import finding_to_comment_body
 from code_review.orchestration.execution import findings_from_batch_responses
+from code_review.orchestration.prompts import _LINKED_CONTEXT_HEADER
 from code_review.orchestration_deps import (
     _build_commit_messages_block,
     _findings_from_response,
+    _format_review_prompt_supplement,
     _parse_findings_json,
 )
 from code_review.schemas.findings import FindingV1
@@ -128,6 +130,20 @@ def test_build_commit_messages_block_keeps_full_subject_when_unbounded():
     )
 
     assert block.endswith("- " + ("x" * 497))
+
+
+def test_format_review_prompt_supplement_wraps_linked_context_with_guidance():
+    supplement = _format_review_prompt_supplement(
+        context_brief="Must make DB optional.",
+        commit_messages=[],
+        include_commit_messages=False,
+    )
+
+    assert _LINKED_CONTEXT_HEADER in supplement
+    assert "requirements, acceptance criteria, and constraints" in supplement
+    assert "Distilled brief:" in supplement
+    assert "Must make DB optional." in supplement
+    assert "<context>" not in supplement
 
 
 def test_finding_to_comment_body():

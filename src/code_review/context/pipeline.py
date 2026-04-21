@@ -226,7 +226,7 @@ def build_context_brief_for_pr(
     full_diff: str,
 ) -> str | None:
     """
-    Fetch/cache linked context, distill to a brief, wrap in ``<context>...</context>``.
+    Fetch/cache linked context and distill it to a requirements-focused brief.
 
     Returns None when there are no applicable references or all fetches are skipped.
     Raises ContextAwareFatalError on misconfigured remotes (handled by runner).
@@ -267,7 +267,7 @@ def build_context_brief_for_pr(
         )
         if not brief.strip():
             return None
-        return f"<context>\n{brief}\n</context>"
+        return brief
 
     cache_key = (db_url, ctx.embedding_dimensions)
     store = _store_cache.get(cache_key)
@@ -323,4 +323,4 @@ def build_context_brief_for_pr(
     brief = distill_context_text(raw_for_distill, max_output_tokens=ctx.distilled_max_tokens)
     if not brief.strip():
         return None
-    return f"<context>\n{brief}\n</context>"
+    return brief

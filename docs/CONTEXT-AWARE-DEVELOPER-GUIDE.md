@@ -34,7 +34,7 @@ Context-aware review is runner-orchestrated and optional:
 2. Reference extraction scans title/description/commits.
 3. Applicable references are fetched directly, or fetched/loaded through PostgreSQL when a DB URL is configured.
 4. Content is distilled directly after byte-budget clamping; with DB/RAG enabled, oversized context uses retrieval + distillation.
-5. Distilled brief is appended to prompt in `<context>...</context>`.
+5. Distilled brief is appended to the prompt as a `Linked Work Item Context` section with reviewer guidance.
 6. Agent instruction is conditionally enhanced when context is attached.
 
 The ADK agent remains findings-only; posting/filtering continues to be runner-owned.
@@ -100,7 +100,7 @@ Inside `build_context_brief_for_pr(...)`:
    - ensure chunk embeddings for docs
    - similarity search (scoped to current docs)
 8. Distill selected text to final brief.
-9. Return `<context>\n...\n</context>` or `None`.
+9. Return the distilled brief text or `None`; prompt assembly wraps it in the context section.
 
 ---
 

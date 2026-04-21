@@ -12,6 +12,7 @@ from code_review.models import PRContext
 from code_review.orchestration import execution as execution_mod
 from code_review.orchestration.context_enricher import ContextEnricher
 from code_review.orchestration.posting import CommentPoster
+from code_review.orchestration.prompts import _LINKED_CONTEXT_HEADER
 from code_review.orchestration.review_decision import ReviewDecisionHandler
 from code_review.orchestration.runner_utils import ReviewRunObservability
 from code_review.providers.base import FileInfo, PRInfo, ProviderInterface
@@ -21,7 +22,7 @@ from code_review.schemas.findings import FindingV1
 
 logger = logging.getLogger(__name__)
 
-_CONTEXT_TAG = "<context>"
+_CONTEXT_TAG = _LINKED_CONTEXT_HEADER
 
 
 class StandardReviewHandler:

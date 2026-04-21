@@ -181,7 +181,7 @@ def _patch_store_and_fetcher(fetched_doc, fresh=False):
 
 
 @patch("code_review.context.pipeline.distill_context_text", return_value="Distilled brief.")
-def test_under_budget_returns_context_tag(mock_distill):
+def test_under_budget_returns_distilled_brief(mock_distill):
     doc = _make_fetched_doc(body="x" * 100)  # well under 20 KB
     patch_store, patch_fetch, _ = _patch_store_and_fetcher(doc, fresh=False)
     ctx = _make_ctx()
@@ -191,9 +191,7 @@ def test_under_budget_returns_context_tag(mock_distill):
         result = build_context_brief_for_pr(ctx, scm, [_GITHUB_REF], "diff text")
 
     assert result is not None
-    assert result.startswith("<context>")
-    assert "Distilled brief." in result
-    assert result.strip().endswith("</context>")
+    assert result == "Distilled brief."
 
 
 @patch("code_review.context.pipeline.ContextStore")
