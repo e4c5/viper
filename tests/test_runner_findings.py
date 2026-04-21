@@ -4,7 +4,10 @@ import pytest
 
 from code_review.comments.manager import _build_ignore_set
 from code_review.formatters.comment import finding_to_comment_body
-from code_review.orchestration.execution import findings_from_batch_responses
+from code_review.orchestration.execution import (
+    findings_from_batch_responses,
+    missing_batch_response_indexes,
+)
 from code_review.orchestration.prompts import _LINKED_CONTEXT_HEADER
 from code_review.orchestration_deps import (
     _build_commit_messages_block,
@@ -102,6 +105,15 @@ def test_findings_from_batch_responses_returns_failed_indexes_for_schema_errors(
     findings, failed_indexes = findings_from_batch_responses(responses)
     assert findings == []
     assert failed_indexes == [0]
+
+
+def test_missing_batch_response_indexes_ignores_non_batch_authors():
+    responses = [
+        ("batch_review_1", '{"findings":[]}'),
+        ("sequential_batch_review_agent", '{"findings":[]}'),
+    ]
+
+    assert missing_batch_response_indexes(responses, 3) == [0, 2]
 
 
 def test_build_commit_messages_block_respects_remaining_char_budget():

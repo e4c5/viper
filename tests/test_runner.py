@@ -96,6 +96,7 @@ def _base_review_provider(
 def _final_adk_event(findings_json: str) -> MagicMock:
     ev = MagicMock()
     ev.is_final_response.return_value = True
+    ev.author = "batch_review_0"
     ev.content = MagicMock()
     ev.content.parts = [MagicMock(text=findings_json)]
     return ev
@@ -686,7 +687,14 @@ def test_run_review_builds_multiple_batches_when_diff_exceeds_single_batch_budge
         '{"findings":[{"path":"foo.py","line":1,"severity":"medium","code":"x",'
         '"message":"Fix."}]}'
     )
-    mock_runner = _adk_runner_single_event(findings_json)
+    event_a = _final_adk_event(findings_json)
+    event_a.author = "batch_review_0"
+    event_b = _final_adk_event('{"findings":[]}')
+    event_b.author = "batch_review_1"
+    mock_runner = MagicMock()
+    mock_runner.run_async = MagicMock(
+        side_effect=runner_run_async_returning([event_a, event_b])
+    )
 
     with (
         patch("code_review.agent.workflows.create_sequential_batch_review_agent") as mock_workflow,

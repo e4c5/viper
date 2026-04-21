@@ -183,8 +183,17 @@ def _run_sequential_batch_review_mode(
     )
 
     findings, failed_indexes = findings_from_batch_responses(responses)
+    failed_indexes.extend(
+        idx
+        for idx in missing_batch_response_indexes(responses, batch_count)
+        if idx not in failed_indexes
+    )
     if failed_indexes:
-        logger.warning("Recovering %d batch(es) that failed JSON parsing.", len(failed_indexes))
+        logger.warning(
+            "Recovering %d batch(es) that failed JSON parsing or did not return a "
+            "text-bearing final response.",
+            len(failed_indexes),
+        )
         failed_batches = [batches[i] for i in failed_indexes if i < len(batches)]
         findings.extend(
             _run_isolated_batches_with_retry(
@@ -268,6 +277,18 @@ def batch_index_from_author(author: str) -> int | None:
         return None
     suffix = author[len(prefix) :]
     return int(suffix) if suffix.isdigit() else None
+
+
+def missing_batch_response_indexes(
+    responses: list[tuple[str, str]], batch_count: int
+) -> list[int]:
+    """Return batch indexes that did not emit a text-bearing final response."""
+    seen = {
+        idx
+        for author, _response_text in responses
+        if (idx := batch_index_from_author(author)) is not None
+    }
+    return [idx for idx in range(batch_count) if idx not in seen]
 
 
 def _make_retry_batch(batch_index: int, segments: tuple[ReviewSegment, ...]) -> ReviewBatch:
@@ -379,12 +400,15 @@ def _run_isolated_batches_with_retry(
             raise exc.cause from exc
 
         findings, failed_indexes = findings_from_batch_responses(responses)
+        missing_indexes = missing_batch_response_indexes(responses, 1)
+        failed_indexes.extend(idx for idx in missing_indexes if idx not in failed_indexes)
         if not failed_indexes and responses:
             all_findings.extend(findings)
             continue
 
         runner_mod.logger.warning(
-            "JSON parse failed for batch paths=%s (attempt %d/%d).",
+            "JSON parse failed or no batch response was collected for batch paths=%s "
+            "(attempt %d/%d).",
             ", ".join(batch.paths),
             attempt + 1,
             max_retries + 1,

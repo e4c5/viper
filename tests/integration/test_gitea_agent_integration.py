@@ -121,6 +121,7 @@ def test_agent_vs_gitea_posts_findings_to_mocked_api(
     }"""
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
+    mock_event.author = "batch_review_0"
     mock_event.content = MagicMock()
     mock_event.content.parts = [MagicMock(text=findings_json)]
     mock_runner_instance = MagicMock()
