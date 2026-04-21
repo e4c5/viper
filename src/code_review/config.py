@@ -3,6 +3,7 @@
 See docs/CONFIGURATION-REFERENCE.md for a consolidated list of all environment variables.
 """
 
+import logging
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -15,6 +16,7 @@ _SUMMARY_LLM_CONFIG: "TaskLLMConfig | None" = None
 _VERIFICATION_LLM_CONFIG: "TaskLLMConfig | None" = None
 _CONTEXT_AWARE_CONFIG: "ContextAwareReviewConfig | None" = None
 _CODE_REVIEW_APP_CONFIG: "CodeReviewAppConfig | None" = None
+logger = logging.getLogger(__name__)
 
 
 class SCMConfig(BaseSettings):
@@ -426,6 +428,87 @@ def get_code_review_app_config() -> CodeReviewAppConfig:
     if _CODE_REVIEW_APP_CONFIG is None:
         _CODE_REVIEW_APP_CONFIG = CodeReviewAppConfig()
     return _CODE_REVIEW_APP_CONFIG
+
+
+def _effective_task_llm(primary: LLMConfig, task: TaskLLMConfig) -> dict[str, str]:
+    return {
+        "provider": task.provider or primary.provider,
+        "model": task.model or primary.model,
+    }
+
+
+def _scm_startup_snapshot() -> dict[str, object]:
+    try:
+        scm = get_scm_config()
+    except Exception as exc:
+        return {
+            "configured": False,
+            "reason": exc.__class__.__name__,
+        }
+    parsed_url = urlparse(scm.url)
+    return {
+        "configured": True,
+        "provider": scm.provider,
+        "url_host": parsed_url.netloc,
+        "skip_label_enabled": bool(scm.skip_label),
+        "skip_title_pattern_enabled": bool(scm.skip_title_pattern),
+        "review_decision_enabled": scm.review_decision_enabled,
+        "review_decision_high_threshold": scm.review_decision_high_threshold,
+        "review_decision_medium_threshold": scm.review_decision_medium_threshold,
+        "allowed_hosts_configured": bool(scm.allowed_hosts),
+        "bot_identity_configured": bool(scm.bot_identity),
+    }
+
+
+def startup_config_snapshot() -> dict[str, object]:
+    """Return a redacted, curated snapshot of startup-critical configuration."""
+    llm = get_llm_config()
+    summary_llm = get_summary_llm_config()
+    verification_llm = get_verification_llm_config()
+    context = get_context_aware_config()
+    app = get_code_review_app_config()
+    return {
+        "llm": {
+            "primary": {"provider": llm.provider, "model": llm.model},
+            "summary": _effective_task_llm(llm, summary_llm),
+            "verification": _effective_task_llm(llm, verification_llm),
+            "context_window": llm.context_window,
+            "max_output_tokens": llm.max_output_tokens,
+            "temperature": llm.temperature,
+            "timeout_seconds": llm.timeout_seconds,
+            "max_retries": llm.max_retries,
+        },
+        "review": {
+            "include_commit_messages_in_prompt": app.include_commit_messages_in_prompt,
+            "review_visible_lines": app.review_visible_lines,
+            "review_decision_only": app.review_decision_only,
+            "reply_dismissal_enabled": app.reply_dismissal_enabled,
+            "disable_idempotency": app.disable_idempotency,
+        },
+        "context_aware": {
+            "enabled": context.enabled,
+            "github_issues_enabled": context.github_issues_enabled,
+            "gitlab_issues_enabled": context.gitlab_issues_enabled,
+            "jira_enabled": context.jira_enabled,
+            "confluence_enabled": context.confluence_enabled,
+            "db_cache_enabled": bool(context.db_url),
+            "max_bytes": context.max_bytes,
+            "distilled_max_tokens": context.distilled_max_tokens,
+            "embedding_model": context.embedding_model,
+            "embedding_dimensions": context.embedding_dimensions,
+        },
+        "scm": _scm_startup_snapshot(),
+    }
+
+
+def log_startup_configuration(log: logging.Logger | None = None) -> None:
+    """Log startup-critical configuration without exposing secrets."""
+    target = log or logger
+    snapshot = startup_config_snapshot()
+    if target.isEnabledFor(logging.INFO):
+        target.info("Viper startup configuration: %s", snapshot)
+        return
+    print(f"Viper startup configuration: {snapshot}", flush=True)
 
 
 def reset_config_cache() -> None:

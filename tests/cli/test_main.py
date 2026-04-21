@@ -16,6 +16,19 @@ except ImportError:
 from code_review.__main__ import review
 
 
+def test_cli_ensure_logging_logs_startup_config():
+    from code_review.__main__ import _ensure_logging
+
+    with (
+        patch("code_review.__main__.configure_logging") as mock_configure,
+        patch("code_review.__main__.log_startup_configuration") as mock_log_startup,
+    ):
+        _ensure_logging()
+
+    mock_configure.assert_called_once_with()
+    mock_log_startup.assert_called_once_with()
+
+
 def test_cli_missing_owner_exits_1():
     """Missing owner, repo, or pr causes exit 1."""
     with patch.dict(os.environ, {"SCM_OWNER": "", "SCM_REPO": "", "SCM_PR_NUM": ""}, clear=False):

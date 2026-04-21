@@ -15,7 +15,9 @@ from code_review.config import (
     get_scm_config,
     get_summary_llm_config,
     get_verification_llm_config,
+    log_startup_configuration,
     reset_config_cache,
+    startup_config_snapshot,
 )
 from code_review.orchestration.orchestrator import ReviewOrchestrator
 
@@ -249,6 +251,84 @@ def test_review_decision_cli_overrides_use_copy_not_cached_mutation():
         assert get_scm_config() is cached
         assert get_scm_config().review_decision_enabled is False
     reset_config_cache()
+
+
+def test_startup_config_snapshot_logs_models_and_redacts_secrets():
+    reset_config_cache()
+    with patch.dict(
+        os.environ,
+        {
+            "SCM_URL": "https://gitea.example.com/api",
+            "SCM_TOKEN": "super-secret-scm",
+            "SCM_REVIEW_DECISION_ENABLED": "true",
+            "LLM_PROVIDER": "openai",
+            "LLM_MODEL": "gpt-5.4",
+            "LLM_API_KEY": "super-secret-llm",
+            "LLM_SUMMARY_PROVIDER": "anthropic",
+            "LLM_SUMMARY_MODEL": "claude-sonnet-4-5",
+            "LLM_SUMMARY_API_KEY": "super-secret-summary",
+            "CONTEXT_AWARE_REVIEW_ENABLED": "true",
+            "CONTEXT_JIRA_ENABLED": "true",
+            "CONTEXT_JIRA_TOKEN": "super-secret-jira",
+        },
+        clear=True,
+    ):
+        snapshot = startup_config_snapshot()
+    reset_config_cache()
+
+    assert snapshot["llm"]["primary"] == {"provider": "openai", "model": "gpt-5.4"}
+    assert snapshot["llm"]["summary"] == {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+    }
+    assert snapshot["llm"]["verification"] == {
+        "provider": "openai",
+        "model": "gpt-5.4",
+    }
+    assert snapshot["context_aware"]["enabled"] is True
+    assert snapshot["context_aware"]["jira_enabled"] is True
+    assert snapshot["scm"]["configured"] is True
+    assert snapshot["scm"]["url_host"] == "gitea.example.com"
+    rendered = str(snapshot)
+    assert "super-secret" not in rendered
+    assert "api_key" not in rendered
+    assert "SCM_TOKEN" not in rendered
+    assert "LLM_API_KEY" not in rendered
+    assert "CONTEXT_JIRA_TOKEN" not in rendered
+
+
+def test_log_startup_configuration_uses_supplied_logger():
+    fake_logger = type(
+        "FakeLogger",
+        (),
+        {
+            "isEnabledFor": lambda self, level: True,
+            "info": lambda self, *args: setattr(self, "args", args),
+        },
+    )()
+
+    with patch("code_review.config.startup_config_snapshot", return_value={"llm": {}}):
+        log_startup_configuration(fake_logger)
+
+    assert fake_logger.args == ("Viper startup configuration: %s", {"llm": {}})
+
+
+def test_log_startup_configuration_prints_when_info_disabled(monkeypatch):
+    print_calls: list[tuple[object, ...]] = []
+    fake_logger = type(
+        "FakeLogger",
+        (),
+        {"isEnabledFor": lambda self, level: False},
+    )()
+    monkeypatch.setattr(
+        "builtins.print",
+        lambda *args, **kwargs: print_calls.append((args, kwargs)),
+    )
+
+    with patch("code_review.config.startup_config_snapshot", return_value={"llm": {}}):
+        log_startup_configuration(fake_logger)
+
+    assert print_calls == [(("Viper startup configuration: {'llm': {}}",), {"flush": True})]
 
 
 def test_code_review_app_review_decision_only_from_env():
