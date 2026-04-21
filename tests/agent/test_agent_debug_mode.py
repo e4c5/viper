@@ -134,6 +134,8 @@ def test_create_review_agent_adds_linked_context_instruction_when_attached(
     _, kwargs = mock_agent_cls.call_args
     assert "Linked Work Item Context" in kwargs["instruction"]
     assert "acceptance criteria" in kwargs["instruction"]
+    assert "actively use" in kwargs["instruction"]
+    assert "Compare those requirements against the actual diff" in kwargs["instruction"]
 
 
 # --- EMBEDDED_DIFF_REVIEW_INSTRUCTION content ---

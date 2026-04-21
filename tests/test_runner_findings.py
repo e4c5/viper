@@ -3,6 +3,7 @@
 import pytest
 
 from code_review.comments.manager import _build_ignore_set
+from code_review.context.types import ContextReference, ReferenceType
 from code_review.formatters.comment import finding_to_comment_body
 from code_review.orchestration.execution import (
     findings_from_batch_responses,
@@ -147,15 +148,49 @@ def test_build_commit_messages_block_keeps_full_subject_when_unbounded():
 def test_format_review_prompt_supplement_wraps_linked_context_with_guidance():
     supplement = _format_review_prompt_supplement(
         context_brief="Must make DB optional.",
+        context_references=[],
         commit_messages=[],
         include_commit_messages=False,
     )
 
     assert _LINKED_CONTEXT_HEADER in supplement
     assert "requirements, acceptance criteria, and constraints" in supplement
+    assert "compare the diff against them" in supplement
+    assert "first-class review findings" in supplement
     assert "Distilled brief:" in supplement
     assert "Must make DB optional." in supplement
     assert "<context>" not in supplement
+
+
+def test_format_review_prompt_supplement_includes_linked_context_sources():
+    supplement = _format_review_prompt_supplement(
+        context_brief="Must enforce premium entitlement before export.",
+        context_references=[
+            ContextReference(
+                ref_type=ReferenceType.JIRA,
+                external_id="PAY-42",
+                display="PAY-42",
+            ),
+            ContextReference(
+                ref_type=ReferenceType.CONFLUENCE,
+                external_id="123456",
+                display="confluence-page:123456",
+            ),
+            ContextReference(
+                ref_type=ReferenceType.GITHUB_ISSUE,
+                external_id="org/repo#99",
+                display="org/repo#99",
+            ),
+        ],
+        commit_messages=[],
+        include_commit_messages=False,
+    )
+
+    assert "Linked sources:" in supplement
+    assert "- Jira: PAY-42" in supplement
+    assert "- Confluence page: confluence-page:123456" in supplement
+    assert "- GitHub issue: org/repo#99" in supplement
+    assert "Must enforce premium entitlement before export." in supplement
 
 
 def test_finding_to_comment_body():
