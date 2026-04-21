@@ -33,7 +33,7 @@ Context-aware review is runner-orchestrated and optional:
 1. Runner fetches PR metadata and commit messages.
 2. Reference extraction scans title/description/commits.
 3. Applicable references are fetched directly, or fetched/loaded through PostgreSQL when a DB URL is configured.
-4. Content is distilled directly; with DB/RAG enabled, oversized context uses retrieval + distillation.
+4. Content is distilled directly after byte-budget clamping; with DB/RAG enabled, oversized context uses retrieval + distillation.
 5. Distilled brief is appended to prompt in `<context>...</context>`.
 6. Agent instruction is conditionally enhanced when context is attached.
 
@@ -86,7 +86,7 @@ High-level sequence:
 Inside `build_context_brief_for_pr(...)`:
 
 1. Filter refs by enabled source.
-2. If `ctx.db_url` is empty, fetch each applicable reference directly and distill the combined text.
+2. If `ctx.db_url` is empty, fetch each applicable reference directly, clamp the combined text to `ctx.max_bytes`, and distill it.
 3. If `ctx.db_url` is set, reuse/create `ContextStore` from module-level cache.
 4. Open one DB connection and ensure schema.
 5. For each applicable ref:

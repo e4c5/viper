@@ -28,7 +28,7 @@ When enabled, the runner:
 
 1. Scans PR title, PR description, and PR commit messages for references.
 2. Fetches matching documents from enabled sources.
-3. If `CONTEXT_AWARE_REVIEW_DB_URL` is not set, distills all fetched text directly.
+3. If `CONTEXT_AWARE_REVIEW_DB_URL` is not set, clamps fetched text to `CONTEXT_MAX_BYTES` and distills it directly.
 4. If `CONTEXT_AWARE_REVIEW_DB_URL` is set, caches documents in PostgreSQL and chooses one of two paths:
    - Under size budget: distill all fetched text directly.
    - Over size budget: retrieve relevant chunks (RAG), then distill.
@@ -131,7 +131,7 @@ All variables are optional unless marked required by the source you enable.
 | `CONTEXT_CONFLUENCE_URL` | — | Confluence base URL. |
 | `CONTEXT_CONFLUENCE_EMAIL` | — | Confluence account email. |
 | `CONTEXT_CONFLUENCE_TOKEN` | — | Confluence API token. |
-| `CONTEXT_MAX_BYTES` | `20000` | Byte threshold for direct distillation vs RAG path. |
+| `CONTEXT_MAX_BYTES` | `20000` | Byte budget for context sent to distillation. Without DB, direct-mode input is clamped to this size; with DB/RAG enabled, over-budget context uses retrieval first. |
 | `CONTEXT_DISTILLED_MAX_TOKENS` | `4000` | Max output tokens for distilled context brief. |
 | `CONTEXT_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model used by RAG path. |
 | `CONTEXT_EMBEDDING_DIMENSIONS` | `1536` | Embedding vector dimensions used for pgvector schema/search. |
@@ -183,7 +183,7 @@ Verify:
 
 Tune:
 
-- `CONTEXT_MAX_BYTES` (when DB/RAG is enabled: lower to trigger RAG sooner, higher to do more direct distillation)
+- `CONTEXT_MAX_BYTES` (without DB: lower to clamp direct context sooner; with DB/RAG: lower to trigger RAG sooner)
 - `CONTEXT_DISTILLED_MAX_TOKENS` (controls final brief size)
 
 ### Database errors

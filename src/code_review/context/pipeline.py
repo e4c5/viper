@@ -24,6 +24,18 @@ logger = logging.getLogger(__name__)
 _store_cache: dict[tuple[str, int], ContextStore] = {}
 
 
+def _clamp_context_text(text: str, max_bytes: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    marker = "\n…(truncated)"
+    marker_bytes = marker.encode("utf-8")
+    if max_bytes <= len(marker_bytes):
+        return marker_bytes[:max_bytes].decode("utf-8", errors="ignore")
+    prefix = encoded[: max_bytes - len(marker_bytes)].decode("utf-8", errors="ignore")
+    return prefix + marker
+
+
 def _github_api_and_token(scm: SCMConfig, ctx: ContextAwareReviewConfig) -> tuple[str, str]:
     if scm.provider == "github":
         tok = scm.token
@@ -204,10 +216,7 @@ def _build_retrieved_context_text(
     doc_ids = [did for _, did in doc_ids_for_rag]
     retrieved = store.search_chunks(conn, q_emb, limit=16, document_ids=doc_ids)
     text = "\n\n".join(retrieved) if retrieved else combined
-    encoded = text.encode("utf-8")
-    if len(encoded) > ctx.max_bytes:
-        return encoded[: ctx.max_bytes].decode("utf-8", errors="ignore") + "\n…(truncated)"
-    return text
+    return _clamp_context_text(text, ctx.max_bytes)
 
 
 def build_context_brief_for_pr(
@@ -251,6 +260,7 @@ def build_context_brief_for_pr(
             len(documents_for_distill),
             len(raw_for_distill.encode("utf-8")),
         )
+        raw_for_distill = _clamp_context_text(raw_for_distill, ctx.max_bytes)
         brief = distill_context_text(
             raw_for_distill,
             max_output_tokens=ctx.distilled_max_tokens,
