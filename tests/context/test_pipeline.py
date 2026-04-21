@@ -532,3 +532,14 @@ def test_jira_transitive_does_not_follow_when_confluence_disabled(mock_distill):
     # Only the Jira fetch should have happened
     assert mf.call_count == 1
     assert mf.call_args_list[0].args[0].ref_type == ReferenceType.JIRA
+
+
+def test_extract_transitive_confluence_refs_empty_body():
+    ctx = MagicMock(confluence_enabled=True)
+    seen_ids = set()
+
+    with patch.object(pipeline_module.logger, "warning") as mock_warn:
+        refs = pipeline_module._extract_transitive_confluence_refs(" ", ctx=ctx, seen_ids=seen_ids)
+
+    assert refs == []
+    mock_warn.assert_called_once_with("Fetched body is empty or whitespace-only.")

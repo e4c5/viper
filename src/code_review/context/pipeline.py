@@ -140,6 +140,9 @@ def _extract_transitive_confluence_refs(
     """If Confluence is enabled, extract Confluence page refs from fetched text."""
     if not ctx.confluence_enabled:
         return []
+    if not fetched_body.strip():
+        logger.warning("Fetched body is empty or whitespace-only.")
+        return []
     return extract_confluence_refs(fetched_body, exclude_ids=seen_ids)
 
 
@@ -192,10 +195,10 @@ def _load_context_documents(
     seen_ids = {r.external_id for r in applicable}
     transitive: list[ContextReference] = []
 
-    def _fetch_and_record(ref: ContextReference) -> None:
+    def _fetch_and_record(ref: ContextReference) -> str | None:
         src_name, base = _source_name_and_base(ref, ctx, scm)
         if not base and ref.ref_type != ReferenceType.GITHUB_ISSUE:
-            return
+            return None
         source_id = store.get_or_create_source(conn, src_name, base)
         row = store.load_document(conn, source_id, ref.external_id)
         if row is not None and row[3]:
@@ -208,7 +211,7 @@ def _load_context_documents(
                 cfg=fetch_cfg,
             )
             if fetched is None:
-                return
+                return None
             doc_id = store.upsert_document(conn, source_id, fetched)
             content = fetched.body
         docs_for_distill.append((ref.display, content))
