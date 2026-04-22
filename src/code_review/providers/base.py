@@ -686,3 +686,14 @@ class ProviderInterface(ABC):
         Used for optional review-decision-only short-circuits (see Phase D docs).
         """
         return "UNKNOWN"
+
+    def is_bot_currently_approved(self, owner: str, repo: str, pr_number: int) -> bool:
+        """Return True only when the bot's latest review is explicitly APPROVED.
+
+        Unlike ``get_bot_blocking_state`` (which maps APPROVED and COMMENTED both to
+        NOT_BLOCKING), this method distinguishes an existing APPROVED review from a mere
+        comment review.  Used to skip redundant APPROVE re-submissions on comment events.
+
+        Default returns False (conservative: always allow submission).
+        """
+        return False

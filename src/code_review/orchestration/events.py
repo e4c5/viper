@@ -208,6 +208,20 @@ class ReplyDismissalContext:
             return infer_severity_from_comment_body(self.ctx.entries[0].body or "")
         return "unknown"
 
+    def has_bot_authored_entry(self) -> bool:
+        """Return True if at least one thread entry is authored by the bot.
+
+        When the bot identity is unresolved we cannot verify authorship, so
+        we return True (safe fallback: continue processing the thread rather
+        than silently skipping it).
+        """
+        if not self.bot.is_resolved():
+            return True
+        return any(
+            _reply_dismissal_entry_is_bot_authored(ent.author_login, self.bot)
+            for ent in self.ctx.entries
+        )
+
     def existing_bot_reply_after_trigger(self, triggering_comment_id: str):
         """Return a later bot-authored thread entry when this trigger was already handled."""
         triggered_comment_id = (triggering_comment_id or "").strip()

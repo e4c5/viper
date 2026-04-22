@@ -203,7 +203,16 @@ class ReplyDismissalHandler:
                 len(dctx.entries) if dctx is not None else 0,
             )
             return None
-        existing_bot_reply = ReplyDismissalContext(dctx, bot_id).existing_bot_reply_after_trigger(
+        rd_ctx = ReplyDismissalContext(dctx, bot_id)
+        if not rd_ctx.has_bot_authored_entry():
+            observability.record_reply_dismissal_outcome("skipped_not_bot_thread")
+            logger.info(
+                "Reply-dismissal skipped: no bot-authored entry in thread "
+                "(comment_id=%s; thread was not started by this bot)",
+                comment_id,
+            )
+            return None
+        existing_bot_reply = rd_ctx.existing_bot_reply_after_trigger(
             comment_id
         )
         if existing_bot_reply is not None:

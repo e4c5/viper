@@ -679,6 +679,67 @@ def test_get_bot_blocking_state_falls_back_to_configured_bot_identity():
     assert state == "BLOCKING"
 
 
+def test_is_bot_currently_approved_returns_true_when_latest_review_is_approved():
+    client = MagicMock()
+    client.get_authenticated_user.return_value = SimpleNamespace(login="mybot", id=1)
+    pull = MagicMock()
+    pull.get_reviews.return_value = [
+        _fake_review(1, "COMMENTED", "mybot"),
+        _fake_review(2, "APPROVED", "mybot"),
+    ]
+    client.get_pull.return_value = pull
+    p = GitHubProvider("https://api.github.com", "tok")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        assert p.is_bot_currently_approved("o", "r", 1) is True
+
+
+def test_is_bot_currently_approved_returns_false_when_latest_review_is_changes_requested():
+    client = MagicMock()
+    client.get_authenticated_user.return_value = SimpleNamespace(login="mybot", id=1)
+    pull = MagicMock()
+    pull.get_reviews.return_value = [
+        _fake_review(1, "APPROVED", "mybot"),
+        _fake_review(2, "CHANGES_REQUESTED", "mybot"),
+    ]
+    client.get_pull.return_value = pull
+    p = GitHubProvider("https://api.github.com", "tok")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        assert p.is_bot_currently_approved("o", "r", 1) is False
+
+
+def test_is_bot_currently_approved_returns_false_when_no_reviews():
+    client = MagicMock()
+    client.get_authenticated_user.return_value = SimpleNamespace(login="mybot", id=1)
+    pull = MagicMock()
+    pull.get_reviews.return_value = []
+    client.get_pull.return_value = pull
+    p = GitHubProvider("https://api.github.com", "tok")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        assert p.is_bot_currently_approved("o", "r", 1) is False
+
+
+def test_is_bot_currently_approved_returns_false_when_latest_is_comment():
+    client = MagicMock()
+    client.get_authenticated_user.return_value = SimpleNamespace(login="mybot", id=1)
+    pull = MagicMock()
+    pull.get_reviews.return_value = [
+        _fake_review(1, "APPROVED", "mybot"),
+        _fake_review(2, "COMMENTED", "mybot"),
+    ]
+    client.get_pull.return_value = pull
+    p = GitHubProvider("https://api.github.com", "tok")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        assert p.is_bot_currently_approved("o", "r", 1) is False
+
+
+def test_is_bot_currently_approved_returns_false_when_user_login_unavailable():
+    client = MagicMock()
+    client.get_authenticated_user.side_effect = RuntimeError("403")
+    p = GitHubProvider("https://api.github.com", "tok")
+    with patch.object(GitHubProvider, "_client", return_value=client):
+        assert p.is_bot_currently_approved("o", "r", 1) is False
+
+
 def test_post_review_thread_reply_github():
     client = MagicMock()
     p = GitHubProvider("https://api.github.com", "tok")

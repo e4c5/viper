@@ -420,6 +420,23 @@ def _maybe_submit_review_decision(
         logger.info("Dry run: would submit PR review decision=%s", decision)
         return
 
+    if decision == "APPROVE":
+        try:
+            if provider.is_bot_currently_approved(owner, repo, pr_number):
+                logger.info(
+                    "Skipping repeated APPROVE submission: bot already has an approved review "
+                    "(owner=%s repo=%s pr=%s). "
+                    "Will only resubmit if the decision changes to REQUEST_CHANGES.",
+                    owner,
+                    repo,
+                    pr_number,
+                )
+                return
+        except Exception as e:
+            logger.debug(
+                "is_bot_currently_approved check failed; proceeding with submit: %s", e
+            )
+
     try:
         provider.submit_review_decision(
             owner,

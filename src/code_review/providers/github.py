@@ -29,6 +29,9 @@ from code_review.providers.base import (
     unified_diff_for_path,
 )
 from code_review.providers.bot_blocking_common import (
+    _mine_github_style_reviews,
+    _last_non_pending_review_raw,
+    _norm_review_state,
     blocking_state_from_token_and_github_style_review_list,
 )
 from code_review.providers.review_decision_common import github_style_pull_review_json
@@ -740,6 +743,20 @@ class GitHubProvider(ProviderInterface):
             self._github_token_user_login_lower(),
             self._github_list_pull_reviews(owner, repo, pr_number),
         )
+
+    def is_bot_currently_approved(self, owner: str, repo: str, pr_number: int) -> bool:
+        """Return True only when the bot's latest review is explicitly APPROVED."""
+        token_login = self._github_token_user_login_lower()
+        if not token_login:
+            return False
+        reviews = self._github_list_pull_reviews(owner, repo, pr_number)
+        if reviews is None:
+            return False
+        mine = _mine_github_style_reviews(reviews, token_login)
+        last_raw = _last_non_pending_review_raw(mine)
+        if last_raw is None:
+            return False
+        return _norm_review_state(last_raw) == "APPROVED"
 
     def get_bot_attribution_identity(
         self, owner: str, repo: str, pr_number: int

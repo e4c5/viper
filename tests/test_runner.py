@@ -733,6 +733,7 @@ def _provider_with_review_decisions(
     p = _base_review_provider(capabilities=caps)
     p.submit_review_decision = MagicMock()
     p.get_unresolved_review_items_for_quality_gate = MagicMock(return_value=[])
+    p.is_bot_currently_approved = MagicMock(return_value=False)
     return p
 
 
@@ -1787,4 +1788,115 @@ def test_reply_added_event_authored_by_bot_matches_login_and_id():
     assert not _reply_added_event_authored_by_bot(
         ReviewDecisionEventContext(comment_id="1"),
         bot,
+    )
+
+
+@patch("code_review.orchestration.orchestrator.observability.record_reply_dismissal_outcome")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_code_review_app_config")
+@patch("code_review.orchestration.orchestrator._run_reply_dismissal_llm")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_context_window")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_provider")
+@patch("code_review.orchestration.orchestrator.runner_mod.get_scm_config")
+def test_run_review_decision_only_reply_dismissal_skips_when_thread_not_started_by_bot(
+    mock_get_scm_config,
+    mock_get_provider,
+    mock_get_context_window,
+    mock_llm,
+    mock_app_cfg,
+    mock_record_rd,
+):
+    """Reply dismissal must be skipped when no entry in the thread is bot-authored.
+
+    This prevents viper from responding to threads started by other reviewers
+    (e.g. Copilot or CodeRabbit) where the human author replied.
+    """
+    from code_review.schemas.review_thread_dismissal import ReviewThreadDismissalEntry
+
+    mock_app_cfg.return_value = _reply_dismissal_app_cfg()
+
+    # Thread with no bot-authored entry — started by another tool (e.g. Copilot)
+    non_bot_thread = _reply_dismissal_context(
+        gate_exclusion_stable_id="github:thread:PRRT_copilot",
+        thread_id="PRRT_copilot",
+        entries=[
+            ReviewThreadDismissalEntry(
+                comment_id="50", author_login="copilot-bot", body="Consider using a guard clause."
+            ),
+            ReviewThreadDismissalEntry(
+                comment_id="51", author_login="dev", body="Fixed, good catch."
+            ),
+        ],
+    )
+    provider = _configure_reply_dismissal_provider(
+        capabilities=_reply_dismissal_caps(),
+        unresolved_items=[
+            _reply_dismissal_unresolved_item(
+                stable_id="github:thread:PRRT_copilot",
+                thread_id="PRRT_copilot",
+                body="[Medium] Use a guard clause.",
+            )
+        ],
+        dismissal_context=non_bot_thread,
+        bot_login="viper-review",
+    )
+    provider.post_review_thread_reply = MagicMock()
+
+    _run_review_decision_only_with_provider(
+        mock_get_scm_config,
+        mock_get_provider,
+        mock_get_context_window,
+        provider=provider,
+    )
+
+    mock_llm.assert_not_called()
+    provider.post_review_thread_reply.assert_not_called()
+    mock_record_rd.assert_any_call("skipped_not_bot_thread")
+
+
+def test_maybe_submit_review_decision_skips_repeated_approve_when_bot_already_approved():
+    """_maybe_submit_review_decision must not re-submit APPROVE when the bot is already approved."""
+    from code_review.orchestration_deps import _maybe_submit_review_decision
+    from code_review.quality.outcome import QualityGateOutcome
+
+    provider = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(supports_review_decisions=True)
+    provider.is_bot_currently_approved.return_value = True
+
+    cfg = MagicMock()
+    cfg.review_decision_enabled = True
+    gate_outcome = QualityGateOutcome(
+        high_count=0, medium_count=0, decision="APPROVE", submission_reason="all clear"
+    )
+
+    _maybe_submit_review_decision(
+        provider, "o", "r", 1, "sha", dry_run=False, cfg=cfg, gate_outcome=gate_outcome
+    )
+
+    provider.is_bot_currently_approved.assert_called_once_with("o", "r", 1)
+    provider.submit_review_decision.assert_not_called()
+
+
+def test_maybe_submit_review_decision_still_submits_request_changes_when_bot_is_approved():
+    """A REQUEST_CHANGES decision must always be submitted even when the bot is currently approved."""
+    from code_review.orchestration_deps import _maybe_submit_review_decision
+    from code_review.quality.outcome import QualityGateOutcome
+
+    provider = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(supports_review_decisions=True)
+    provider.is_bot_currently_approved.return_value = True  # currently approved
+
+    cfg = MagicMock()
+    cfg.review_decision_enabled = True
+    gate_outcome = QualityGateOutcome(
+        high_count=1, medium_count=0, decision="REQUEST_CHANGES", submission_reason="high issues"
+    )
+
+    _maybe_submit_review_decision(
+        provider, "o", "r", 1, "sha", dry_run=False, cfg=cfg, gate_outcome=gate_outcome
+    )
+
+    # The APPROVE guard is skipped for REQUEST_CHANGES; submit must be called
+    provider.is_bot_currently_approved.assert_not_called()
+    provider.submit_review_decision.assert_called_once_with(
+        "o", "r", 1, "REQUEST_CHANGES", body="high issues", head_sha="sha"
     )

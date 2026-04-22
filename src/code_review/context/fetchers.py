@@ -361,7 +361,7 @@ def fetch_jira_issue(
 def _extract_url_from_attrs(attrs: Any, *keys: str) -> list[str]:
     if not isinstance(attrs, dict):
         return []
-    return [v.strip() for k in keys for v in [attrs.get(k) or ""] if v.strip()]
+    return [v.strip() for k in keys for v in [attrs.get(k) or ""] if isinstance(v, str) and v.strip()]
 
 
 def _adf_link_urls(node: dict[str, Any]) -> list[str]:
