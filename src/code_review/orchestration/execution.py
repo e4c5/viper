@@ -46,7 +46,6 @@ def create_agent_and_runner(
         provider,
         review_standards,
         batches,
-        head_sha=pr_ctx.head_sha,
         context_brief_attached=context_brief_attached,
         review_visible_lines=review_visible_lines,
         use_output_key=single_batch_mode,

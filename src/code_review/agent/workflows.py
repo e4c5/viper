@@ -155,7 +155,6 @@ def create_sequential_batch_review_agent(
     review_standards: str,
     batches: list[ReviewBatch],
     *,
-    head_sha: str = "",
     context_brief_attached: bool = False,
     review_visible_lines: bool | None = None,
     use_output_key: bool = False,

@@ -358,23 +358,17 @@ def fetch_jira_issue(
     )
 
 
+def _extract_url_from_attrs(attrs: Any, *keys: str) -> list[str]:
+    if not isinstance(attrs, dict):
+        return []
+    return [v.strip() for k in keys for v in [attrs.get(k) or ""] if v.strip()]
+
+
 def _adf_link_urls(node: dict[str, Any]) -> list[str]:
-    urls: list[str] = []
-    attrs = node.get("attrs")
-    if isinstance(attrs, dict):
-        for key in ("url", "href"):
-            value = attrs.get(key)
-            if isinstance(value, str) and value.strip():
-                urls.append(value.strip())
+    urls: list[str] = _extract_url_from_attrs(node.get("attrs"), "url", "href")
     for mark in node.get("marks") or []:
-        if not isinstance(mark, dict):
-            continue
-        attrs = mark.get("attrs")
-        if not isinstance(attrs, dict):
-            continue
-        href = attrs.get("href")
-        if isinstance(href, str) and href.strip():
-            urls.append(href.strip())
+        if isinstance(mark, dict):
+            urls.extend(_extract_url_from_attrs(mark.get("attrs"), "href"))
     return list(dict.fromkeys(urls))
 
 

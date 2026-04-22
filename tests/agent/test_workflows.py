@@ -24,8 +24,8 @@ class _FakeReviewAgent(BaseAgent):
 
     async def run_async(self, ctx):
         self.seen_user_messages.append(ctx.user_content.parts[0].text)
-        if False:
-            yield None
+        return
+        yield  # pragma: no cover — makes this an async generator
 
 
 @patch("code_review.agent.workflows.create_review_agent")
@@ -80,7 +80,6 @@ def test_create_sequential_batch_review_agent_builds_one_sub_agent_per_batch(
         provider,
         "review standards",
         batches,
-        head_sha="sha1",
         context_brief_attached=True,
     )
 
@@ -177,7 +176,7 @@ async def test_batch_review_workflow_passes_distinct_user_messages_to_sub_agents
 
     ctx = _Ctx(types.Content(role="user", parts=[types.Part(text="root")]))
 
-    async for _event in workflow._run_async_impl(ctx):
+    async for _event in workflow._run_async_impl(ctx):  # exhaust the generator; side-effects are what we assert
         pass
 
     assert sub_agent_a.seen_user_messages == ["batch A"]
@@ -194,8 +193,6 @@ async def test_batch_review_workflow_resumes_from_correct_sub_agent() -> None:
         async def run_async(self, ctx):
             self.call_count += 1
             yield None
-            if self.pause_on_call:
-                pass  # We yield an event that causes pause
 
     sub_agent_a = _FakePausableAgent(name="batch_review_0", pause_on_call=True)
     sub_agent_b = _FakePausableAgent(name="batch_review_1")
@@ -224,7 +221,7 @@ async def test_batch_review_workflow_resumes_from_correct_sub_agent() -> None:
     ctx = _Ctx()
 
     # Run 1: Should pause on sub_agent_a
-    async for _event in workflow._run_async_impl(ctx):
+    async for _event in workflow._run_async_impl(ctx):  # exhaust the generator; side-effects are what we assert
         pass
 
     assert workflow.current_index == 0
@@ -235,7 +232,7 @@ async def test_batch_review_workflow_resumes_from_correct_sub_agent() -> None:
     sub_agent_a.pause_on_call = False
     
     # Run 2: Should finish sub_agent_a, then run sub_agent_b
-    async for _event in workflow._run_async_impl(ctx):
+    async for _event in workflow._run_async_impl(ctx):  # exhaust the generator; side-effects are what we assert
         pass
 
     assert workflow.current_index == 2

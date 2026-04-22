@@ -86,7 +86,6 @@ def test_create_sequential_batch_review_agent_logs_instruction_when_enabled(
                 provider=MagicMock(),
                 review_standards="### Python",
                 batches=[batch],
-                head_sha="abc123",
                 review_visible_lines=None,
             )
         finally:
@@ -364,7 +363,6 @@ def test_create_agent_and_runner_uses_sequential_batch_workflow(
         provider,
         "review standards",
         batches,
-        head_sha="sha1",
         context_brief_attached=False,
         review_visible_lines=None,
         use_output_key=False,
@@ -919,7 +917,6 @@ def test_create_agent_and_runner_returns_session_id_service_runner():
             provider,
             review_standards,
             batches,
-            head_sha="",
             context_brief_attached=False,
             review_visible_lines=None,
             use_output_key=False,
