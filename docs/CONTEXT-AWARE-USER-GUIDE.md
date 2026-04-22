@@ -125,7 +125,7 @@ All variables are optional unless marked required by the source you enable.
 | `CONTEXT_JIRA_ENABLED` | `false` | Enable Jira fetching. |
 | `CONTEXT_JIRA_EXTRA_FIELDS` | — | Comma-separated extra Jira fields (for custom acceptance criteria, etc.). |
 | `CONTEXT_CONFLUENCE_ENABLED` | `false` | Enable Confluence fetching. |
-| `CONTEXT_ATLASSIAN_URL` | — | Atlassian site URL used for Jira and Confluence, e.g. `https://yourcompany.atlassian.net`. |
+| `CONTEXT_ATLASSIAN_URL` | — | Top-level Atlassian site URL used for Jira and Confluence, e.g. `https://yourcompany.atlassian.net` (not `/jira` or `/wiki`). |
 | `CONTEXT_MAX_BYTES` | `20000` | Byte budget for context sent to distillation. Without DB, direct-mode input is clamped to this size; with DB/RAG enabled, over-budget context uses retrieval first. |
 | `CONTEXT_DISTILLED_MAX_TOKENS` | `4000` | Max output tokens for distilled context brief. |
 | `CONTEXT_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model used by RAG path. |
@@ -163,7 +163,7 @@ This prevents one temporarily unavailable external system from blocking all PR r
 Check required variables for every enabled source:
 
 - Atlassian auth: `CONTEXT_ATLASSIAN_EMAIL`, `CONTEXT_ATLASSIAN_TOKEN`
-- Jira and Confluence: `CONTEXT_ATLASSIAN_URL`
+- Jira and Confluence: `CONTEXT_ATLASSIAN_URL` as the top-level site URL, not `/jira` or `/wiki`
 - GitHub/GitLab with non-matching SCM provider: source-specific token vars
 
 ### "No context attached" even with links in PR text

@@ -303,7 +303,16 @@ class ContextAwareReviewConfig(BaseSettings):
         normalized = str(v).strip()
         return normalized or None
 
-    @field_validator("atlassian_url", "gitlab_api_url", mode="after")
+    @field_validator("atlassian_url", mode="after")
+    @classmethod
+    def _normalize_atlassian_url(cls, v: str) -> str:
+        normalized = (v or "").strip().rstrip("/")
+        parsed = urlparse(normalized)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return normalized
+
+    @field_validator("gitlab_api_url", mode="after")
     @classmethod
     def _strip_urls(cls, v: str) -> str:
         return (v or "").strip().rstrip("/")

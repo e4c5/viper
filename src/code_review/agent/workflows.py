@@ -38,13 +38,16 @@ class BatchReviewWorkflowAgent(BaseAgent):
     """Run batch review sub-agents while giving each one its own user message."""
 
     batch_user_messages: list[types.Content] = Field(default_factory=list)
+    current_index: int = Field(default=0)
 
     async def _run_async_impl(
         self, ctx: "InvocationContext"
     ) -> "AsyncGenerator[Event, None]":
         from google.adk.events import Event
 
-        for index, sub_agent in enumerate(self.sub_agents):
+        while self.current_index < len(self.sub_agents):
+            index = self.current_index
+            sub_agent = self.sub_agents[index]
             user_content = (
                 self.batch_user_messages[index]
                 if index < len(self.batch_user_messages)
@@ -72,6 +75,7 @@ class BatchReviewWorkflowAgent(BaseAgent):
                         pause_invocation = True
             if pause_invocation:
                 return
+            self.current_index += 1
 
 
 def build_prepared_batch_user_message(

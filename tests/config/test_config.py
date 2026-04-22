@@ -325,6 +325,24 @@ def test_context_aware_config_uses_shared_atlassian_credentials():
     assert cfg.atlassian_token.get_secret_value() == "atlassian-token"
 
 
+def test_context_aware_config_normalizes_atlassian_url_to_site_root():
+    with patch.dict(
+        os.environ,
+        {"CONTEXT_ATLASSIAN_URL": "https://acme.atlassian.net/jira/"},
+        clear=True,
+    ):
+        jira_cfg = ContextAwareReviewConfig()
+    with patch.dict(
+        os.environ,
+        {"CONTEXT_ATLASSIAN_URL": "https://acme.atlassian.net/wiki/"},
+        clear=True,
+    ):
+        confluence_cfg = ContextAwareReviewConfig()
+
+    assert jira_cfg.atlassian_url == "https://acme.atlassian.net"
+    assert confluence_cfg.atlassian_url == "https://acme.atlassian.net"
+
+
 def test_format_startup_config_lines_flattens_snapshot():
     lines = format_startup_config_lines(
         {

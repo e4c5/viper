@@ -184,3 +184,61 @@ async def test_batch_review_workflow_passes_distinct_user_messages_to_sub_agents
     assert sub_agent_b.seen_user_messages == ["batch B"]
     appended_events = [call.kwargs["event"] for call in ctx.session_service.append_event.call_args_list]
     assert [event.content.parts[0].text for event in appended_events] == ["batch A", "batch B"]
+
+@pytest.mark.asyncio
+async def test_batch_review_workflow_resumes_from_correct_sub_agent() -> None:
+    class _FakePausableAgent(BaseAgent):
+        pause_on_call: bool = False
+        call_count: int = 0
+
+        async def run_async(self, ctx):
+            self.call_count += 1
+            yield None
+            if self.pause_on_call:
+                pass  # We yield an event that causes pause
+
+    sub_agent_a = _FakePausableAgent(name="batch_review_0", pause_on_call=True)
+    sub_agent_b = _FakePausableAgent(name="batch_review_1")
+    workflow = BatchReviewWorkflowAgent(
+        name="sequential_batch_review_agent",
+        sub_agents=[sub_agent_a, sub_agent_b],
+    )
+
+    class _Ctx:
+        def __init__(self):
+            self.user_content = types.Content(role="user", parts=[types.Part(text="root")])
+            self.session_service = MagicMock()
+            self.session_service.append_event = AsyncMock()
+            self.session = MagicMock()
+            self.invocation_id = "invocation-1"
+            self.branch = "branch-1"
+
+        def model_copy(self, update):
+            copied = _Ctx()
+            return copied
+
+        def should_pause_invocation(self, _event):
+            # Pause on the first agent
+            return sub_agent_a.pause_on_call
+
+    ctx = _Ctx()
+
+    # Run 1: Should pause on sub_agent_a
+    async for _event in workflow._run_async_impl(ctx):
+        pass
+
+    assert workflow.current_index == 0
+    assert sub_agent_a.call_count == 1
+    assert sub_agent_b.call_count == 0
+
+    # Resume: turn off pause so it can proceed
+    sub_agent_a.pause_on_call = False
+    
+    # Run 2: Should finish sub_agent_a, then run sub_agent_b
+    async for _event in workflow._run_async_impl(ctx):
+        pass
+
+    assert workflow.current_index == 2
+    assert sub_agent_a.call_count == 2
+    assert sub_agent_b.call_count == 1
+
