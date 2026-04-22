@@ -101,6 +101,7 @@ pipeline {
                     )
                     def credId = 'SCM_TOKEN'
                     def unresolvedMarker = isBitbucket ? '$.pullRequest' : '$.pull_request'
+                    def fields = env.CONTEXT_JIRA_EXTRA_FIELDS.split(',')
 
                     if (prAction) {
                         def allowed = isBitbucket
@@ -199,6 +200,12 @@ pipeline {
                                     [ -n "${REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD:-}" ] && export SCM_REVIEW_DECISION_MEDIUM_THRESHOLD="$REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"
                                     [ -n "${CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING:-}" ] && export CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING="$CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING"
                                     [ -n "${CODE_REVIEW_REPLY_DISMISSAL_ENABLED:-}" ] && export CODE_REVIEW_REPLY_DISMISSAL_ENABLED="$CODE_REVIEW_REPLY_DISMISSAL_ENABLED"
+                                    [ -n "${CONTEXT_AWARE_REVIEW_ENABLED:-}" ] && export CONTEXT_AWARE_REVIEW_ENABLED="$CONTEXT_AWARE_REVIEW_ENABLED"
+                                    [ -n "${CONTEXT_JIRA_ENABLED:-}" ] && export CONTEXT_JIRA_ENABLED="$CONTEXT_JIRA_ENABLED"
+                                    [ -n "${CONTEXT_JIRA_URL:-}" ] && export CONTEXT_JIRA_URL="$CONTEXT_JIRA_URL"
+                                    [ -n "${CONTEXT_JIRA_EMAIL:-}" ] && export CONTEXT_JIRA_EMAIL="$CONTEXT_JIRA_EMAIL"
+                                    [ -n "${CONTEXT_JIRA_TOKEN:-}" ] && export CONTEXT_JIRA_TOKEN="$CONTEXT_JIRA_TOKEN"
+                                    [ -n "${CONTEXT_JIRA_EXTRA_FIELDS:-}" ] && export CONTEXT_JIRA_EXTRA_FIELDS="$CONTEXT_JIRA_EXTRA_FIELDS"
                                     export CODE_REVIEW_EVENT_COMMENT_ID="${CODE_REVIEW_EVENT_COMMENT_ID:-}"
                                     export CODE_REVIEW_EVENT_THREAD_ID="${CODE_REVIEW_EVENT_THREAD_ID:-}"
                                     export CODE_REVIEW_EVENT_ACTOR_LOGIN="${CODE_REVIEW_EVENT_ACTOR_LOGIN:-}"
@@ -220,7 +227,13 @@ pipeline {
                                     [ -n "${REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD:-}" ] && RD_ENV="$RD_ENV -e SCM_REVIEW_DECISION_MEDIUM_THRESHOLD=$REVIEW_SCM_REVIEW_DECISION_MEDIUM_THRESHOLD"
                                     [ -n "${CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING:-}" ] && RD_ENV="$RD_ENV -e CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING=$CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING"
                                     [ -n "${CODE_REVIEW_REPLY_DISMISSAL_ENABLED:-}" ] && RD_ENV="$RD_ENV -e CODE_REVIEW_REPLY_DISMISSAL_ENABLED=$CODE_REVIEW_REPLY_DISMISSAL_ENABLED"
-                                    "$runtime" run --rm --network "$REVIEW_NETWORK" \
+                                    [ -n "${CONTEXT_AWARE_REVIEW_ENABLED:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_AWARE_REVIEW_ENABLED"
+                                    [ -n "${CONTEXT_JIRA_ENABLED:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_JIRA_ENABLED"
+                                    [ -n "${CONTEXT_JIRA_URL:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_JIRA_URL"
+                                    [ -n "${CONTEXT_JIRA_EMAIL:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_JIRA_EMAIL"
+                                    [ -n "${CONTEXT_JIRA_TOKEN:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_JIRA_TOKEN"
+                                    [ -n "${CONTEXT_JIRA_EXTRA_FIELDS:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_JIRA_EXTRA_FIELDS"
+                                    "$runtime" run --rm --network host \
                                         -e SCM_PROVIDER="$REVIEW_SCM_PROVIDER" \
                                         -e SCM_URL="$REVIEW_SCM_URL" \
                                         -e SCM_TOKEN="$SCM_TOKEN" \
