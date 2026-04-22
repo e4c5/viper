@@ -49,9 +49,10 @@ def test_build_batch_review_content_logs_user_prompt_when_enabled(caplog):
 def test_create_sequential_batch_review_agent_logs_instruction_when_enabled(
     mock_create_review_agent, caplog
 ):
+    from google.adk.agents import BaseAgent
+
     from code_review.agent.workflows import create_sequential_batch_review_agent
     from code_review.batching import ReviewBatch, ReviewSegment
-    from google.adk.agents import BaseAgent
 
     class _FakeReviewAgent(BaseAgent):
         instruction: str = "base"
@@ -454,6 +455,50 @@ def test_sequential_batch_mode_attaches_prepared_batches_as_user_messages(mock_c
     root_content = mock_collect.call_args.args[2]
     assert root_content.role == "user"
     assert "Prepared batch segments" not in root_content.parts[0].text
+
+
+@patch("code_review.orchestration.execution.runner_mod._run_agent_and_collect_responses")
+def test_sequential_batch_mode_attaches_user_messages_to_wrapped_agent(mock_collect):
+    from code_review.batching import ReviewBatch, ReviewSegment
+    from code_review.orchestration.execution import _run_sequential_batch_review_mode
+
+    batch = ReviewBatch(
+        batch_index=0,
+        estimated_tokens=10,
+        paths=("a.py",),
+        segments=(
+            ReviewSegment(
+                path="a.py",
+                diff_text=(
+                    "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+                    "@@ -1,1 +1,2 @@\n old\n+new\n"
+                ),
+                estimated_tokens=10,
+                split_strategy="whole_file",
+                segment_index=0,
+                total_segments=1,
+            ),
+        ),
+    )
+    inner_agent = SimpleNamespace(batch_user_messages=[])
+    runner = SimpleNamespace(agent=SimpleNamespace(agent=inner_agent))
+    mock_collect.return_value = [("batch_review_0", '{"findings":[]}')]
+
+    _run_sequential_batch_review_mode(
+        PRContext("o", "r", 1, "sha1"),
+        MagicMock(),
+        "review standards",
+        runner,
+        "session-1",
+        batches=[batch],
+        batch_count=1,
+        prompt_suffix="extra context",
+    )
+
+    assert len(inner_agent.batch_user_messages) == 1
+    text = inner_agent.batch_user_messages[0].parts[0].text
+    assert "extra context" in text
+    assert "Prepared batch segments" in text
 
 
 @patch("code_review.orchestration.execution.runner_mod._run_agent_and_collect_response")

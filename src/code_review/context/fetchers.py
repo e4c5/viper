@@ -274,7 +274,6 @@ def _fetch_jira_remote_links(
     path = f"{root}/rest/api/3/issue/{key}/remotelink"
     r = client.get(path, auth=(email, api_token))
     if r.status_code != 200:
-        _raise_auth("GET", path, r.status_code, r.text)
         logger.warning("Jira remote links fetch failed (%s): %s", r.status_code, path)
         return ([], False)
     try:

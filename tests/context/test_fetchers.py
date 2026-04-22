@@ -257,6 +257,70 @@ def test_fetch_jira_issue_appends_remote_links_when_requested():
     )
 
 
+def test_fetch_jira_issue_skips_remote_links_on_auth_error():
+    data = {
+        "id": "10002",
+        "fields": {
+            "summary": "Review linked spec",
+            "description": "Related Confluence Page",
+            "issuetype": {"name": "Task"},
+            "status": {"name": "Open"},
+            "updated": None,
+        },
+    }
+    client_mock = _make_multi_response_client(
+        [_mock_httpx_response(200, data), _mock_httpx_response(401, text="Unauthorized")]
+    )
+
+    with patch("httpx.Client", return_value=client_mock):
+        doc = fetch_jira_issue(
+            "https://example.atlassian.net",
+            "user@example.com",
+            "token",
+            "KAN-9",
+            include_remote_links=True,
+        )
+
+    assert doc is not None
+    assert "Related Confluence Page" in doc.body
+    assert "Remote links:" not in doc.body
+    assert doc.metadata["jira_remote_links_included"] is False
+    assert doc.metadata["jira_remote_link_count"] == 0
+
+
+def test_fetch_jira_issue_skips_remote_links_on_invalid_json():
+    data = {
+        "id": "10002",
+        "fields": {
+            "summary": "Review linked spec",
+            "description": "Related Confluence Page",
+            "issuetype": {"name": "Task"},
+            "status": {"name": "Open"},
+            "updated": None,
+        },
+    }
+    invalid_json_response = _mock_httpx_response(200, text="not json")
+    invalid_json_response.json.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+    client_mock = _make_multi_response_client(
+        [_mock_httpx_response(200, data), invalid_json_response]
+    )
+
+    with patch("httpx.Client", return_value=client_mock):
+        doc = fetch_jira_issue(
+            "https://example.atlassian.net",
+            "user@example.com",
+            "token",
+            "KAN-9",
+            include_remote_links=True,
+        )
+
+    assert doc is not None
+    assert "Related Confluence Page" in doc.body
+    assert "Remote links:" not in doc.body
+    assert doc.metadata["jira_remote_links_included"] is False
+    assert doc.metadata["jira_remote_link_count"] == 0
+
+
 def test_fetch_jira_issue_preserves_confluence_link_from_adf_description():
     data = {
         "id": "10002",
@@ -292,7 +356,9 @@ def test_fetch_jira_issue_preserves_confluence_link_from_adf_description():
     }
 
     with _patch_client(_mock_httpx_response(200, data)):
-        doc = fetch_jira_issue("https://example.atlassian.net", "user@example.com", "token", "KAN-9")
+        doc = fetch_jira_issue(
+            "https://example.atlassian.net", "user@example.com", "token", "KAN-9"
+        )
 
     assert doc is not None
     assert "Related Confluence Page" in doc.body

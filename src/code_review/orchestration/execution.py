@@ -264,8 +264,13 @@ def _attach_batch_user_messages(
     """Attach one cache-friendly user message per prepared batch to the workflow agent."""
     from code_review.agent.workflows import build_prepared_batch_user_message
 
-    agent = getattr(runner, "agent", None)
-    if not hasattr(agent, "batch_user_messages"):
+    agent = _batch_message_agent(getattr(runner, "agent", None))
+    if agent is None:
+        logger.warning(
+            "Unable to attach batch user messages; runner agent does not expose "
+            "batch_user_messages (agent_type=%s)",
+            type(getattr(runner, "agent", None)).__name__,
+        )
         return
     agent.batch_user_messages = [
         runner_mod.types.Content(
@@ -286,6 +291,17 @@ def _attach_batch_user_messages(
         )
         for batch in batches
     ]
+
+
+def _batch_message_agent(agent):
+    """Return the nested workflow agent that accepts prepared batch user messages."""
+    seen: set[int] = set()
+    while agent is not None and id(agent) not in seen:
+        if hasattr(agent, "batch_user_messages"):
+            return agent
+        seen.add(id(agent))
+        agent = getattr(agent, "agent", None)
+    return None
 
 
 def findings_from_batch_responses(
