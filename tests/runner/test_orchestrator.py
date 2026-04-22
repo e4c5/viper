@@ -55,6 +55,7 @@ def test_create_sequential_batch_review_agent_logs_instruction_when_enabled(
 
     class _FakeReviewAgent(BaseAgent):
         instruction: str = "base"
+        include_contents: str = "default"
         disallow_transfer_to_parent: bool = False
         disallow_transfer_to_peers: bool = False
 

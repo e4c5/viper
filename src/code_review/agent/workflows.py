@@ -42,12 +42,27 @@ class BatchReviewWorkflowAgent(BaseAgent):
     async def _run_async_impl(
         self, ctx: "InvocationContext"
     ) -> "AsyncGenerator[Event, None]":
+        from google.adk.events import Event
+
         for index, sub_agent in enumerate(self.sub_agents):
             user_content = (
                 self.batch_user_messages[index]
                 if index < len(self.batch_user_messages)
                 else ctx.user_content
             )
+            if user_content and not user_content.role:
+                user_content.role = "user"
+            if user_content:
+                await ctx.session_service.append_event(
+                    session=ctx.session,
+                    event=Event(
+                        id=Event.new_id(),
+                        invocation_id=ctx.invocation_id,
+                        author="user",
+                        branch=ctx.branch,
+                        content=user_content,
+                    ),
+                )
             child_ctx = ctx.model_copy(update={"user_content": user_content})
             pause_invocation = False
             async with aclosing(sub_agent.run_async(child_ctx)) as agen:
@@ -158,6 +173,7 @@ def create_sequential_batch_review_agent(
         )
         agent.name = f"batch_review_{index}"
         agent.instruction = agent.instruction.rstrip() + "\n\n" + _BATCH_USER_MESSAGE_INSTRUCTION
+        agent.include_contents = "none"
         if get_code_review_app_config().log_prompts:
             emit_package_log(
                 logger,

@@ -1,6 +1,6 @@
 """Tests for ADK workflow prototypes."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from google.adk.agents import BaseAgent
@@ -17,6 +17,7 @@ from code_review.batching import ReviewBatch, ReviewSegment
 
 class _FakeReviewAgent(BaseAgent):
     instruction: str = "base instruction"
+    include_contents: str = "default"
     disallow_transfer_to_parent: bool = False
     disallow_transfer_to_peers: bool = False
     seen_user_messages: list[str] = Field(default_factory=list)
@@ -100,6 +101,8 @@ def test_create_sequential_batch_review_agent_builds_one_sub_agent_per_batch(
     assert "Prepared batch segments" not in result.sub_agents[0].instruction
     assert "Segment: full-file segment for a.py" not in result.sub_agents[0].instruction
     assert "2:+new" not in result.sub_agents[0].instruction
+    assert result.sub_agents[0].include_contents == "none"
+    assert result.sub_agents[1].include_contents == "none"
 
 
 def test_build_prepared_batch_user_message_contains_batch_payload() -> None:
@@ -155,9 +158,19 @@ async def test_batch_review_workflow_passes_distinct_user_messages_to_sub_agents
     class _Ctx:
         def __init__(self, user_content):
             self.user_content = user_content
+            self.session_service = MagicMock()
+            self.session_service.append_event = AsyncMock()
+            self.session = MagicMock()
+            self.invocation_id = "invocation-1"
+            self.branch = "branch-1"
 
         def model_copy(self, update):
-            return _Ctx(update.get("user_content", self.user_content))
+            copied = _Ctx(update.get("user_content", self.user_content))
+            copied.session_service = self.session_service
+            copied.session = self.session
+            copied.invocation_id = self.invocation_id
+            copied.branch = self.branch
+            return copied
 
         def should_pause_invocation(self, _event):
             return False
@@ -169,3 +182,5 @@ async def test_batch_review_workflow_passes_distinct_user_messages_to_sub_agents
 
     assert sub_agent_a.seen_user_messages == ["batch A"]
     assert sub_agent_b.seen_user_messages == ["batch B"]
+    appended_events = [call.kwargs["event"] for call in ctx.session_service.append_event.call_args_list]
+    assert [event.content.parts[0].text for event in appended_events] == ["batch A", "batch B"]
