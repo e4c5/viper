@@ -45,15 +45,23 @@ def test_build_batch_review_content_logs_user_prompt_when_enabled(caplog):
     assert "extra context" in caplog.text
 
 
-@patch("google.adk.agents.SequentialAgent")
 @patch("code_review.agent.workflows.create_review_agent")
 def test_create_sequential_batch_review_agent_logs_instruction_when_enabled(
-    mock_create_review_agent, _mock_sequential_agent, caplog
+    mock_create_review_agent, caplog
 ):
+    from google.adk.agents import BaseAgent
+
     from code_review.agent.workflows import create_sequential_batch_review_agent
     from code_review.batching import ReviewBatch, ReviewSegment
 
-    mock_create_review_agent.return_value = MagicMock(name="code_review_agent", instruction="base")
+    class _FakeReviewAgent(BaseAgent):
+        instruction: str = "base"
+        include_contents: str = "default"
+        disallow_transfer_to_parent: bool = False
+        disallow_transfer_to_peers: bool = False
+
+    mock_agent = _FakeReviewAgent(name="code_review_agent")
+    mock_create_review_agent.return_value = mock_agent
     batch = ReviewBatch(
         batch_index=0,
         estimated_tokens=10,
@@ -78,14 +86,13 @@ def test_create_sequential_batch_review_agent_logs_instruction_when_enabled(
                 provider=MagicMock(),
                 review_standards="### Python",
                 batches=[batch],
-                head_sha="abc123",
                 review_visible_lines=None,
             )
         finally:
             reset_config_cache()
 
     assert "LLM instruction agent=batch_review_0" in caplog.text
-    assert "Review exactly one prepared batch from this PR." in caplog.text
+    assert "review exactly one prepared batch from this PR." in caplog.text
 
 
 def test_canonical_orchestrator_imports_without_circular_dependency():
@@ -124,6 +131,7 @@ def _orchestrator_run_env(
     mock_runner_instance = MagicMock()
     mock_event = MagicMock()
     mock_event.is_final_response.return_value = True
+    mock_event.author = "batch_review_0"
     mock_event.content = MagicMock()
     mock_event.content.parts = [MagicMock(text=findings_json)]
     mock_runner_instance.run_async = runner_run_async_returning([mock_event])
@@ -355,7 +363,6 @@ def test_create_agent_and_runner_uses_sequential_batch_workflow(
         provider,
         "review standards",
         batches,
-        head_sha="sha1",
         context_brief_attached=False,
         review_visible_lines=None,
         use_output_key=False,
@@ -396,6 +403,100 @@ def test_execution_sequential_batch_mode_forwards_supported_args_only(mock_run_b
         prompt_suffix="extra context",
         review_visible_lines=None,
     )
+
+
+@patch("code_review.orchestration.execution.runner_mod._run_agent_and_collect_responses")
+def test_sequential_batch_mode_attaches_prepared_batches_as_user_messages(mock_collect):
+    from code_review.batching import ReviewBatch, ReviewSegment
+    from code_review.orchestration.execution import _run_sequential_batch_review_mode
+
+    batch = ReviewBatch(
+        batch_index=0,
+        estimated_tokens=10,
+        paths=("a.py",),
+        segments=(
+            ReviewSegment(
+                path="a.py",
+                diff_text=(
+                    "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+                    "@@ -1,1 +1,2 @@\n old\n+new\n"
+                ),
+                estimated_tokens=10,
+                split_strategy="whole_file",
+                segment_index=0,
+                total_segments=1,
+            ),
+        ),
+    )
+    runner = SimpleNamespace(agent=SimpleNamespace(batch_user_messages=[]))
+    mock_collect.return_value = [("batch_review_0", '{"findings":[]}')]
+
+    _run_sequential_batch_review_mode(
+        PRContext("o", "r", 1, "sha1"),
+        MagicMock(),
+        "review standards",
+        runner,
+        "session-1",
+        batches=[batch],
+        batch_count=1,
+        prompt_suffix="extra context",
+    )
+
+    assert len(runner.agent.batch_user_messages) == 1
+    content = runner.agent.batch_user_messages[0]
+    assert content.role == "user"
+    text = content.parts[0].text
+    assert "extra context" in text
+    assert "Prepared batch segments" in text
+    assert "Segment: full-file segment for a.py" in text
+    assert "2:+new" in text
+    root_content = mock_collect.call_args.args[2]
+    assert root_content.role == "user"
+    assert "Prepared batch segments" not in root_content.parts[0].text
+
+
+@patch("code_review.orchestration.execution.runner_mod._run_agent_and_collect_responses")
+def test_sequential_batch_mode_attaches_user_messages_to_wrapped_agent(mock_collect):
+    from code_review.batching import ReviewBatch, ReviewSegment
+    from code_review.orchestration.execution import _run_sequential_batch_review_mode
+
+    batch = ReviewBatch(
+        batch_index=0,
+        estimated_tokens=10,
+        paths=("a.py",),
+        segments=(
+            ReviewSegment(
+                path="a.py",
+                diff_text=(
+                    "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+                    "@@ -1,1 +1,2 @@\n old\n+new\n"
+                ),
+                estimated_tokens=10,
+                split_strategy="whole_file",
+                segment_index=0,
+                total_segments=1,
+            ),
+        ),
+    )
+    inner_agent = SimpleNamespace(batch_user_messages=[])
+    runner = SimpleNamespace(agent=SimpleNamespace(agent=inner_agent))
+    mock_collect.return_value = [("batch_review_0", '{"findings":[]}')]
+
+    _run_sequential_batch_review_mode(
+        PRContext("o", "r", 1, "sha1"),
+        MagicMock(),
+        "review standards",
+        runner,
+        "session-1",
+        batches=[batch],
+        batch_count=1,
+        prompt_suffix="extra context",
+    )
+
+    assert len(inner_agent.batch_user_messages) == 1
+    text = inner_agent.batch_user_messages[0].parts[0].text
+    assert "extra context" in text
+    assert "Prepared batch segments" in text
 
 
 @patch("code_review.orchestration.execution.runner_mod._run_agent_and_collect_response")
@@ -816,7 +917,6 @@ def test_create_agent_and_runner_returns_session_id_service_runner():
             provider,
             review_standards,
             batches,
-            head_sha="",
             context_brief_attached=False,
             review_visible_lines=None,
             use_output_key=False,
@@ -1088,6 +1188,7 @@ def test_run_batch_mode_message_includes_head_sha_and_batch_count():
                     captured_messages.append(part.text)
         event = MagicMock()
         event.is_final_response.return_value = True
+        event.author = "batch_review_0"
         event.content = MagicMock()
         event.content.parts = [MagicMock(text='{"findings":[]}')]
         yield event

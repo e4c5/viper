@@ -21,6 +21,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from code_review.json_utils import iter_json_candidates
+from code_review.llm_telemetry import log_adk_llm_usage
 from code_review.schemas.findings import FindingV1
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,13 @@ def create_verification_agent():
         instruction=_VERIFICATION_INSTRUCTION,
         output_schema=_VerificationResult,
         generate_content_config=generate_content_config,
+        after_model_callback=lambda callback_context, llm_response: log_adk_llm_usage(
+            logger,
+            task="verification",
+            response=llm_response,
+            provider=provider,
+            model=model,
+        ),
     )
 
 

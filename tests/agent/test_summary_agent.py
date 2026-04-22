@@ -37,6 +37,38 @@ def test_create_summary_agent_uses_summary_model_helper(
     mock_get_summary_model.assert_called_once()
 
 
+@patch("code_review.agent.summary_agent.log_adk_llm_usage")
+@patch("code_review.agent.summary_agent.get_configured_summary_model")
+@patch("code_review.agent.summary_agent.get_summary_llm_config")
+@patch("code_review.agent.summary_agent.get_llm_config")
+@patch("google.adk.agents.Agent")
+def test_create_summary_agent_after_model_callback_accepts_adk_keywords(
+    mock_agent_cls,
+    mock_get_llm_cfg,
+    mock_get_summary_cfg,
+    mock_get_summary_model,
+    mock_log_usage,
+):
+    mock_get_llm_cfg.return_value = MagicMock(
+        provider="gemini", model="gemini-3.1", max_output_tokens=2048
+    )
+    mock_get_summary_cfg.return_value = MagicMock(provider=None, model=None)
+    mock_get_summary_model.return_value = "cheap-summary-model"
+
+    create_summary_agent()
+
+    _, kwargs = mock_agent_cls.call_args
+    response = MagicMock()
+    kwargs["after_model_callback"](callback_context=MagicMock(), llm_response=response)
+
+    mock_log_usage.assert_called_once()
+    _, log_kwargs = mock_log_usage.call_args
+    assert log_kwargs["task"] == "summary"
+    assert log_kwargs["response"] is response
+    assert log_kwargs["provider"] == "gemini"
+    assert log_kwargs["model"] == "gemini-3.1"
+
+
 @patch("code_review.agent.summary_agent.get_configured_summary_model")
 @patch("code_review.agent.summary_agent.get_summary_llm_config")
 @patch("code_review.agent.summary_agent.get_llm_config")

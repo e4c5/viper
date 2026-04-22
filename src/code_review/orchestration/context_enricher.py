@@ -74,6 +74,7 @@ class ContextEnricher:
             context_brief = runner_mod.build_context_brief_for_pr(ctx_cfg, cfg, refs, full_diff)
         prompt_suffix = runner_mod._format_review_prompt_supplement(
             context_brief=context_brief,
+            context_references=refs,
             commit_messages=commit_messages,
             include_commit_messages=app_cfg.include_commit_messages_in_prompt,
             remaining_tokens=remaining_tokens,

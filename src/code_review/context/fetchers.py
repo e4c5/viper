@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -50,11 +51,9 @@ class FetchReferenceConfig:
     gitlab_api_base: str
     gitlab_token: str
     jira_base: str
-    jira_email: str
-    jira_token: str
     confluence_base: str
-    confluence_email: str
-    confluence_token: str
+    atlassian_email: str
+    atlassian_token: str
     ctx_github_enabled: bool
     ctx_gitlab_enabled: bool
     ctx_jira_enabled: bool
@@ -74,6 +73,22 @@ def _raise_auth(method: str, url: str, status: int, body: str) -> None:
         raise ContextAwareAuthError(
             f"Context fetch auth failed ({status}) for {method} {url}: {snippet}"
         )
+
+
+def _response_preview(response: httpx.Response) -> str:
+    text = (response.text or "").strip().replace("\n", "\\n")
+    return text[:300] if text else "<empty body>"
+
+
+def _json_or_context_error(response: httpx.Response, *, source: str, url: str) -> Any:
+    try:
+        return response.json()
+    except json.JSONDecodeError as exc:
+        content_type = response.headers.get("content-type", "<missing>")
+        raise ContextAwareFatalError(
+            f"{source} returned non-JSON response ({response.status_code}, "
+            f"content-type={content_type}) for {url}: {_response_preview(response)}"
+        ) from exc
 
 
 def _build_github_api_client(api_base: str, token: str, timeout: float) -> GitHubApiClient:
@@ -122,14 +137,9 @@ def fetch_github_issue(
         raise ContextAwareFatalError(f"GitHub issue fetch failed ({status}): {path}") from exc
 
     labels = [
-        str(getattr(label, "name", label) or "")
-        for label in (getattr(issue, "labels", None) or [])
+        str(getattr(label, "name", label) or "") for label in (getattr(issue, "labels", None) or [])
     ]
-    labels = [
-        label
-        for label in labels
-        if label
-    ]
+    labels = [label for label in labels if label]
     meta = {
         "state": getattr(issue, "state", None),
         "labels": labels,
@@ -189,7 +199,7 @@ def fetch_gitlab_issue(
         if r.status_code != 200:
             _raise_auth("GET", path, r.status_code, r.text)
             raise ContextAwareFatalError(f"GitLab issue fetch failed ({r.status_code}): {path}")
-        data = r.json()
+        data = _json_or_context_error(r, source="GitLab issue", url=path)
     labels = [str(lb) for lb in (data.get("labels") or [])]
     title = (data.get("title") or "").strip()
     body_raw = (data.get("description") or "").strip()
@@ -235,6 +245,47 @@ def _jira_extra_field_lines(fields_d: dict, extra: list[str]) -> list[str]:
     return lines
 
 
+def _jira_remote_link_lines(remote_links: Any) -> list[str]:
+    if not isinstance(remote_links, list):
+        return []
+    lines: list[str] = []
+    for item in remote_links:
+        if not isinstance(item, dict):
+            continue
+        obj = item.get("object")
+        if not isinstance(obj, dict):
+            continue
+        url = str(obj.get("url") or "").strip()
+        if not url:
+            continue
+        title = str(obj.get("title") or "").strip()
+        lines.append(f"- {title}: {url}" if title else f"- {url}")
+    return lines
+
+
+def _fetch_jira_remote_links(
+    client: httpx.Client,
+    *,
+    root: str,
+    email: str,
+    api_token: str,
+    key: str,
+) -> tuple[list[str], bool]:
+    path = f"{root}/rest/api/3/issue/{key}/remotelink"
+    r = client.get(path, auth=(email, api_token))
+    if r.status_code != 200:
+        logger.warning("Jira remote links fetch failed (%s): %s", r.status_code, path)
+        return ([], False)
+    try:
+        lines = _jira_remote_link_lines(
+            _json_or_context_error(r, source="Jira remote links", url=path)
+        )
+    except ContextAwareFatalError as exc:
+        logger.warning("Skipping Jira remote links for %s: %s", key, exc)
+        return ([], False)
+    return (lines, True)
+
+
 def fetch_jira_issue(
     base_url: str,
     email: str,
@@ -242,6 +293,7 @@ def fetch_jira_issue(
     key: str,
     timeout: float = 30.0,
     extra_fields: list[str] | None = None,
+    include_remote_links: bool = False,
 ) -> FetchedDocument | None:
     root = base_url.rstrip("/")
     path = f"{root}/rest/api/3/issue/{key}"
@@ -260,7 +312,18 @@ def fetch_jira_issue(
         if r.status_code != 200:
             _raise_auth("GET", path, r.status_code, r.text)
             raise ContextAwareFatalError(f"Jira fetch failed ({r.status_code}): {path}")
-        data = r.json()
+        data = _json_or_context_error(r, source="Jira issue", url=path)
+        remote_link_lines, remote_links_included = (
+            _fetch_jira_remote_links(
+                client,
+                root=root,
+                email=email,
+                api_token=api_token,
+                key=key,
+            )
+            if include_remote_links
+            else ([], False)
+        )
     fields_d = data.get("fields") or {}
     summary = (fields_d.get("summary") or "").strip()
     issue_type = _jira_field_name(fields_d.get("issuetype") or {})
@@ -277,18 +340,40 @@ def fetch_jira_issue(
         lines.append("Description:")
         lines.append(desc_text)
     lines.extend(_jira_extra_field_lines(fields_d, extra))
+    if remote_link_lines:
+        lines.append("Remote links:")
+        lines.extend(remote_link_lines)
     return FetchedDocument(
         external_id=key.upper(),
         title=summary,
         body="\n".join(lines),
-        metadata={"issuetype": issue_type, "status": status_name},
+        metadata={
+            "issuetype": issue_type,
+            "status": status_name,
+            "jira_remote_links_included": remote_links_included,
+            "jira_remote_link_count": len(remote_link_lines),
+        },
         version=str(data.get("id", "")),
         external_updated_at=updated if isinstance(updated, str) else None,
     )
 
 
+def _extract_url_from_attrs(attrs: Any, *keys: str) -> list[str]:
+    if not isinstance(attrs, dict):
+        return []
+    return [v.strip() for k in keys for v in [attrs.get(k) or ""] if v.strip()]
+
+
+def _adf_link_urls(node: dict[str, Any]) -> list[str]:
+    urls: list[str] = _extract_url_from_attrs(node.get("attrs"), "url", "href")
+    for mark in node.get("marks") or []:
+        if isinstance(mark, dict):
+            urls.extend(_extract_url_from_attrs(mark.get("attrs"), "href"))
+    return list(dict.fromkeys(urls))
+
+
 def _adf_to_plain(node: Any) -> str:
-    """Minimal Atlassian Document Format → plain text (paragraphs, text nodes)."""
+    """Minimal Atlassian Document Format -> plain text, preserving link URLs."""
     if not isinstance(node, dict):
         return ""
     parts: list[str] = []
@@ -296,10 +381,16 @@ def _adf_to_plain(node: Any) -> str:
     if ntype == "text":
         t = node.get("text")
         if t:
-            parts.append(str(t))
+            text = str(t)
+            urls = [url for url in _adf_link_urls(node) if url not in text]
+            parts.append(" ".join([text, *urls]))
+    if ntype in ("inlineCard", "blockCard", "embedCard"):
+        urls = _adf_link_urls(node)
+        if urls:
+            parts.extend(urls)
     for child in node.get("content") or []:
         parts.append(_adf_to_plain(child))
-    if ntype in ("paragraph", "heading", "listItem", "doc"):
+    if ntype in ("paragraph", "heading", "listItem", "doc", "blockCard", "embedCard"):
         inner = "".join(parts).strip()
         if inner:
             return inner + "\n"
@@ -326,7 +417,7 @@ def fetch_confluence_page(
         if r.status_code != 200:
             _raise_auth("GET", path, r.status_code, r.text)
             raise ContextAwareFatalError(f"Confluence fetch failed ({r.status_code}): {path}")
-        data = r.json()
+        data = _json_or_context_error(r, source="Confluence page", url=path)
     title = (data.get("title") or "").strip()
     body_storage = ((data.get("body") or {}).get("storage") or {}).get("value") or ""
     plain = _strip_html_to_text(body_storage)
@@ -363,14 +454,15 @@ def fetch_reference(
         if ref.ref_type == ReferenceType.JIRA and cfg.ctx_jira_enabled:
             return fetch_jira_issue(
                 cfg.jira_base,
-                cfg.jira_email,
-                cfg.jira_token,
+                cfg.atlassian_email,
+                cfg.atlassian_token,
                 ref.external_id,
                 extra_fields=list(cfg.jira_extra_fields),
+                include_remote_links=cfg.ctx_confluence_enabled,
             )
         if ref.ref_type == ReferenceType.CONFLUENCE and cfg.ctx_confluence_enabled:
             return fetch_confluence_page(
-                cfg.confluence_base, cfg.confluence_email, cfg.confluence_token, ref.external_id
+                cfg.confluence_base, cfg.atlassian_email, cfg.atlassian_token, ref.external_id
             )
     except ContextAwareAuthError:
         # Auth/credential failures (401/403) are always fatal – re-raise so the runner

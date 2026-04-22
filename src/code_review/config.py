@@ -3,6 +3,7 @@
 See docs/CONFIGURATION-REFERENCE.md for a consolidated list of all environment variables.
 """
 
+import logging
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -15,6 +16,7 @@ _SUMMARY_LLM_CONFIG: "TaskLLMConfig | None" = None
 _VERIFICATION_LLM_CONFIG: "TaskLLMConfig | None" = None
 _CONTEXT_AWARE_CONFIG: "ContextAwareReviewConfig | None" = None
 _CODE_REVIEW_APP_CONFIG: "CodeReviewAppConfig | None" = None
+logger = logging.getLogger(__name__)
 
 
 class SCMConfig(BaseSettings):
@@ -197,6 +199,7 @@ class TaskLLMConfig(BaseSettings):
             return None
         return SecretStr(normalized)
 
+
 class SummaryLLMConfig(TaskLLMConfig):
     """Optional LLM overrides for PR summary generation."""
 
@@ -226,14 +229,11 @@ class ContextAwareReviewConfig(BaseSettings):
         default=False, validation_alias="CONTEXT_GITLAB_ISSUES_ENABLED"
     )
     jira_enabled: bool = Field(default=False, validation_alias="CONTEXT_JIRA_ENABLED")
-    jira_url: str = Field(default="", validation_alias="CONTEXT_JIRA_URL")
-    jira_email: str = Field(default="", validation_alias="CONTEXT_JIRA_EMAIL")
-    jira_token: SecretStr | None = Field(default=None, validation_alias="CONTEXT_JIRA_TOKEN")
     confluence_enabled: bool = Field(default=False, validation_alias="CONTEXT_CONFLUENCE_ENABLED")
-    confluence_url: str = Field(default="", validation_alias="CONTEXT_CONFLUENCE_URL")
-    confluence_email: str = Field(default="", validation_alias="CONTEXT_CONFLUENCE_EMAIL")
-    confluence_token: SecretStr | None = Field(
-        default=None, validation_alias="CONTEXT_CONFLUENCE_TOKEN"
+    atlassian_url: str = Field(default="", validation_alias="CONTEXT_ATLASSIAN_URL")
+    atlassian_email: str = Field(default="", validation_alias="CONTEXT_ATLASSIAN_EMAIL")
+    atlassian_token: SecretStr | None = Field(
+        default=None, validation_alias="CONTEXT_ATLASSIAN_TOKEN"
     )
     max_bytes: int = Field(default=20_000, ge=1024, validation_alias="CONTEXT_MAX_BYTES")
     distilled_max_tokens: int = Field(
@@ -280,8 +280,7 @@ class ContextAwareReviewConfig(BaseSettings):
     )
 
     @field_validator(
-        "jira_token",
-        "confluence_token",
+        "atlassian_token",
         "github_token",
         "gitlab_token",
         mode="before",
@@ -304,7 +303,16 @@ class ContextAwareReviewConfig(BaseSettings):
         normalized = str(v).strip()
         return normalized or None
 
-    @field_validator("jira_url", "confluence_url", "gitlab_api_url", mode="after")
+    @field_validator("atlassian_url", mode="after")
+    @classmethod
+    def _normalize_atlassian_url(cls, v: str) -> str:
+        normalized = (v or "").strip().rstrip("/")
+        parsed = urlparse(normalized)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return normalized
+
+    @field_validator("gitlab_api_url", mode="after")
     @classmethod
     def _strip_urls(cls, v: str) -> str:
         return (v or "").strip().rstrip("/")
@@ -426,6 +434,126 @@ def get_code_review_app_config() -> CodeReviewAppConfig:
     if _CODE_REVIEW_APP_CONFIG is None:
         _CODE_REVIEW_APP_CONFIG = CodeReviewAppConfig()
     return _CODE_REVIEW_APP_CONFIG
+
+
+def _effective_task_llm(primary: LLMConfig, task: TaskLLMConfig) -> dict[str, str]:
+    return {
+        "provider": task.provider or primary.provider,
+        "model": task.model or primary.model,
+    }
+
+
+def _scm_startup_snapshot() -> dict[str, object]:
+    try:
+        scm = get_scm_config()
+    except Exception as exc:
+        return {
+            "configured": False,
+            "reason": exc.__class__.__name__,
+        }
+    snapshot: dict[str, object] = {
+        "provider": scm.provider,
+        "skip_label_enabled": bool(scm.skip_label),
+        "skip_title_pattern_enabled": bool(scm.skip_title_pattern),
+        "review_decision_enabled": scm.review_decision_enabled,
+    }
+    if scm.review_decision_enabled:
+        snapshot.update(
+            {
+                "review_decision_high_threshold": scm.review_decision_high_threshold,
+                "review_decision_medium_threshold": scm.review_decision_medium_threshold,
+            }
+        )
+    return snapshot
+
+
+def startup_config_snapshot() -> dict[str, object]:
+    """Return a redacted, curated snapshot of startup-critical configuration."""
+    from code_review.models import get_context_window, get_max_output_tokens
+
+    llm = get_llm_config()
+    summary_llm = get_summary_llm_config()
+    verification_llm = get_verification_llm_config()
+    context = get_context_aware_config()
+    app = get_code_review_app_config()
+    effective_context_window = get_context_window()
+    effective_max_output_tokens = get_max_output_tokens()
+    context_snapshot: dict[str, object] = {
+        "enabled": context.enabled,
+    }
+    if context.enabled:
+        context_snapshot.update(
+            {
+                "github_issues_enabled": context.github_issues_enabled,
+                "gitlab_issues_enabled": context.gitlab_issues_enabled,
+                "jira_enabled": context.jira_enabled,
+                "confluence_enabled": context.confluence_enabled,
+                "db_cache_enabled": bool(context.db_url),
+                "max_bytes": context.max_bytes,
+                "distilled_max_tokens": context.distilled_max_tokens,
+            }
+        )
+        if context.db_url:
+            context_snapshot.update(
+                {
+                    "embedding_model": context.embedding_model,
+                    "embedding_dimensions": context.embedding_dimensions,
+                }
+            )
+    return {
+        "llm": {
+            "primary": {"provider": llm.provider, "model": llm.model},
+            "summary": _effective_task_llm(llm, summary_llm),
+            "verification": _effective_task_llm(llm, verification_llm),
+            "context_window": effective_context_window,
+            "max_output_tokens": effective_max_output_tokens,
+            "temperature": llm.temperature,
+        },
+        "review": {
+            "include_commit_messages_in_prompt": app.include_commit_messages_in_prompt,
+            "review_visible_lines": app.review_visible_lines,
+            "review_decision_only": app.review_decision_only,
+            "reply_dismissal_enabled": app.reply_dismissal_enabled,
+            "disable_idempotency": app.disable_idempotency,
+        },
+        "context_aware": context_snapshot,
+        "scm": _scm_startup_snapshot(),
+    }
+
+
+def _flatten_startup_config(prefix: str, value: object) -> list[str]:
+    if not isinstance(value, dict):
+        return [f"{prefix}: {value}"]
+    lines: list[str] = []
+    for key, item in value.items():
+        child_prefix = f"{prefix}.{key}" if prefix else str(key)
+        lines.extend(_flatten_startup_config(child_prefix, item))
+    return lines
+
+
+def format_startup_config_lines(snapshot: dict[str, object]) -> list[str]:
+    """Format startup configuration as redacted one-setting-per-line text."""
+    lines = ["Viper startup configuration:"]
+    for section, value in snapshot.items():
+        lines.extend(_flatten_startup_config(str(section), value))
+    return lines
+
+
+def log_startup_configuration(log: logging.Logger | None = None) -> None:
+    """Log startup-critical configuration without exposing secrets."""
+    target = log or logger
+    try:
+        lines = format_startup_config_lines(startup_config_snapshot())
+    except Exception as exc:
+        target.warning("Viper startup configuration unavailable: %s", exc.__class__.__name__)
+        return
+    if target.isEnabledFor(logging.INFO):
+        for line in lines:
+            target.info(line)
+        return
+    level = target.getEffectiveLevel() if hasattr(target, "getEffectiveLevel") else logging.WARNING
+    for line in lines:
+        target.log(level, line)
 
 
 def reset_config_cache() -> None:

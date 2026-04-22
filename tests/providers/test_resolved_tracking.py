@@ -124,6 +124,7 @@ def _run_with_single_stale_comment(
         findings_json = '{"findings":[]}'
         mock_event = MagicMock()
         mock_event.is_final_response.return_value = True
+        mock_event.author = "batch_review_0"
         mock_event.content = MagicMock()
         mock_event.content.parts = [MagicMock(text=findings_json)]
         mock_runner_instance = MagicMock()

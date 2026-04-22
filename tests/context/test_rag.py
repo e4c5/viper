@@ -46,11 +46,14 @@ def test_semantic_query_empty_and_whitespace_diff():
 
 @patch("code_review.context.rag.get_llm_config")
 @patch("code_review.context.rag.get_configured_model")
+@patch("code_review.context.rag.log_llm_usage")
 @patch("code_review.context.rag.litellm.completion")
 def test_build_semantic_query_from_diff_uses_llm_output(
-    mock_completion, mock_get_configured_model, mock_get_llm_config
+    mock_completion, mock_log_llm_usage, mock_get_configured_model, mock_get_llm_config
 ):
-    mock_get_llm_config.return_value = MagicMock(model="gpt-4o-mini", temperature=0.0)
+    mock_get_llm_config.return_value = MagicMock(
+        provider="openai", model="gpt-4o-mini", temperature=0.0
+    )
     mock_get_configured_model.return_value = "openai/gpt-4o-mini"
     mock_completion.return_value = {
         "choices": [{"message": {"content": "Updates auth middleware validation flow."}}]
@@ -58,6 +61,7 @@ def test_build_semantic_query_from_diff_uses_llm_output(
     diff = "diff --git a/auth.py b/auth.py\n--- a/auth.py\n+++ b/auth.py\n+validate()"
     out = build_semantic_query_from_diff(diff)
     assert out == "Updates auth middleware validation flow."
+    assert mock_log_llm_usage.call_args.kwargs["model"] == "openai/gpt-4o-mini"
 
 
 @patch("code_review.context.rag.get_llm_config")

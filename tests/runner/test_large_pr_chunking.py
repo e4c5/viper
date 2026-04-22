@@ -300,7 +300,9 @@ def test_large_pr_batch_mode_builds_multiple_batches_in_stable_order(
         event_a.author = "batch_review_0"
         event_b = _make_final_event('{"findings":[]}')
         event_b.author = "batch_review_1"
-        return runner_run_async_returning([event_a, event_b])()
+        event_c = _make_final_event('{"findings":[]}')
+        event_c.author = "batch_review_2"
+        return runner_run_async_returning([event_a, event_b, event_c])()
 
     _invoke_run_review(
         run_review,

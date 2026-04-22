@@ -7,6 +7,7 @@ import logging
 from code_review.config import ContextAwareReviewConfig, SCMConfig
 from code_review.context.distiller import distill_context_text
 from code_review.context.errors import ContextAwareFatalError
+from code_review.context.extract import extract_confluence_refs
 from code_review.context.fetchers import FetchReferenceConfig, fetch_reference
 from code_review.context.rag import (
     build_semantic_query_from_diff,
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 # Module-level ContextStore cache keyed by (db_url, embedding_dimensions).
 # Avoids re-running schema DDL on every review call.
 _store_cache: dict[tuple[str, int], ContextStore] = {}
+_MAX_TRANSITIVE_CONFLUENCE_REFS = 20
 
 
 def _clamp_context_text(text: str, max_bytes: int) -> str:
@@ -80,28 +82,23 @@ def _source_name_and_base(
         api, _ = _gitlab_api_and_token(scm, ctx)
         return ("gitlab", api)
     if ref.ref_type == ReferenceType.JIRA:
-        return ("jira", ctx.jira_url)
+        return ("jira", ctx.atlassian_url)
     if ref.ref_type == ReferenceType.CONFLUENCE:
-        return ("confluence", ctx.confluence_url)
+        return ("confluence", ctx.atlassian_url)
     return ("unknown", "")
 
 
-def _get_external_credentials(
-    scm: SCMConfig, ctx: ContextAwareReviewConfig
-) -> ExternalCredentials:
+def _get_external_credentials(scm: SCMConfig, ctx: ContextAwareReviewConfig) -> ExternalCredentials:
     gh_api, gh_tok = _github_api_and_token(scm, ctx)
     gl_api, gl_tok = _gitlab_api_and_token(scm, ctx)
-    jira_tok = ctx.jira_token.get_secret_value() if ctx.jira_token else ""
-    conf_tok = ctx.confluence_token.get_secret_value() if ctx.confluence_token else ""
+    atlassian_tok = ctx.atlassian_token.get_secret_value() if ctx.atlassian_token else ""
     return ExternalCredentials(
         github_api=gh_api,
         github_token=gh_tok,
         gitlab_api=gl_api,
         gitlab_token=gl_tok,
-        jira_email=ctx.jira_email.strip(),
-        jira_token=jira_tok,
-        confluence_email=ctx.confluence_email.strip(),
-        confluence_token=conf_tok,
+        atlassian_email=ctx.atlassian_email.strip(),
+        atlassian_token=atlassian_tok,
     )
 
 
@@ -116,18 +113,46 @@ def _build_fetch_reference_config(
         github_token=creds.github_token,
         gitlab_api_base=creds.gitlab_api,
         gitlab_token=creds.gitlab_token,
-        jira_base=ctx.jira_url,
-        jira_email=creds.jira_email,
-        jira_token=creds.jira_token,
-        confluence_base=ctx.confluence_url,
-        confluence_email=creds.confluence_email,
-        confluence_token=creds.confluence_token,
+        jira_base=ctx.atlassian_url,
+        confluence_base=ctx.atlassian_url,
+        atlassian_email=creds.atlassian_email,
+        atlassian_token=creds.atlassian_token,
         ctx_github_enabled=ctx.github_issues_enabled,
         ctx_gitlab_enabled=ctx.gitlab_issues_enabled,
         ctx_jira_enabled=ctx.jira_enabled,
         ctx_confluence_enabled=ctx.confluence_enabled,
         jira_extra_fields=extra_fields,
     )
+
+
+def _extract_transitive_confluence_refs(
+    fetched_body: str,
+    *,
+    ctx: ContextAwareReviewConfig,
+    seen_ids: set[str],
+) -> list[ContextReference]:
+    """If Confluence is enabled, extract Confluence page refs from fetched text."""
+    if not ctx.confluence_enabled:
+        return []
+    if not fetched_body.strip():
+        logger.warning("Fetched body is empty or whitespace-only.")
+        return []
+    refs = extract_confluence_refs(fetched_body, exclude_ids=seen_ids)
+    if len(refs) > _MAX_TRANSITIVE_CONFLUENCE_REFS:
+        logger.info(
+            "context_aware: limiting transitive Confluence links from Jira to %s of %s",
+            _MAX_TRANSITIVE_CONFLUENCE_REFS,
+            len(refs),
+        )
+    return refs[:_MAX_TRANSITIVE_CONFLUENCE_REFS]
+
+
+def _confluence_seen_ids(
+    seen_refs: set[tuple[ReferenceType, str]],
+) -> set[str]:
+    return {
+        external_id for ref_type, external_id in seen_refs if ref_type == ReferenceType.CONFLUENCE
+    }
 
 
 def _load_context_documents_without_store(
@@ -138,12 +163,53 @@ def _load_context_documents_without_store(
 ) -> list[tuple[str, str]]:
     docs_for_distill: list[tuple[str, str]] = []
     fetch_cfg = _build_fetch_reference_config(ctx=ctx, creds=creds)
+    seen_refs = {(r.ref_type, r.external_id) for r in applicable}
+    # Two-pass: first fetch the original refs, then any transitive Confluence refs.
+    transitive: list[ContextReference] = []
     for ref in applicable:
         fetched = fetch_reference(ref, cfg=fetch_cfg)
         if fetched is None:
             continue
         docs_for_distill.append((ref.display, fetched.body))
+        if ref.ref_type == ReferenceType.JIRA:
+            transitive.extend(
+                _extract_transitive_confluence_refs(
+                    fetched.body,
+                    ctx=ctx,
+                    seen_ids=_confluence_seen_ids(seen_refs),
+                )
+            )
+    for ref in transitive:
+        ref_key = (ref.ref_type, ref.external_id)
+        if ref_key in seen_refs:
+            continue
+        seen_refs.add(ref_key)
+        logger.info("context_aware: following transitive Confluence link %s from Jira", ref.display)
+        fetched = fetch_reference(ref, cfg=fetch_cfg)
+        if fetched is None:
+            continue
+        docs_for_distill.append((ref.display, fetched.body))
     return docs_for_distill
+
+
+def _load_or_fetch_document_content(
+    *,
+    store: ContextStore,
+    conn,
+    source_id,
+    ref: ContextReference,
+    fetch_cfg: FetchReferenceConfig,
+) -> tuple[str, object] | None:
+    row = store.load_document(conn, source_id, ref.external_id)
+    if row is not None and row[3]:
+        logger.debug("context cache hit %s", ref.display)
+        return (row[1], row[0])
+
+    fetched = fetch_reference(ref, cfg=fetch_cfg)
+    if fetched is None:
+        return None
+    doc_id = store.upsert_document(conn, source_id, fetched)
+    return (fetched.body, doc_id)
 
 
 def _load_context_documents(
@@ -158,27 +224,47 @@ def _load_context_documents(
     docs_for_distill: list[tuple[str, str]] = []
     doc_ids_for_rag: list[tuple[str, object]] = []
     fetch_cfg = _build_fetch_reference_config(ctx=ctx, creds=creds)
-    for ref in applicable:
+    seen_refs = {(r.ref_type, r.external_id) for r in applicable}
+    transitive: list[ContextReference] = []
+
+    def _fetch_and_record(ref: ContextReference) -> str | None:
         src_name, base = _source_name_and_base(ref, ctx, scm)
         if not base and ref.ref_type != ReferenceType.GITHUB_ISSUE:
-            continue
+            return None
         source_id = store.get_or_create_source(conn, src_name, base)
-        row = store.load_document(conn, source_id, ref.external_id)
-        if row is not None and row[3]:
-            content = row[1]
-            doc_id = row[0]
-            logger.debug("context cache hit %s", ref.display)
-        else:
-            fetched = fetch_reference(
-                ref,
-                cfg=fetch_cfg,
-            )
-            if fetched is None:
-                continue
-            doc_id = store.upsert_document(conn, source_id, fetched)
-            content = fetched.body
+        loaded = _load_or_fetch_document_content(
+            store=store,
+            conn=conn,
+            source_id=source_id,
+            ref=ref,
+            fetch_cfg=fetch_cfg,
+        )
+        if loaded is None:
+            return None
+        content, doc_id = loaded
         docs_for_distill.append((ref.display, content))
         doc_ids_for_rag.append((ref.display, doc_id))
+        return content
+
+    for ref in applicable:
+        content = _fetch_and_record(ref)
+        if content is not None and ref.ref_type == ReferenceType.JIRA:
+            transitive.extend(
+                _extract_transitive_confluence_refs(
+                    content,
+                    ctx=ctx,
+                    seen_ids=_confluence_seen_ids(seen_refs),
+                )
+            )
+
+    for ref in transitive:
+        ref_key = (ref.ref_type, ref.external_id)
+        if ref_key in seen_refs:
+            continue
+        seen_refs.add(ref_key)
+        logger.info("context_aware: following transitive Confluence link %s from Jira", ref.display)
+        _fetch_and_record(ref)
+
     return (docs_for_distill, doc_ids_for_rag)
 
 
@@ -226,7 +312,7 @@ def build_context_brief_for_pr(
     full_diff: str,
 ) -> str | None:
     """
-    Fetch/cache linked context, distill to a brief, wrap in ``<context>...</context>``.
+    Fetch/cache linked context and distill it to a requirements-focused brief.
 
     Returns None when there are no applicable references or all fetches are skipped.
     Raises ContextAwareFatalError on misconfigured remotes (handled by runner).
@@ -267,7 +353,7 @@ def build_context_brief_for_pr(
         )
         if not brief.strip():
             return None
-        return f"<context>\n{brief}\n</context>"
+        return brief
 
     cache_key = (db_url, ctx.embedding_dimensions)
     store = _store_cache.get(cache_key)
@@ -323,4 +409,4 @@ def build_context_brief_for_pr(
     brief = distill_context_text(raw_for_distill, max_output_tokens=ctx.distilled_max_tokens)
     if not brief.strip():
         return None
-    return f"<context>\n{brief}\n</context>"
+    return brief

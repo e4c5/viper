@@ -1,5 +1,6 @@
 """Tests for config module: validators, getters, cache."""
 
+import logging
 import os
 from unittest.mock import patch
 
@@ -7,15 +8,19 @@ import pytest
 
 from code_review.config import (
     CodeReviewAppConfig,
+    ContextAwareReviewConfig,
     LLMConfig,
     SCMConfig,
     SummaryLLMConfig,
     VerificationLLMConfig,
+    format_startup_config_lines,
     get_llm_config,
     get_scm_config,
     get_summary_llm_config,
     get_verification_llm_config,
+    log_startup_configuration,
     reset_config_cache,
+    startup_config_snapshot,
 )
 from code_review.orchestration.orchestrator import ReviewOrchestrator
 
@@ -249,6 +254,172 @@ def test_review_decision_cli_overrides_use_copy_not_cached_mutation():
         assert get_scm_config() is cached
         assert get_scm_config().review_decision_enabled is False
     reset_config_cache()
+
+
+def test_startup_config_snapshot_logs_models_and_redacts_secrets():
+    reset_config_cache()
+    with patch.dict(
+        os.environ,
+        {
+            "SCM_URL": "https://gitea.example.com/api",
+            "SCM_TOKEN": "super-secret-scm",
+            "SCM_REVIEW_DECISION_ENABLED": "true",
+            "LLM_PROVIDER": "gemini",
+            "LLM_MODEL": "gemini-3.1-pro-preview",
+            "LLM_API_KEY": "super-secret-llm",
+            "LLM_SUMMARY_PROVIDER": "anthropic",
+            "LLM_SUMMARY_MODEL": "claude-sonnet-4-5",
+            "LLM_SUMMARY_API_KEY": "super-secret-summary",
+            "CONTEXT_AWARE_REVIEW_ENABLED": "true",
+            "CONTEXT_JIRA_ENABLED": "true",
+            "CONTEXT_ATLASSIAN_URL": "https://acme.atlassian.net",
+            "CONTEXT_ATLASSIAN_TOKEN": "super-secret-atlassian",
+        },
+        clear=True,
+    ):
+        snapshot = startup_config_snapshot()
+    reset_config_cache()
+
+    assert snapshot["llm"]["primary"] == {
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+    }
+    assert snapshot["llm"]["summary"] == {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+    }
+    assert snapshot["llm"]["verification"] == {
+        "provider": "gemini",
+        "model": "gemini-3.1-pro-preview",
+    }
+    assert isinstance(snapshot["llm"]["max_output_tokens"], int)
+    assert isinstance(snapshot["llm"]["context_window"], int)
+    assert snapshot["context_aware"]["enabled"] is True
+    assert snapshot["context_aware"]["jira_enabled"] is True
+    assert snapshot["scm"]["provider"] == "gitea"
+    assert "url_host" not in snapshot["scm"]
+    assert "bot_identity_configured" not in snapshot["scm"]
+    rendered = str(snapshot)
+    assert "super-secret" not in rendered
+    assert "api_key" not in rendered
+    assert "SCM_TOKEN" not in rendered
+    assert "LLM_API_KEY" not in rendered
+    assert "CONTEXT_ATLASSIAN_TOKEN" not in rendered
+
+
+def test_context_aware_config_uses_shared_atlassian_credentials():
+    with patch.dict(
+        os.environ,
+        {
+            "CONTEXT_ATLASSIAN_URL": " https://acme.atlassian.net/ ",
+            "CONTEXT_ATLASSIAN_EMAIL": "review-bot@example.com",
+            "CONTEXT_ATLASSIAN_TOKEN": "atlassian-token",
+        },
+        clear=True,
+    ):
+        cfg = ContextAwareReviewConfig()
+
+    assert cfg.atlassian_url == "https://acme.atlassian.net"
+    assert cfg.atlassian_email == "review-bot@example.com"
+    assert cfg.atlassian_token is not None
+    assert cfg.atlassian_token.get_secret_value() == "atlassian-token"
+
+
+def test_context_aware_config_normalizes_atlassian_url_to_site_root():
+    with patch.dict(
+        os.environ,
+        {"CONTEXT_ATLASSIAN_URL": "https://acme.atlassian.net/jira/"},
+        clear=True,
+    ):
+        jira_cfg = ContextAwareReviewConfig()
+    with patch.dict(
+        os.environ,
+        {"CONTEXT_ATLASSIAN_URL": "https://acme.atlassian.net/wiki/"},
+        clear=True,
+    ):
+        confluence_cfg = ContextAwareReviewConfig()
+
+    assert jira_cfg.atlassian_url == "https://acme.atlassian.net"
+    assert confluence_cfg.atlassian_url == "https://acme.atlassian.net"
+
+
+def test_format_startup_config_lines_flattens_snapshot():
+    lines = format_startup_config_lines(
+        {
+            "llm": {"primary": {"provider": "openai", "model": "gpt-5.4"}},
+            "review": {"review_visible_lines": False},
+        }
+    )
+
+    assert lines == [
+        "Viper startup configuration:",
+        "llm.primary.provider: openai",
+        "llm.primary.model: gpt-5.4",
+        "review.review_visible_lines: False",
+    ]
+
+
+def test_log_startup_configuration_uses_supplied_logger():
+    fake_logger = type(
+        "FakeLogger",
+        (),
+        {
+            "isEnabledFor": lambda self, level: True,
+            "info": lambda self, *args: self.calls.append(args),
+        },
+    )()
+    fake_logger.calls = []
+
+    with patch(
+        "code_review.config.startup_config_snapshot",
+        return_value={"llm": {"primary": {"model": "gpt-5.4"}}},
+    ):
+        log_startup_configuration(fake_logger)
+
+    assert fake_logger.calls == [
+        ("Viper startup configuration:",),
+        ("llm.primary.model: gpt-5.4",),
+    ]
+
+
+def test_log_startup_configuration_logs_at_effective_level_when_info_disabled():
+    fake_logger = type(
+        "FakeLogger",
+        (),
+        {
+            "isEnabledFor": lambda self, level: False,
+            "getEffectiveLevel": lambda self: logging.WARNING,
+            "log": lambda self, *args: self.calls.append(args),
+        },
+    )()
+    fake_logger.calls = []
+
+    with patch(
+        "code_review.config.startup_config_snapshot",
+        return_value={"llm": {"primary": {"model": "gpt-5.4"}}},
+    ):
+        log_startup_configuration(fake_logger)
+
+    assert fake_logger.calls == [
+        (logging.WARNING, "Viper startup configuration:"),
+        (logging.WARNING, "llm.primary.model: gpt-5.4"),
+    ]
+
+
+def test_log_startup_configuration_continues_when_snapshot_fails():
+    fake_logger = type(
+        "FakeLogger",
+        (),
+        {"warning": lambda self, *args: self.calls.append(args)},
+    )()
+    fake_logger.calls = []
+
+    with patch("code_review.config.startup_config_snapshot", side_effect=ValueError("bad")):
+        log_startup_configuration(fake_logger)
+
+    assert fake_logger.calls == [
+        ("Viper startup configuration unavailable: %s", "ValueError"),
+    ]
 
 
 def test_code_review_app_review_decision_only_from_env():

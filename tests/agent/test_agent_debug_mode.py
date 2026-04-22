@@ -6,8 +6,6 @@ import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from code_review.agent import (
     BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION,
     EMBEDDED_DIFF_REVIEW_INSTRUCTION,
@@ -18,7 +16,6 @@ from code_review.agent.agent import (
     _before_model_callback,
 )
 from code_review.schemas.findings import FindingsBatchV1
-
 
 # --- create_review_agent behaviour ---
 
@@ -121,6 +118,24 @@ def test_create_review_agent_adds_visible_lines_override_when_enabled(
     _, kwargs = mock_agent_cls.call_args
     assert "LINE-SCOPE OVERRIDE:" in kwargs["instruction"]
     assert "including unchanged" in kwargs["instruction"]
+
+
+@patch("google.adk.agents.Agent")
+@patch("code_review.agent.agent.get_llm_config")
+def test_create_review_agent_adds_linked_context_instruction_when_attached(
+    mock_get_llm_config, mock_agent_cls
+) -> None:
+    provider = MagicMock()
+    mock_get_llm_config.return_value = MagicMock(temperature=0.0, max_output_tokens=1024)
+    mock_agent_cls.return_value = MagicMock()
+
+    create_review_agent(provider, context_brief_attached=True)
+
+    _, kwargs = mock_agent_cls.call_args
+    assert "Linked Work Item Context" in kwargs["instruction"]
+    assert "acceptance criteria" in kwargs["instruction"]
+    assert "actively use" in kwargs["instruction"]
+    assert "Compare those requirements against the actual diff" in kwargs["instruction"]
 
 
 # --- EMBEDDED_DIFF_REVIEW_INSTRUCTION content ---
@@ -238,7 +253,9 @@ def test_after_model_callback_logs_usage_metadata(caplog) -> None:
     caplog.set_level(logging.INFO, logger="code_review.agent.agent")
     _after_model_callback(SimpleNamespace(agent_name="batch_review_0"), llm_response)
 
-    assert "LLM usage agent=batch_review_0" in caplog.text
+    assert "llm_usage task=batch_review_0" in caplog.text
+    assert "provider=" in caplog.text
+    assert "model=" in caplog.text
     assert "prompt_tokens=123" in caplog.text
     assert "completion_tokens=45" in caplog.text
     assert "total_tokens=168" in caplog.text

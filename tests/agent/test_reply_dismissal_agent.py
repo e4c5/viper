@@ -35,6 +35,34 @@ def test_create_reply_dismissal_agent_is_tool_free(
     mock_get_model.assert_called_once()
 
 
+@patch("code_review.agent.reply_dismissal_agent.log_adk_llm_usage")
+@patch("code_review.agent.reply_dismissal_agent.get_configured_model")
+@patch("code_review.agent.reply_dismissal_agent.get_llm_config")
+@patch("google.adk.agents.Agent")
+def test_create_reply_dismissal_agent_after_model_callback_accepts_adk_keywords(
+    mock_agent_cls, mock_get_llm_cfg, mock_get_model, mock_log_usage
+):
+    mock_get_llm_cfg.return_value = MagicMock(
+        provider="gemini",
+        model="gemini-3.1",
+        temperature=0.1,
+        max_output_tokens=512,
+    )
+
+    create_reply_dismissal_agent()
+
+    _, kwargs = mock_agent_cls.call_args
+    response = MagicMock()
+    kwargs["after_model_callback"](callback_context=MagicMock(), llm_response=response)
+
+    mock_log_usage.assert_called_once()
+    _, log_kwargs = mock_log_usage.call_args
+    assert log_kwargs["task"] == "reply_dismissal"
+    assert log_kwargs["response"] is response
+    assert log_kwargs["provider"] == "gemini"
+    assert log_kwargs["model"] == "gemini-3.1"
+
+
 def test_reply_dismissal_verdict_from_llm_raw_json():
     text = '{"verdict": "agreed", "reply_text": ""}'
     v = reply_dismissal_verdict_from_llm_text(text)

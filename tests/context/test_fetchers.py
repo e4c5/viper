@@ -1,5 +1,6 @@
 """Unit tests for context fetchers (mocked HTTP via httpx)."""
 
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -24,6 +25,7 @@ def _mock_httpx_response(status_code: int, json_data=None, text: str = "") -> Ma
     resp = MagicMock()
     resp.status_code = status_code
     resp.text = text
+    resp.headers = {}
     if json_data is not None:
         resp.json.return_value = json_data
     return resp
@@ -79,17 +81,13 @@ def test_fetch_github_issue_404_returns_none():
 
 
 def test_fetch_github_issue_401_raises_auth_error():
-    with _patch_github_client(
-        side_effect=GithubException(401, {"message": "Unauthorized"})
-    ):
+    with _patch_github_client(side_effect=GithubException(401, {"message": "Unauthorized"})):
         with pytest.raises(ContextAwareAuthError):
             fetch_github_issue("https://api.github.com", "bad-tok", "org", "repo", "1")
 
 
 def test_fetch_github_issue_403_raises_auth_error():
-    with _patch_github_client(
-        side_effect=GithubException(403, {"message": "Forbidden"})
-    ):
+    with _patch_github_client(side_effect=GithubException(403, {"message": "Forbidden"})):
         with pytest.raises(ContextAwareAuthError):
             fetch_github_issue("https://api.github.com", "tok", "org", "repo", "1")
 
@@ -175,6 +173,30 @@ def test_fetch_jira_issue_happy_path():
     assert "Story" in doc.body
 
 
+def test_fetch_jira_issue_uses_top_level_atlassian_url():
+    data = {
+        "id": "10001",
+        "fields": {
+            "summary": "Use top-level URL",
+            "description": None,
+            "issuetype": {"name": "Task"},
+            "status": {"name": "Open"},
+            "updated": None,
+        },
+    }
+    client_mock = MagicMock()
+    client_mock.__enter__ = MagicMock(return_value=client_mock)
+    client_mock.__exit__ = MagicMock(return_value=False)
+    client_mock.get.return_value = _mock_httpx_response(200, data)
+
+    with patch("httpx.Client", return_value=client_mock):
+        fetch_jira_issue("https://example.atlassian.net", "u", "t", "KAN-6")
+
+    assert client_mock.get.call_args.args[0] == (
+        "https://example.atlassian.net/rest/api/3/issue/KAN-6"
+    )
+
+
 def test_fetch_jira_issue_plain_text_description():
     data = {
         "id": "10002",
@@ -190,6 +212,157 @@ def test_fetch_jira_issue_plain_text_description():
         doc = fetch_jira_issue("https://jira.example.com", "user@example.com", "token", "BUG-1")
     assert doc is not None
     assert "Plain text description" in doc.body
+
+
+def test_fetch_jira_issue_appends_remote_links_when_requested():
+    data = {
+        "id": "10002",
+        "fields": {
+            "summary": "Review linked spec",
+            "description": "Related Confluence Page",
+            "issuetype": {"name": "Task"},
+            "status": {"name": "Open"},
+            "updated": None,
+        },
+    }
+    remote_links = [
+        {
+            "object": {
+                "title": "KAN-9 implementation notes",
+                "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/555/KAN-9",
+            }
+        }
+    ]
+    client_mock = _make_multi_response_client(
+        [_mock_httpx_response(200, data), _mock_httpx_response(200, remote_links)]
+    )
+
+    with patch("httpx.Client", return_value=client_mock):
+        doc = fetch_jira_issue(
+            "https://example.atlassian.net",
+            "user@example.com",
+            "token",
+            "KAN-9",
+            include_remote_links=True,
+        )
+
+    assert doc is not None
+    assert "Related Confluence Page" in doc.body
+    assert "Remote links:" in doc.body
+    assert "https://example.atlassian.net/wiki/spaces/ENG/pages/555/KAN-9" in doc.body
+    assert doc.metadata["jira_remote_links_included"] is True
+    assert doc.metadata["jira_remote_link_count"] == 1
+    assert client_mock.get.call_args_list[1].args[0] == (
+        "https://example.atlassian.net/rest/api/3/issue/KAN-9/remotelink"
+    )
+
+
+def test_fetch_jira_issue_skips_remote_links_on_auth_error():
+    data = {
+        "id": "10002",
+        "fields": {
+            "summary": "Review linked spec",
+            "description": "Related Confluence Page",
+            "issuetype": {"name": "Task"},
+            "status": {"name": "Open"},
+            "updated": None,
+        },
+    }
+    client_mock = _make_multi_response_client(
+        [_mock_httpx_response(200, data), _mock_httpx_response(401, text="Unauthorized")]
+    )
+
+    with patch("httpx.Client", return_value=client_mock):
+        doc = fetch_jira_issue(
+            "https://example.atlassian.net",
+            "user@example.com",
+            "token",
+            "KAN-9",
+            include_remote_links=True,
+        )
+
+    assert doc is not None
+    assert "Related Confluence Page" in doc.body
+    assert "Remote links:" not in doc.body
+    assert doc.metadata["jira_remote_links_included"] is False
+    assert doc.metadata["jira_remote_link_count"] == 0
+
+
+def test_fetch_jira_issue_skips_remote_links_on_invalid_json():
+    data = {
+        "id": "10002",
+        "fields": {
+            "summary": "Review linked spec",
+            "description": "Related Confluence Page",
+            "issuetype": {"name": "Task"},
+            "status": {"name": "Open"},
+            "updated": None,
+        },
+    }
+    invalid_json_response = _mock_httpx_response(200, text="not json")
+    invalid_json_response.json.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+    client_mock = _make_multi_response_client(
+        [_mock_httpx_response(200, data), invalid_json_response]
+    )
+
+    with patch("httpx.Client", return_value=client_mock):
+        doc = fetch_jira_issue(
+            "https://example.atlassian.net",
+            "user@example.com",
+            "token",
+            "KAN-9",
+            include_remote_links=True,
+        )
+
+    assert doc is not None
+    assert "Related Confluence Page" in doc.body
+    assert "Remote links:" not in doc.body
+    assert doc.metadata["jira_remote_links_included"] is False
+    assert doc.metadata["jira_remote_link_count"] == 0
+
+
+def test_fetch_jira_issue_preserves_confluence_link_from_adf_description():
+    data = {
+        "id": "10002",
+        "fields": {
+            "summary": "Review linked spec",
+            "description": {
+                "type": "doc",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Related Confluence Page"}],
+                    },
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {
+                                "type": "inlineCard",
+                                "attrs": {
+                                    "url": (
+                                        "https://example.atlassian.net/wiki/spaces/ENG/pages/"
+                                        "555/KAN-9"
+                                    )
+                                },
+                            }
+                        ],
+                    },
+                ],
+            },
+            "issuetype": {"name": "Task"},
+            "status": {"name": "Open"},
+            "updated": None,
+        },
+    }
+
+    with _patch_client(_mock_httpx_response(200, data)):
+        doc = fetch_jira_issue(
+            "https://example.atlassian.net", "user@example.com", "token", "KAN-9"
+        )
+
+    assert doc is not None
+    assert "Related Confluence Page" in doc.body
+    assert "https://example.atlassian.net/wiki/spaces/ENG/pages/555/KAN-9" in doc.body
 
 
 def test_fetch_jira_issue_404_returns_none():
@@ -234,6 +407,21 @@ def test_fetch_confluence_page_happy_path():
     assert "architecture" in doc.body.lower()
     assert doc.external_id == "12345"
     assert doc.version == "3"
+
+
+def test_fetch_confluence_page_uses_top_level_atlassian_url():
+    resp_data = _confluence_response("Page", "<p>content</p>")
+    client_mock = MagicMock()
+    client_mock.__enter__ = MagicMock(return_value=client_mock)
+    client_mock.__exit__ = MagicMock(return_value=False)
+    client_mock.get.return_value = _mock_httpx_response(200, resp_data)
+
+    with patch("httpx.Client", return_value=client_mock):
+        fetch_confluence_page("https://example.atlassian.net", "u", "t", "42")
+
+    assert client_mock.get.call_args.args[0] == (
+        "https://example.atlassian.net/wiki/rest/api/content/42"
+    )
 
 
 def test_fetch_confluence_page_strips_html_tags():
@@ -342,6 +530,16 @@ def test_fetch_jira_issue_500_raises_fatal():
             fetch_jira_issue("https://jira.example.com", "u", "t", "PROJ-1")
 
 
+def test_fetch_jira_issue_non_json_response_raises_context_error():
+    resp = _mock_httpx_response(200, text="<html>login</html>")
+    resp.headers = {"content-type": "text/html"}
+    resp.json.side_effect = json.JSONDecodeError("Expecting value", resp.text, 0)
+
+    with _patch_client(resp):
+        with pytest.raises(ContextAwareFatalError, match="Jira issue returned non-JSON"):
+            fetch_jira_issue("https://jira.example.com", "u", "t", "PROJ-1")
+
+
 def test_fetch_jira_issue_with_extra_fields():
     """Extra fields are appended to the fields query parameter."""
     data = {
@@ -442,6 +640,54 @@ def test_adf_to_plain_nested_doc():
     assert "second" in result
 
 
+def test_adf_to_plain_preserves_text_link_mark_href():
+    node = {
+        "type": "text",
+        "text": "Related Confluence Page",
+        "marks": [
+            {
+                "type": "link",
+                "attrs": {
+                    "href": "https://example.atlassian.net/wiki/spaces/ENG/pages/555/Spec"
+                },
+            }
+        ],
+    }
+
+    result = _adf_to_plain(node)
+
+    assert "Related Confluence Page" in result
+    assert "https://example.atlassian.net/wiki/spaces/ENG/pages/555/Spec" in result
+
+
+def test_adf_to_plain_preserves_inline_card_url():
+    node = {
+        "type": "doc",
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": "Related Confluence Page"}],
+            },
+            {
+                "type": "paragraph",
+                "content": [
+                    {
+                        "type": "inlineCard",
+                        "attrs": {
+                            "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/555/Spec"
+                        },
+                    }
+                ],
+            },
+        ],
+    }
+
+    result = _adf_to_plain(node)
+
+    assert "Related Confluence Page" in result
+    assert "https://example.atlassian.net/wiki/spaces/ENG/pages/555/Spec" in result
+
+
 # ---------------------------------------------------------------------------
 # fetch_reference dispatcher
 # ---------------------------------------------------------------------------
@@ -456,11 +702,9 @@ def _make_fetch_cfg(**overrides):
         "gitlab_api_base": "https://gitlab.com/api/v4",
         "gitlab_token": "tok",
         "jira_base": "https://jira.example.com",
-        "jira_email": "u@e.com",
-        "jira_token": "tok",
         "confluence_base": "https://wiki.example.com",
-        "confluence_email": "u@e.com",
-        "confluence_token": "tok",
+        "atlassian_email": "u@e.com",
+        "atlassian_token": "tok",
         "ctx_github_enabled": True,
         "ctx_gitlab_enabled": True,
         "ctx_jira_enabled": True,
@@ -546,6 +790,16 @@ def test_fetch_reference_dispatches_to_jira():
     mock_jira.assert_called_once()
     _, kwargs = mock_jira.call_args
     assert kwargs.get("key") == "PROJ-99" or mock_jira.call_args[0][3] == "PROJ-99"
+    assert kwargs["include_remote_links"] is True
+
+
+def test_fetch_reference_skips_jira_remote_links_when_confluence_disabled():
+    ref = _make_ref(ReferenceType.JIRA, "PROJ-99")
+    cfg = _make_fetch_cfg(ctx_confluence_enabled=False)
+    with patch("code_review.context.fetchers.fetch_jira_issue", return_value=None) as mock_jira:
+        fetch_reference(ref, cfg=cfg)
+    _, kwargs = mock_jira.call_args
+    assert kwargs["include_remote_links"] is False
 
 
 def test_fetch_reference_dispatches_to_confluence():

@@ -117,6 +117,31 @@ def _append_confluence_refs(add_ref, scanned: str) -> None:
         add_ref(ReferenceType.CONFLUENCE, pid, f"confluence-page:{pid}")
 
 
+def extract_confluence_refs(
+    text: str,
+    *,
+    exclude_ids: set[str] | None = None,
+) -> list[ContextReference]:
+    """Extract Confluence page references from arbitrary text.
+
+    Used to discover Confluence links embedded in fetched Jira ticket bodies
+    so they can be followed transitively.
+    """
+    _exclude = exclude_ids or set()
+    seen: set[str] = set()
+    out: list[ContextReference] = []
+
+    def _add(ref_type: ReferenceType, external_id: str, display: str) -> None:
+        if external_id in seen or external_id in _exclude:
+            return
+        seen.add(external_id)
+        out.append(ContextReference(ref_type=ref_type, external_id=external_id, display=display))
+
+    scanned = _strip_markdown_code_fences(text)
+    _append_confluence_refs(_add, scanned)
+    return out
+
+
 def extract_context_references(
     scm_provider: Literal["gitea", "github", "gitlab", "bitbucket", "bitbucket_server"],
     owner: str,
@@ -135,7 +160,7 @@ def extract_context_references(
     ``#NNN`` is recognised only when ``scm_provider == \"github\"`` and
     ``github_issue_same_repo`` is True (assumed same repository).
     """
-    raw = "\n".join(s for s in text_segments if s)
+    raw = "\n".join(s for s in text_segments if isinstance(s, str) and s)
     scanned = _strip_markdown_code_fences(raw)
 
     seen: set[tuple[ReferenceType, str]] = set()

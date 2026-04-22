@@ -7,7 +7,7 @@ import pytest
 
 import code_review.context.pipeline as pipeline_module
 from code_review.context.errors import ContextAwareFatalError
-from code_review.context.pipeline import build_context_brief_for_pr
+from code_review.context.pipeline import _build_fetch_reference_config, build_context_brief_for_pr
 from code_review.context.types import ContextReference, ExternalCredentials, ReferenceType
 
 
@@ -60,12 +60,9 @@ def _make_ctx(
     ctx.embedding_dimensions = embedding_dimensions
     ctx.github_token = None
     ctx.gitlab_token = None
-    ctx.jira_url = ""
-    ctx.jira_email = ""
-    ctx.jira_token = None
-    ctx.confluence_url = ""
-    ctx.confluence_email = ""
-    ctx.confluence_token = None
+    ctx.atlassian_url = ""
+    ctx.atlassian_email = ""
+    ctx.atlassian_token = None
     ctx.github_api_url = None
     ctx.gitlab_api_url = None
     ctx.jira_extra_fields = ""
@@ -80,6 +77,24 @@ def _make_scm(provider="github", url="https://api.github.com", token="tok"):
     tok.get_secret_value.return_value = token
     scm.token = tok
     return scm
+
+
+def test_build_fetch_reference_config_uses_common_atlassian_url_for_jira_and_confluence():
+    ctx = _make_ctx(jira_enabled=True, confluence_enabled=True)
+    ctx.atlassian_url = "https://acme.atlassian.net"
+    creds = ExternalCredentials(
+        github_api="https://api.github.com",
+        github_token="gh",
+        gitlab_api="https://gitlab.com/api/v4",
+        gitlab_token="gl",
+        atlassian_email="review-bot@example.com",
+        atlassian_token="atl",
+    )
+
+    cfg = _build_fetch_reference_config(ctx=ctx, creds=creds)
+
+    assert cfg.jira_base == "https://acme.atlassian.net"
+    assert cfg.confluence_base == "https://acme.atlassian.net"
 
 
 def _make_fetched_doc(external_id="org/repo#1", body="Issue body text", title="Issue title"):
@@ -103,12 +118,9 @@ def test_get_external_credentials_builds_single_value_object():
     ctx.gitlab_api_url = "https://gitlab.example.com/api/v4"
     ctx.gitlab_token = MagicMock()
     ctx.gitlab_token.get_secret_value.return_value = "gl-token"
-    ctx.jira_email = "jira@example.com"
-    ctx.jira_token = MagicMock()
-    ctx.jira_token.get_secret_value.return_value = "jira-token"
-    ctx.confluence_email = "conf@example.com"
-    ctx.confluence_token = MagicMock()
-    ctx.confluence_token.get_secret_value.return_value = "conf-token"
+    ctx.atlassian_email = "atlassian@example.com"
+    ctx.atlassian_token = MagicMock()
+    ctx.atlassian_token.get_secret_value.return_value = "atlassian-token"
 
     creds = pipeline_module._get_external_credentials(_make_scm(provider="gitea"), ctx)
 
@@ -117,10 +129,8 @@ def test_get_external_credentials_builds_single_value_object():
         github_token="gh-token",
         gitlab_api="https://gitlab.example.com/api/v4",
         gitlab_token="gl-token",
-        jira_email="jira@example.com",
-        jira_token="jira-token",
-        confluence_email="conf@example.com",
-        confluence_token="conf-token",
+        atlassian_email="atlassian@example.com",
+        atlassian_token="atlassian-token",
     )
 
 
@@ -181,7 +191,7 @@ def _patch_store_and_fetcher(fetched_doc, fresh=False):
 
 
 @patch("code_review.context.pipeline.distill_context_text", return_value="Distilled brief.")
-def test_under_budget_returns_context_tag(mock_distill):
+def test_under_budget_returns_distilled_brief(mock_distill):
     doc = _make_fetched_doc(body="x" * 100)  # well under 20 KB
     patch_store, patch_fetch, _ = _patch_store_and_fetcher(doc, fresh=False)
     ctx = _make_ctx()
@@ -191,9 +201,7 @@ def test_under_budget_returns_context_tag(mock_distill):
         result = build_context_brief_for_pr(ctx, scm, [_GITHUB_REF], "diff text")
 
     assert result is not None
-    assert result.startswith("<context>")
-    assert "Distilled brief." in result
-    assert result.strip().endswith("</context>")
+    assert result == "Distilled brief."
 
 
 @patch("code_review.context.pipeline.ContextStore")
@@ -215,9 +223,7 @@ def test_missing_db_url_uses_direct_fetch_and_distillation(mock_distill, mock_st
 
 @patch("code_review.context.pipeline.ContextStore")
 @patch("code_review.context.pipeline.distill_context_text", return_value="Direct brief.")
-def test_missing_whitespace_db_url_uses_direct_fetch_and_distillation(
-    mock_distill, mock_store_cls
-):
+def test_missing_whitespace_db_url_uses_direct_fetch_and_distillation(mock_distill, mock_store_cls):
     doc = _make_fetched_doc(body="Issue body")
     ctx = _make_ctx(db_url="   ")
 
@@ -378,7 +384,7 @@ def test_jira_ref_resolved(_mock_distill, _simple_store):
         ref_type=ReferenceType.JIRA, external_id="PROJ-42", display="PROJ-42"
     )
     ctx = _make_ctx(jira_enabled=True)
-    ctx.jira_url = "https://jira.example.com"
+    ctx.atlassian_url = "https://jira.example.com"
 
     with patch("code_review.context.pipeline.ContextStore", return_value=_simple_store):
         with patch(
@@ -420,7 +426,7 @@ def test_confluence_ref_resolved(_mock_distill, _simple_store):
         display="99999",
     )
     ctx = _make_ctx(confluence_enabled=True)
-    ctx.confluence_url = "https://wiki.example.com"
+    ctx.atlassian_url = "https://wiki.example.com"
 
     with patch("code_review.context.pipeline.ContextStore", return_value=_simple_store):
         with patch(
@@ -431,3 +437,192 @@ def test_confluence_ref_resolved(_mock_distill, _simple_store):
 
     assert result is not None
     assert "Brief." in result
+
+
+# ---------------------------------------------------------------------------
+# Transitive Confluence following from Jira tickets
+# ---------------------------------------------------------------------------
+
+
+@patch("code_review.context.pipeline.distill_context_text", return_value="Transitive brief.")
+def test_jira_ticket_with_confluence_link_follows_transitively_no_store(mock_distill):
+    """When a Jira body contains a Confluence URL, the pipeline fetches that page too (no DB)."""
+    jira_body = (
+        "Key: PROJ-42\nSummary: Design\nDescription:\n"
+        "See https://wiki.example.com/wiki/spaces/ENG/pages/555/Spec for details"
+    )
+    jira_ref = ContextReference(
+        ref_type=ReferenceType.JIRA, external_id="PROJ-42", display="PROJ-42"
+    )
+
+    jira_doc = _make_fetched_doc(external_id="PROJ-42", body=jira_body, title="Design")
+    confluence_doc = _make_fetched_doc(
+        external_id="555", body="Title: Spec\nBody:\nThe spec content", title="Spec"
+    )
+
+    def _side_effect(ref, *, cfg):
+        if ref.ref_type == ReferenceType.JIRA:
+            return jira_doc
+        if ref.ref_type == ReferenceType.CONFLUENCE:
+            return confluence_doc
+        return None
+
+    ctx = _make_ctx(jira_enabled=True, confluence_enabled=True, db_url="")
+    ctx.atlassian_url = "https://atlassian.example.com"
+
+    with patch("code_review.context.pipeline.fetch_reference", side_effect=_side_effect) as mf:
+        result = build_context_brief_for_pr(ctx, _make_scm(), [jira_ref], "diff")
+
+    assert result is not None
+    # fetch_reference should have been called twice: once for Jira, once for Confluence
+    assert mf.call_count == 2
+    ref_types = [call.args[0].ref_type for call in mf.call_args_list]
+    assert ReferenceType.JIRA in ref_types
+    assert ReferenceType.CONFLUENCE in ref_types
+    # The distiller should have received both documents
+    raw = mock_distill.call_args.args[0]
+    assert "PROJ-42" in raw
+    assert "Spec" in raw
+
+
+@patch("code_review.context.pipeline.distill_context_text", return_value="Transitive brief.")
+def test_jira_transitive_skips_already_listed_confluence_ref(mock_distill):
+    """If a Confluence ref from the Jira body is already in the original refs, don't fetch twice."""
+    jira_body = "See https://wiki.example.com/wiki/spaces/ENG/pages/555/Spec"
+    jira_ref = ContextReference(
+        ref_type=ReferenceType.JIRA, external_id="PROJ-42", display="PROJ-42"
+    )
+    conf_ref = ContextReference(
+        ref_type=ReferenceType.CONFLUENCE, external_id="555", display="confluence-page:555"
+    )
+
+    jira_doc = _make_fetched_doc(external_id="PROJ-42", body=jira_body, title="Design")
+    confluence_doc = _make_fetched_doc(external_id="555", body="Spec body", title="Spec")
+
+    def _side_effect(ref, *, cfg):
+        if ref.ref_type == ReferenceType.JIRA:
+            return jira_doc
+        if ref.ref_type == ReferenceType.CONFLUENCE:
+            return confluence_doc
+        return None
+
+    ctx = _make_ctx(jira_enabled=True, confluence_enabled=True, db_url="")
+    ctx.atlassian_url = "https://atlassian.example.com"
+
+    with patch("code_review.context.pipeline.fetch_reference", side_effect=_side_effect) as mf:
+        result = build_context_brief_for_pr(ctx, _make_scm(), [jira_ref, conf_ref], "diff")
+
+    assert result is not None
+    # Confluence page 555 should be fetched only once (from the original ref list), not transitively
+    conf_calls = [c for c in mf.call_args_list if c.args[0].ref_type == ReferenceType.CONFLUENCE]
+    assert len(conf_calls) == 1
+
+
+@patch("code_review.context.pipeline.distill_context_text", return_value="Transitive brief.")
+def test_jira_transitive_allows_same_id_as_non_confluence_ref_no_store(mock_distill):
+    jira_body = "See https://wiki.example.com/wiki/spaces/ENG/pages/123/Spec"
+    jira_ref = ContextReference(ref_type=ReferenceType.JIRA, external_id="123", display="123")
+    jira_doc = _make_fetched_doc(external_id="123", body=jira_body, title="Design")
+    confluence_doc = _make_fetched_doc(external_id="123", body="Spec body", title="Spec")
+
+    def _side_effect(ref, *, cfg):
+        if ref.ref_type == ReferenceType.JIRA:
+            return jira_doc
+        if ref.ref_type == ReferenceType.CONFLUENCE:
+            return confluence_doc
+        return None
+
+    ctx = _make_ctx(jira_enabled=True, confluence_enabled=True, db_url="")
+    ctx.atlassian_url = "https://atlassian.example.com"
+
+    with patch("code_review.context.pipeline.fetch_reference", side_effect=_side_effect) as mf:
+        result = build_context_brief_for_pr(ctx, _make_scm(), [jira_ref], "diff")
+
+    assert result is not None
+    ref_types = [call.args[0].ref_type for call in mf.call_args_list]
+    assert ref_types == [ReferenceType.JIRA, ReferenceType.CONFLUENCE]
+    raw = mock_distill.call_args.args[0]
+    assert "Spec body" in raw
+
+
+@patch("code_review.context.pipeline.distill_context_text", return_value="Transitive brief.")
+def test_jira_transitive_allows_same_id_as_non_confluence_ref_with_store(mock_distill):
+    jira_body = "See https://wiki.example.com/wiki/spaces/ENG/pages/123/Spec"
+    jira_ref = ContextReference(ref_type=ReferenceType.JIRA, external_id="123", display="123")
+    jira_doc = _make_fetched_doc(external_id="123", body=jira_body, title="Design")
+    confluence_doc = _make_fetched_doc(external_id="123", body="Spec body", title="Spec")
+
+    store = MagicMock()
+    store.connect.return_value = MagicMock()
+    store.get_or_create_source.return_value = uuid.uuid4()
+    store.load_document.return_value = None
+    store.upsert_document.side_effect = [uuid.uuid4(), uuid.uuid4()]
+
+    def _side_effect(ref, *, cfg):
+        if ref.ref_type == ReferenceType.JIRA:
+            return jira_doc
+        if ref.ref_type == ReferenceType.CONFLUENCE:
+            return confluence_doc
+        return None
+
+    ctx = _make_ctx(jira_enabled=True, confluence_enabled=True)
+    ctx.atlassian_url = "https://atlassian.example.com"
+
+    with patch("code_review.context.pipeline.ContextStore", return_value=store):
+        with patch("code_review.context.pipeline.fetch_reference", side_effect=_side_effect) as mf:
+            result = build_context_brief_for_pr(ctx, _make_scm(), [jira_ref], "diff")
+
+    assert result is not None
+    ref_types = [call.args[0].ref_type for call in mf.call_args_list]
+    assert ref_types == [ReferenceType.JIRA, ReferenceType.CONFLUENCE]
+    raw = mock_distill.call_args.args[0]
+    assert "Spec body" in raw
+
+
+@patch("code_review.context.pipeline.distill_context_text", return_value="Transitive brief.")
+def test_jira_transitive_does_not_follow_when_confluence_disabled(mock_distill):
+    """Even if Jira body has Confluence links, don't follow when confluence_enabled=False."""
+    jira_body = "See https://wiki.example.com/wiki/spaces/ENG/pages/555/Spec"
+    jira_ref = ContextReference(
+        ref_type=ReferenceType.JIRA, external_id="PROJ-42", display="PROJ-42"
+    )
+
+    jira_doc = _make_fetched_doc(external_id="PROJ-42", body=jira_body, title="Design")
+
+    ctx = _make_ctx(jira_enabled=True, confluence_enabled=False, db_url="")
+    ctx.atlassian_url = "https://jira.example.com"
+
+    with patch("code_review.context.pipeline.fetch_reference", return_value=jira_doc) as mf:
+        result = build_context_brief_for_pr(ctx, _make_scm(), [jira_ref], "diff")
+
+    assert result is not None
+    # Only the Jira fetch should have happened
+    assert mf.call_count == 1
+    assert mf.call_args_list[0].args[0].ref_type == ReferenceType.JIRA
+
+
+def test_extract_transitive_confluence_refs_empty_body():
+    ctx = MagicMock(confluence_enabled=True)
+    seen_ids = set()
+
+    with patch.object(pipeline_module.logger, "warning") as mock_warn:
+        refs = pipeline_module._extract_transitive_confluence_refs(" ", ctx=ctx, seen_ids=seen_ids)
+
+    assert refs == []
+    mock_warn.assert_called_once_with("Fetched body is empty or whitespace-only.")
+
+
+def test_extract_transitive_confluence_refs_caps_results():
+    ctx = MagicMock(confluence_enabled=True)
+    body = " ".join(
+        f"https://wiki.example.com/wiki/spaces/ENG/pages/{idx}/Spec" for idx in range(30)
+    )
+
+    refs = pipeline_module._extract_transitive_confluence_refs(
+        body,
+        ctx=ctx,
+        seen_ids=set(),
+    )
+
+    assert len(refs) == pipeline_module._MAX_TRANSITIVE_CONFLUENCE_REFS
+    assert [ref.external_id for ref in refs] == [str(idx) for idx in range(20)]

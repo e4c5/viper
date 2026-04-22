@@ -6,7 +6,7 @@ import re
 import typer
 from typer.models import OptionInfo
 
-from code_review.config import get_code_review_app_config
+from code_review.config import get_code_review_app_config, log_startup_configuration
 from code_review.logging_config import configure_logging
 from code_review.runner import run_review
 
@@ -14,6 +14,7 @@ from code_review.runner import run_review
 def _ensure_logging() -> None:
     """Configure logging from CODE_REVIEW_LOG_LEVEL before running."""
     configure_logging()
+    log_startup_configuration()
 
 
 app = typer.Typer()
