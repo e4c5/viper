@@ -421,15 +421,15 @@ def _build_verification_prompt(
 def _run_verification_agent(prompt: str) -> _VerificationResult | None:
     """Invoke the verification agent and return the parsed result, or None on error."""
     try:
-        from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
         from google.genai import types
 
+        from code_review.adk_runner import create_runner
         from code_review.orchestration.runner_utils import _run_agent_and_collect_response
 
         agent = create_verification_agent()
         session_service = InMemorySessionService()
-        runner = Runner(
+        runner = create_runner(
             agent=agent,
             app_name="code_review",
             session_service=session_service,

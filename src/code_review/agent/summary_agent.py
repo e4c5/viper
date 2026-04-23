@@ -130,10 +130,10 @@ def generate_pr_summary(
     """Generate a Markdown summary using the summary agent."""
     import uuid
 
-    from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
     from google.genai import types
 
+    from code_review.adk_runner import create_runner
     from code_review.orchestration.runner_utils import _run_agent_and_collect_response
 
     # Pre-group findings by severity so the LLM sees priority order naturally.
@@ -180,7 +180,7 @@ Findings:
 """
 
     session_service = InMemorySessionService()
-    runner = Runner(
+    runner = create_runner(
         agent=agent,
         app_name="code_review",
         session_service=session_service,

@@ -37,9 +37,9 @@ def create_agent_and_runner(
     single_batch_mode: bool = False,
 ):
     """Build the batch-review SequentialAgent, session service, and ADK Runner."""
-    from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
 
+    from code_review.adk_runner import create_runner
     from code_review.agent.workflows import create_sequential_batch_review_agent
 
     agent = create_sequential_batch_review_agent(
@@ -54,7 +54,7 @@ def create_agent_and_runner(
         f"{pr_ctx.owner}/{pr_ctx.repo}/pr-{pr_ctx.pr_number}/{runner_mod.uuid.uuid4().hex[:12]}"
     )
     session_service = InMemorySessionService()
-    runner = Runner(
+    runner = create_runner(
         agent=agent,
         app_name=runner_mod.APP_NAME,
         session_service=session_service,

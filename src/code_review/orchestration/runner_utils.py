@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -11,19 +12,16 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from google.genai import types
+from pydantic import ValidationError as PydanticValidationError
 
 import code_review
 
 if TYPE_CHECKING:
     pass
 
-import json
-
 from code_review import observability
 from code_review.json_utils import iter_json_candidates
 from code_review.models import PRContext
-from pydantic import ValidationError as PydanticValidationError
-
 from code_review.providers.base import RateLimitError
 from code_review.schemas.findings import FindingsBatchV1, FindingV1
 
@@ -445,14 +443,14 @@ class ReviewRunObservability:
 
 def _run_reply_dismissal_llm(user_message: str) -> str:
     """Run the tool-free reply-dismissal agent once; return raw model text."""
-    from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
 
+    from code_review.adk_runner import create_runner
     from code_review.agent.reply_dismissal_agent import create_reply_dismissal_agent
 
     agent = create_reply_dismissal_agent()
     session_service = InMemorySessionService()
-    runner = Runner(
+    runner = create_runner(
         agent=agent,
         app_name=APP_NAME,
         session_service=session_service,

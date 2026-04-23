@@ -94,14 +94,14 @@ def _create_context_distillation_agent(max_output_tokens: int):
 
 
 def _run_context_distillation_agent(user_message: str, max_output_tokens: int) -> str:
-    from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
     from google.genai import types
 
+    from code_review.adk_runner import create_runner
     from code_review.orchestration.runner_utils import APP_NAME, _run_agent_and_collect_response
 
     agent = _create_context_distillation_agent(max_output_tokens)
-    runner = Runner(
+    runner = create_runner(
         agent=agent,
         app_name=APP_NAME,
         session_service=InMemorySessionService(),

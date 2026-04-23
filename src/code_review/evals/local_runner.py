@@ -127,12 +127,13 @@ def _run_one_reply_dismissal_case_adk(case: ReplyDismissalEvalCase) -> EvalCaseR
 
 def _run_agent_text(agent, user_text: str) -> str:
     """Execute one agent run and return the concatenated final response text."""
-    from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
     from google.genai import types
 
+    from code_review.adk_runner import create_runner
+
     session_service = InMemorySessionService()
-    runner = Runner(
+    runner = create_runner(
         agent=agent,
         app_name="code_review_eval",
         session_service=session_service,
