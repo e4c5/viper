@@ -149,9 +149,9 @@ CRITICAL - Placement of suggestions:
 - Keep `suggested_patch` focused on the smallest safe, self-contained change. Do not include surrounding unchanged context."""
 )
 
-# Test-code quality rules — conditionally appended to the batch instruction when the batch
-# contains one or more test files (detected by is_test_file() in standards/detector.py).
-# Not included in the base instruction to avoid adding tokens to purely production-code reviews.
+# Test-code quality rules — always included in the agent instruction so they appear in the
+# stable prefix (before any dynamic user-message content). This maximises prompt-cache hit
+# rates across batches. The ~1 100 extra characters are negligible for non-test batches.
 _SHARED_TEST_QUALITY_RULES = """\
 IMPORTANT — Test code review (this batch contains test files):
 When reviewing test code, the key question is: would this assertion FAIL if the behaviour
@@ -350,6 +350,7 @@ BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION = (
     "anything — the diff is already provided and no external tools are available.\n"
     "\n" + _BATCH_FORMAT_AND_PLACEMENT + "\n"
     "\n" + _BATCH_EXAMPLES + "\n"
+    "\n" + _SHARED_TEST_QUALITY_RULES + "\n"
 )
 
 # When the runner attaches distilled issue/ticket context, extend both modes with this.
@@ -451,6 +452,7 @@ EMBEDDED_DIFF_REVIEW_INSTRUCTION = (
     "\n" + _SHARED_FORMAT_AND_PLACEMENT + "\n"
     "\n" + _SHARED_PATCH_NOTE + "\n"
     "\n" + _SHARED_AGENT_FIX_AND_EXAMPLES + "\n"
+    "\n" + _SHARED_TEST_QUALITY_RULES + "\n"
 )
 
 

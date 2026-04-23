@@ -54,7 +54,7 @@ In `src/code_review/agent/workflows.py`, `build_prepared_batch_user_message()` c
 - JSON object instructions
 - no-findings response instructions
 
-Move these into `_BATCH_USER_MESSAGE_INSTRUCTION` or the slim batch instruction in `src/code_review/agent/agent.py`.
+Move these into `_BATCH_USER_MESSAGE_INSTRUCTION` (defined in `src/code_review/agent/workflows.py`, appended to each sub-agent's instruction at line 178) or into `BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION` in `src/code_review/agent/agent.py`. Both end up in the agent instruction; the distinction is ownership: `workflows.py` owns the batch-orchestration overlay while `agent.py` owns the base review instruction.
 
 Afterward, `build_prepared_batch_user_message()` should mostly produce:
 
@@ -93,6 +93,8 @@ Two options:
    - More complex, but keeps non-test prompts smaller.
 
 Recommendation: choose option 1 unless prompt size becomes a real issue.
+
+Cleanup required after this move: the conditional `is_test_file` check and the `_SHARED_TEST_QUALITY_RULES` append logic in `build_prepared_batch_user_message()` (workflows.py lines 141-148) must be removed, along with the now-unused `is_test_file` import (line 19) if no other call site remains in that module.
 
 ## 4. Keep Linked Context Dynamic, But Place It Before Diff
 
@@ -152,12 +154,18 @@ Concrete goal:
 
 This helps both ADK Gemini and provider prefix caches.
 
+Note: the "no stable rules after the diff" constraint is currently violated by `_SHARED_TEST_QUALITY_RULES` being appended after the diff in `build_prepared_batch_user_message()`. Completing Section 3 (moving test-quality rules into the agent instruction) automatically satisfies this constraint.
+
 ## 8. Add Tests For Prompt Shape
 
-Add tests around `build_prepared_batch_user_message()` and `create_sequential_batch_review_agent()`:
+Add tests around `build_prepared_batch_user_message()` and `create_sequential_batch_review_agent()`.
 
+Some coverage already exists in `tests/agent/test_workflows.py`:
+- sub-agent instruction does not contain batch-specific content (lines 98-101)
+- user message contains PR metadata and diff segments (lines 135-140)
+
+New tests still needed:
 - batch user message does not contain repeated stable rules like "Only report findings..."
-- batch user message contains PR metadata and diff segments
 - test-quality rules are present in the agent instruction, not after diff
 - two batch sub-agents have identical instruction text aside from name
 - linked context still causes the linked-context instruction to be included

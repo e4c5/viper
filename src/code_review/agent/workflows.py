@@ -10,13 +10,12 @@ from google.adk.agents import BaseAgent
 from google.genai import types
 from pydantic import Field
 
-from code_review.agent.agent import _SHARED_TEST_QUALITY_RULES, create_review_agent
+from code_review.agent.agent import create_review_agent
 from code_review.batching import ReviewBatch
 from code_review.config import get_code_review_app_config
 from code_review.diff.parser import annotate_diff_with_line_numbers
 from code_review.logging_config import emit_package_log
 from code_review.providers.base import ProviderInterface
-from code_review.standards.detector import is_test_file
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -31,7 +30,9 @@ _BATCH_USER_MESSAGE_INSTRUCTION = """\
 For this run, review exactly one prepared batch from this PR. The prepared batch,
 PR metadata, and any linked-context supplement are provided in the user message.
 Ignore any generic wording about reviewing a complete PR diff. Only report findings
-for code that appears in the prepared batch segments in the user message."""
+for code that appears in the prepared batch segments in the user message.
+If a file appears in multiple segments, treat them as partial views of the same file
+and still use the true file path."""
 
 
 class BatchReviewWorkflowAgent(BaseAgent):
@@ -122,30 +123,9 @@ def build_prepared_batch_user_message(
         message += "\n\n" + prompt_suffix
 
     message += (
-        "\n\n"
-        "For this run, ignore any generic wording about reviewing a complete PR diff "
-        "in the user message. "
-        "Review exactly one prepared batch from this PR."
-        + " Only report findings for code that appears in the batch segments below."
-        + " Use the integer from the ``n:`` annotation as the line field in each finding"
-        " (e.g. ``42:`` means line 42). Extract only the number; do NOT emit the ``:`` suffix."
-        + " If a file appears in multiple segments, treat them as partial views "
-        "of the same file and still use the true file path."
-        + " Output a JSON findings object for this batch only"
-          " (same schema as the main instruction)."
-        + " If there are no issues in this batch, output a findings object with an empty array."
-        + "\n\nPrepared batch segments:\n"
+        "\n\nPrepared batch segments:\n"
         + "\n\n".join(segment_blocks)
     )
-
-    # Conditionally append test-quality rules when the batch contains test files.
-    has_test_files = any(is_test_file(s.path) for s in batch.segments)
-    if has_test_files:
-        message += "\n\n" + _SHARED_TEST_QUALITY_RULES
-        logger.debug(
-            "Appended test-quality rules to batch user message (test paths: %s)",
-            ", ".join(s.path for s in batch.segments if is_test_file(s.path)),
-        )
 
     return message
 

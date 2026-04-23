@@ -238,3 +238,164 @@ async def test_batch_review_workflow_resumes_from_correct_sub_agent() -> None:
     assert sub_agent_a.call_count == 2
     assert sub_agent_b.call_count == 1
 
+
+# ---------------------------------------------------------------------------
+# Prompt-shape tests — ensure stable rules live in the agent instruction and
+# are NOT repeated in the dynamic user message (Section 8 of caching plan).
+# ---------------------------------------------------------------------------
+
+_STABLE_RULES_THAT_MUST_NOT_APPEAR_IN_USER_MESSAGE = [
+    "Only report findings for code that appears in the batch segments below",
+    "Use the integer from the ``n:`` annotation as the line field",
+    "Output a JSON findings object for this batch only",
+    "output a findings object with an empty array",
+]
+
+
+def _make_batch(*paths: str) -> ReviewBatch:
+    """Helper: build a simple single-segment batch for testing."""
+    segments = tuple(
+        ReviewSegment(
+            path=p,
+            diff_text=(
+                f"diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n"
+                "@@ -1,1 +1,2 @@\n old\n+new\n"
+            ),
+            estimated_tokens=5,
+            segment_index=0,
+            total_segments=1,
+            split_strategy="whole_file",
+        )
+        for p in paths
+    )
+    return ReviewBatch(
+        batch_index=0,
+        estimated_tokens=5 * len(paths),
+        paths=paths,
+        segments=segments,
+    )
+
+
+def test_batch_user_message_does_not_contain_repeated_stable_rules() -> None:
+    """Stable guidance must live in the agent instruction, not the user message."""
+    batch = _make_batch("src/foo.py")
+    message = build_prepared_batch_user_message(
+        batch=batch,
+        owner="o",
+        repo="r",
+        pr_number=1,
+        head_sha="abc",
+    )
+    for rule_fragment in _STABLE_RULES_THAT_MUST_NOT_APPEAR_IN_USER_MESSAGE:
+        assert rule_fragment not in message, (
+            f"User message still contains stable rule fragment: {rule_fragment!r}"
+        )
+
+
+def test_batch_user_message_omits_test_quality_rules_for_test_files() -> None:
+    """Test-quality rules now live in the agent instruction; user message must not contain them."""
+    from code_review.agent.agent import _SHARED_TEST_QUALITY_RULES
+
+    batch = _make_batch("tests/test_foo.py")
+    message = build_prepared_batch_user_message(
+        batch=batch,
+        owner="o",
+        repo="r",
+        pr_number=1,
+    )
+    assert _SHARED_TEST_QUALITY_RULES not in message
+
+
+def test_test_quality_rules_in_agent_instruction() -> None:
+    """Test-quality rules must be part of the stable agent instruction."""
+    from code_review.agent.agent import (
+        BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION,
+        EMBEDDED_DIFF_REVIEW_INSTRUCTION,
+        _SHARED_TEST_QUALITY_RULES,
+    )
+
+    assert _SHARED_TEST_QUALITY_RULES in BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION
+    assert _SHARED_TEST_QUALITY_RULES in EMBEDDED_DIFF_REVIEW_INSTRUCTION
+
+
+@patch("code_review.agent.workflows.create_review_agent")
+def test_batch_sub_agents_have_identical_instruction_text(
+    mock_create_review_agent,
+) -> None:
+    """All batch sub-agents must share the same instruction for cache stability."""
+    provider = MagicMock()
+    agents = [_FakeReviewAgent(name=f"sub_{i}") for i in range(3)]
+    mock_create_review_agent.side_effect = agents
+
+    batches = [_make_batch("a.py"), _make_batch("b.py"), _make_batch("c.py")]
+    result = create_sequential_batch_review_agent(provider, "standards", batches)
+
+    instructions = [sa.instruction for sa in result.sub_agents]
+    assert len(set(instructions)) == 1, (
+        "Sub-agent instructions differ when they should be identical"
+    )
+
+
+@patch("code_review.agent.agent.get_configured_model", return_value="gemini-2.5-pro")
+@patch("code_review.agent.agent.get_max_output_tokens", return_value=8192)
+@patch("code_review.agent.agent.get_effective_temperature", return_value=0.0)
+@patch("code_review.agent.agent.get_llm_config")
+@patch("code_review.agent.agent.get_code_review_app_config")
+def test_linked_context_flag_causes_context_instruction_in_agent(
+    mock_app_cfg, mock_llm_cfg, _temp, _tokens, _model,
+) -> None:
+    """When context_brief_attached=True, the agent instruction must include linked-context guidance."""
+    from code_review.agent.agent import _CONTEXT_FROM_LINKED_SOURCES, create_review_agent
+
+    mock_app_cfg.return_value = MagicMock(review_visible_lines=False, log_prompts=False)
+    mock_llm_cfg.return_value = MagicMock(temperature=0.0)
+    provider = MagicMock()
+    provider.capabilities.return_value = MagicMock(
+        supports_suggestions=False, supports_multiline_suggestions=False,
+    )
+
+    agent_with = create_review_agent(provider, "", context_brief_attached=True, slim_output=True)
+    agent_without = create_review_agent(provider, "", context_brief_attached=False, slim_output=True)
+
+    assert _CONTEXT_FROM_LINKED_SOURCES.strip() in agent_with.instruction
+    assert _CONTEXT_FROM_LINKED_SOURCES.strip() not in agent_without.instruction
+
+
+# ---------------------------------------------------------------------------
+# Cacheability regression test (Section 9 of caching plan).
+# ---------------------------------------------------------------------------
+
+def test_two_batch_user_messages_share_prefix_before_diff() -> None:
+    """User messages for two batches in the same PR must share the text before the diff."""
+    batch_a = _make_batch("src/a.py")
+    batch_b = _make_batch("src/b.py")
+    suffix = "### Linked Work Item Context\nSome context"
+
+    msg_a = build_prepared_batch_user_message(
+        batch=batch_a, owner="o", repo="r", pr_number=1, head_sha="sha",
+        prompt_suffix=suffix,
+    )
+    msg_b = build_prepared_batch_user_message(
+        batch=batch_b, owner="o", repo="r", pr_number=1, head_sha="sha",
+        prompt_suffix=suffix,
+    )
+
+    # Both messages diverge at the batch paths and diff segments, but the
+    # linked-context section (prompt_suffix) should appear before the diff in
+    # both.  Extract the portion before "Prepared batch segments:" and verify
+    # the shared PR metadata and linked context appear in order.
+    marker = "Prepared batch segments:"
+    prefix_a = msg_a.split(marker)[0]
+    prefix_b = msg_b.split(marker)[0]
+
+    # PR metadata is present in both
+    for prefix in (prefix_a, prefix_b):
+        assert "owner=o, repo=r, pr_number=1" in prefix
+        assert "head_sha=sha" in prefix
+        assert "Linked Work Item Context" in prefix
+
+    # No stable review rules leaked into either prefix
+    for rule_fragment in _STABLE_RULES_THAT_MUST_NOT_APPEAR_IN_USER_MESSAGE:
+        assert rule_fragment not in prefix_a
+        assert rule_fragment not in prefix_b
+
