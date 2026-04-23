@@ -153,7 +153,7 @@ CRITICAL - Placement of suggestions:
 # stable prefix (before any dynamic user-message content). This maximises prompt-cache hit
 # rates across batches. The ~1 100 extra characters are negligible for non-test batches.
 _SHARED_TEST_QUALITY_RULES = """\
-IMPORTANT — Test code review (this batch contains test files):
+IMPORTANT — Test code review rules (apply when this batch contains test files):
 When reviewing test code, the key question is: would this assertion FAIL if the behaviour
 under test regressed? If the answer is "not necessarily", that is a finding.
 

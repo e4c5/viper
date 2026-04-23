@@ -24,7 +24,8 @@ class _FakeReviewAgent(BaseAgent):
 
     async def run_async(self, ctx):
         self.seen_user_messages.append(ctx.user_content.parts[0].text)
-        yield
+        return
+        yield  # pragma: no cover — makes this an async generator
 
 
 @patch("code_review.agent.workflows.create_review_agent")
