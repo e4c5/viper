@@ -9,6 +9,7 @@ from typing import Any
 from unittest.mock import Mock
 
 from code_review.config import get_llm_config
+from code_review.logging_config import emit_package_log
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ def create_runner(
     """Create an ADK Runner, enabling Gemini context caching when supported."""
     from google.adk.runners import Runner
 
+    llm_cfg = get_llm_config()
     cache_config = build_context_cache_config(agent=agent)
     if cache_config is None:
         return Runner(
@@ -39,7 +41,20 @@ def create_runner(
         root_agent=agent,
         context_cache_config=cache_config,
     )
-    logger.debug("ADK context caching enabled for app=%s config=%s", app_name, cache_config)
+    emit_package_log(
+        logger,
+        logging.INFO,
+        (
+            "adk_context_cache enabled app=%s provider=%s model=%s "
+            "cache_intervals=%s ttl_seconds=%s min_tokens=%s"
+        ),
+        app_name,
+        llm_cfg.provider,
+        llm_cfg.model,
+        getattr(cache_config, "cache_intervals", None),
+        getattr(cache_config, "ttl_seconds", None),
+        getattr(cache_config, "min_tokens", None),
+    )
     runner = Runner(
         app=app,
         session_service=session_service,
@@ -47,6 +62,8 @@ def create_runner(
     )
     if not hasattr(runner, "agent"):
         runner.agent = agent
+    runner.context_cache_enabled = True
+    runner.context_cache_config = cache_config
     return runner
 
 

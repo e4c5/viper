@@ -69,7 +69,44 @@ def test_log_llm_usage_normalizes_adk_usage(caplog):
     assert "prompt_tokens=10" in caplog.text
     assert "completion_tokens=5" in caplog.text
     assert "total_tokens=15" in caplog.text
+    assert "cached_tokens=1" in caplog.text
+    assert "cache_status=hit" in caplog.text
     assert "response_text_len=42" in caplog.text
+
+
+def test_log_llm_usage_marks_cache_miss(caplog):
+    usage = SimpleNamespace(cached_content_token_count=0)
+    logger = logging.getLogger("code_review.test_llm_cache_miss_telemetry")
+
+    caplog.set_level(logging.INFO)
+    logger.setLevel(logging.INFO)
+    log_llm_usage(
+        logger,
+        task="review",
+        provider="gemini",
+        model="gemini-3.1",
+        usage=usage,
+    )
+
+    assert "cached_tokens=0" in caplog.text
+    assert "cache_status=miss" in caplog.text
+
+
+def test_log_llm_usage_marks_unreported_cache_status(caplog):
+    logger = logging.getLogger("code_review.test_llm_cache_unreported_telemetry")
+
+    caplog.set_level(logging.INFO)
+    logger.setLevel(logging.INFO)
+    log_llm_usage(
+        logger,
+        task="review",
+        provider="openai",
+        model="gpt-5.4",
+        usage={},
+    )
+
+    assert "cached_tokens=None" in caplog.text
+    assert "cache_status=unreported" in caplog.text
 
 
 def test_log_llm_usage_normalizes_litellm_usage(caplog):

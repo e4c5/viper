@@ -259,6 +259,8 @@ def test_after_model_callback_logs_usage_metadata(caplog) -> None:
     assert "prompt_tokens=123" in caplog.text
     assert "completion_tokens=45" in caplog.text
     assert "total_tokens=168" in caplog.text
+    assert "cached_tokens=7" in caplog.text
+    assert "cache_status=hit" in caplog.text
     assert "finish_reason=" in caplog.text
     assert "response_text_len=0" in caplog.text
 
@@ -283,5 +285,6 @@ def test_after_model_callback_logs_finish_reason_when_present(caplog) -> None:
     _after_model_callback(SimpleNamespace(agent_name="batch_review_0"), llm_response)
 
     assert "finish_reason=MAX_TOKENS" in caplog.text
+    assert "cache_status=miss" in caplog.text
     assert "interrupted=True" in caplog.text
     assert "turn_complete=False" in caplog.text
