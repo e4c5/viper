@@ -24,8 +24,7 @@ class _FakeReviewAgent(BaseAgent):
 
     async def run_async(self, ctx):
         self.seen_user_messages.append(ctx.user_content.parts[0].text)
-        return
-        yield  # pragma: no cover — makes this an async generator
+        yield
 
 
 @patch("code_review.agent.workflows.create_review_agent")
@@ -399,4 +398,3 @@ def test_two_batch_user_messages_share_prefix_before_diff() -> None:
     for rule_fragment in _STABLE_RULES_THAT_MUST_NOT_APPEAR_IN_USER_MESSAGE:
         assert rule_fragment not in prefix_a
         assert rule_fragment not in prefix_b
-
