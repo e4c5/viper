@@ -40,6 +40,15 @@ def response_text_length(response: object) -> int:
     return sum(len(getattr(part, "text", "") or "") for part in parts)
 
 
+def _cache_status(cached_tokens: object) -> str:
+    if cached_tokens is None:
+        return "unreported"
+    try:
+        return "hit" if int(cached_tokens) > 0 else "miss"
+    except (TypeError, ValueError):
+        return "unreported"
+
+
 def log_llm_usage(
     logger: logging.Logger,
     *,
@@ -59,6 +68,7 @@ def log_llm_usage(
     cached_tokens = _get_value(usage, "cached_content_token_count")
     tool_prompt_tokens = _get_value(usage, "tool_use_prompt_token_count")
     thoughts_tokens = _get_value(usage, "thoughts_token_count")
+    cache_status = _cache_status(cached_tokens)
 
     if prompt_tokens is None:
         prompt_tokens = _get_value(usage, "prompt_tokens")
@@ -73,8 +83,8 @@ def log_llm_usage(
         (
             "llm_usage task=%s provider=%s model=%s prompt_tokens=%s "
             "completion_tokens=%s total_tokens=%s cached_tokens=%s "
-            "tool_prompt_tokens=%s thoughts_tokens=%s finish_reason=%s "
-            "interrupted=%s turn_complete=%s response_text_len=%s"
+            "cache_status=%s tool_prompt_tokens=%s thoughts_tokens=%s "
+            "finish_reason=%s interrupted=%s turn_complete=%s response_text_len=%s"
         ),
         task,
         provider,
@@ -83,6 +93,7 @@ def log_llm_usage(
         completion_tokens,
         total_tokens,
         cached_tokens,
+        cache_status,
         tool_prompt_tokens,
         thoughts_tokens,
         finish_reason,

@@ -101,6 +101,7 @@ pipeline {
                     )
                     def credId = 'SCM_TOKEN'
                     def unresolvedMarker = isBitbucket ? '$.pullRequest' : '$.pull_request'
+                    def fields = env.CONTEXT_JIRA_EXTRA_FIELDS.split(',')
 
                     if (prAction) {
                         def allowed = isBitbucket

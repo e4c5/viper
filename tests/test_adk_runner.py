@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -45,7 +46,7 @@ def test_build_context_cache_config_skips_litellm_wrapped_gemini(mock_get_llm_co
 @patch("google.adk.runners.Runner")
 @patch("code_review.adk_runner.get_llm_config")
 def test_create_runner_wraps_gemini_3_agent_in_cached_app(
-    mock_get_llm_config, mock_runner_cls, mock_app_cls
+    mock_get_llm_config, mock_runner_cls, mock_app_cls, caplog
 ):
     mock_get_llm_config.return_value = _llm_cfg()
     mock_app_cls.return_value = MagicMock(name="cached_app")
@@ -54,6 +55,7 @@ def test_create_runner_wraps_gemini_3_agent_in_cached_app(
     session_service = MagicMock()
     agent = SimpleNamespace(model="gemini-3-flash-preview")
 
+    caplog.set_level(logging.INFO)
     result = create_runner(agent=agent, app_name="code_review", session_service=session_service)
 
     _, app_kwargs = mock_app_cls.call_args
@@ -61,6 +63,11 @@ def test_create_runner_wraps_gemini_3_agent_in_cached_app(
     assert app_kwargs["root_agent"] is agent
     assert app_kwargs["context_cache_config"] is not None
     assert result.agent is agent
+    assert result.context_cache_enabled is True
+    assert result.context_cache_config is app_kwargs["context_cache_config"]
+    assert (
+        "adk_context_cache enabled app=code_review provider=gemini model=gemini-3.1" in caplog.text
+    )
     mock_runner_cls.assert_called_once_with(
         app=mock_app_cls.return_value,
         session_service=session_service,
@@ -93,10 +100,12 @@ def test_create_runner_keeps_plain_runner_when_cache_not_supported(
     mock_get_llm_config, mock_runner_cls
 ):
     mock_get_llm_config.return_value = _llm_cfg(model="gemini-2.5-flash")
+    runner = SimpleNamespace()
+    mock_runner_cls.return_value = runner
     session_service = MagicMock()
     agent = SimpleNamespace(model="gemini-2.5-flash")
 
-    create_runner(agent=agent, app_name="code_review", session_service=session_service)
+    result = create_runner(agent=agent, app_name="code_review", session_service=session_service)
 
     mock_runner_cls.assert_called_once_with(
         agent=agent,
@@ -104,3 +113,5 @@ def test_create_runner_keeps_plain_runner_when_cache_not_supported(
         session_service=session_service,
         auto_create_session=True,
     )
+    assert result.context_cache_enabled is False
+    assert result.context_cache_config is None
