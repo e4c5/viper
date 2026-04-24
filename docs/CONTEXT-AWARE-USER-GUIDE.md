@@ -65,12 +65,16 @@ CONTEXT_JIRA_ENABLED=true
 CONTEXT_ATLASSIAN_URL=https://yourcompany.atlassian.net
 ```
 
+Migration note: legacy Jira/Confluence credential variables `CONTEXT_JIRA_URL`, `CONTEXT_JIRA_EMAIL`, `CONTEXT_JIRA_TOKEN`, `CONTEXT_CONFLUENCE_URL`, `CONTEXT_CONFLUENCE_EMAIL`, and `CONTEXT_CONFLUENCE_TOKEN` were replaced by `CONTEXT_ATLASSIAN_URL`, `CONTEXT_ATLASSIAN_EMAIL`, and `CONTEXT_ATLASSIAN_TOKEN`.
+
 ### 2.3 Add Confluence
 
 ```bash
 CONTEXT_ATLASSIAN_URL=https://yourcompany.atlassian.net
 CONTEXT_CONFLUENCE_ENABLED=true
 ```
+
+Migration note: legacy Jira/Confluence credential variables `CONTEXT_JIRA_URL`, `CONTEXT_JIRA_EMAIL`, `CONTEXT_JIRA_TOKEN`, `CONTEXT_CONFLUENCE_URL`, `CONTEXT_CONFLUENCE_EMAIL`, and `CONTEXT_CONFLUENCE_TOKEN` were replaced by `CONTEXT_ATLASSIAN_URL`, `CONTEXT_ATLASSIAN_EMAIL`, and `CONTEXT_ATLASSIAN_TOKEN`.
 
 ---
 
@@ -113,6 +117,8 @@ Notes:
 ## 4. Environment variables
 
 All variables are optional unless marked required by the source you enable.
+
+Migration note: legacy Jira/Confluence credential variables `CONTEXT_JIRA_URL`, `CONTEXT_JIRA_EMAIL`, `CONTEXT_JIRA_TOKEN`, `CONTEXT_CONFLUENCE_URL`, `CONTEXT_CONFLUENCE_EMAIL`, and `CONTEXT_CONFLUENCE_TOKEN` were replaced by `CONTEXT_ATLASSIAN_URL`, `CONTEXT_ATLASSIAN_EMAIL`, and `CONTEXT_ATLASSIAN_TOKEN`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

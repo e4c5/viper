@@ -166,6 +166,8 @@ Set `SCM_REVIEW_DECISION_ENABLED=true` on the job so the quality-gate decision i
 
 Loaded via `ContextAwareReviewConfig` (case-insensitive env names). Optional feature: linked GitHub/GitLab issues, Jira, Confluence → direct distill → `Linked Work Item Context` prompt section. Configure PostgreSQL when you also want cache/RAG for oversized context.
 
+Migration note: legacy Jira/Confluence credential variables `CONTEXT_JIRA_URL`, `CONTEXT_JIRA_EMAIL`, `CONTEXT_JIRA_TOKEN`, `CONTEXT_CONFLUENCE_URL`, `CONTEXT_CONFLUENCE_EMAIL`, and `CONTEXT_CONFLUENCE_TOKEN` were replaced by `CONTEXT_ATLASSIAN_URL`, `CONTEXT_ATLASSIAN_EMAIL`, and `CONTEXT_ATLASSIAN_TOKEN`.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CONTEXT_AWARE_REVIEW_ENABLED` | `false` | Master switch. |

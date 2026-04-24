@@ -101,7 +101,6 @@ pipeline {
                     )
                     def credId = 'SCM_TOKEN'
                     def unresolvedMarker = isBitbucket ? '$.pullRequest' : '$.pull_request'
-                    def fields = env.CONTEXT_JIRA_EXTRA_FIELDS.split(',')
 
                     if (prAction) {
                         def allowed = isBitbucket
@@ -202,9 +201,9 @@ pipeline {
                                     [ -n "${CODE_REVIEW_REPLY_DISMISSAL_ENABLED:-}" ] && export CODE_REVIEW_REPLY_DISMISSAL_ENABLED="$CODE_REVIEW_REPLY_DISMISSAL_ENABLED"
                                     [ -n "${CONTEXT_AWARE_REVIEW_ENABLED:-}" ] && export CONTEXT_AWARE_REVIEW_ENABLED="$CONTEXT_AWARE_REVIEW_ENABLED"
                                     [ -n "${CONTEXT_JIRA_ENABLED:-}" ] && export CONTEXT_JIRA_ENABLED="$CONTEXT_JIRA_ENABLED"
-                                    [ -n "${CONTEXT_JIRA_URL:-}" ] && export CONTEXT_JIRA_URL="$CONTEXT_JIRA_URL"
-                                    [ -n "${CONTEXT_JIRA_EMAIL:-}" ] && export CONTEXT_JIRA_EMAIL="$CONTEXT_JIRA_EMAIL"
-                                    [ -n "${CONTEXT_JIRA_TOKEN:-}" ] && export CONTEXT_JIRA_TOKEN="$CONTEXT_JIRA_TOKEN"
+                                    [ -n "${CONTEXT_ATLASSIAN_URL:-}" ] && export CONTEXT_ATLASSIAN_URL="$CONTEXT_ATLASSIAN_URL"
+                                    [ -n "${CONTEXT_ATLASSIAN_EMAIL:-}" ] && export CONTEXT_ATLASSIAN_EMAIL="$CONTEXT_ATLASSIAN_EMAIL"
+                                    [ -n "${CONTEXT_ATLASSIAN_TOKEN:-}" ] && export CONTEXT_ATLASSIAN_TOKEN="$CONTEXT_ATLASSIAN_TOKEN"
                                     [ -n "${CONTEXT_JIRA_EXTRA_FIELDS:-}" ] && export CONTEXT_JIRA_EXTRA_FIELDS="$CONTEXT_JIRA_EXTRA_FIELDS"
                                     export CODE_REVIEW_EVENT_COMMENT_ID="${CODE_REVIEW_EVENT_COMMENT_ID:-}"
                                     export CODE_REVIEW_EVENT_THREAD_ID="${CODE_REVIEW_EVENT_THREAD_ID:-}"
@@ -229,11 +228,11 @@ pipeline {
                                     [ -n "${CODE_REVIEW_REPLY_DISMISSAL_ENABLED:-}" ] && RD_ENV="$RD_ENV -e CODE_REVIEW_REPLY_DISMISSAL_ENABLED=$CODE_REVIEW_REPLY_DISMISSAL_ENABLED"
                                     [ -n "${CONTEXT_AWARE_REVIEW_ENABLED:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_AWARE_REVIEW_ENABLED"
                                     [ -n "${CONTEXT_JIRA_ENABLED:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_JIRA_ENABLED"
-                                    [ -n "${CONTEXT_JIRA_URL:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_JIRA_URL"
-                                    [ -n "${CONTEXT_JIRA_EMAIL:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_JIRA_EMAIL"
-                                    [ -n "${CONTEXT_JIRA_TOKEN:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_JIRA_TOKEN"
+                                    [ -n "${CONTEXT_ATLASSIAN_URL:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_ATLASSIAN_URL"
+                                    [ -n "${CONTEXT_ATLASSIAN_EMAIL:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_ATLASSIAN_EMAIL"
+                                    [ -n "${CONTEXT_ATLASSIAN_TOKEN:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_ATLASSIAN_TOKEN"
                                     [ -n "${CONTEXT_JIRA_EXTRA_FIELDS:-}" ] && RD_ENV="$RD_ENV -e CONTEXT_JIRA_EXTRA_FIELDS"
-                                    "$runtime" run --rm --network host \
+                                    "$runtime" run --rm --network "$REVIEW_NETWORK" \
                                         -e SCM_PROVIDER="$REVIEW_SCM_PROVIDER" \
                                         -e SCM_URL="$REVIEW_SCM_URL" \
                                         -e SCM_TOKEN="$SCM_TOKEN" \

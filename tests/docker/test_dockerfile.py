@@ -43,3 +43,24 @@ def test_jenkinsfile_runs_agent():
     assert "pipeline {" in content
     assert "REVIEW_IMAGE" in content or "code-review" in content
     assert "docker" in content or "podman" in content or "runtime" in content
+
+
+def test_jenkinsfile_uses_atlassian_env_names_for_jira_context():
+    jenkinsfile = REPO_ROOT / "docker" / "jenkins" / "Jenkinsfile"
+    content = jenkinsfile.read_text()
+
+    assert 'export CONTEXT_ATLASSIAN_URL="$CONTEXT_ATLASSIAN_URL"' in content
+    assert 'export CONTEXT_ATLASSIAN_EMAIL="$CONTEXT_ATLASSIAN_EMAIL"' in content
+    assert 'export CONTEXT_ATLASSIAN_TOKEN="$CONTEXT_ATLASSIAN_TOKEN"' in content
+    assert 'RD_ENV="$RD_ENV -e CONTEXT_ATLASSIAN_URL"' in content
+    assert 'RD_ENV="$RD_ENV -e CONTEXT_ATLASSIAN_EMAIL"' in content
+    assert 'RD_ENV="$RD_ENV -e CONTEXT_ATLASSIAN_TOKEN"' in content
+
+
+def test_jenkinsfile_keeps_review_network_isolation_and_no_unsafe_jira_field_split():
+    jenkinsfile = REPO_ROOT / "docker" / "jenkins" / "Jenkinsfile"
+    content = jenkinsfile.read_text()
+
+    assert '--network "$REVIEW_NETWORK"' in content
+    assert "--network host" not in content
+    assert "env.CONTEXT_JIRA_EXTRA_FIELDS.split(',')" not in content

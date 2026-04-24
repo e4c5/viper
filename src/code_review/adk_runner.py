@@ -6,7 +6,6 @@ import logging
 import re
 import warnings
 from typing import Any
-from unittest.mock import Mock
 
 from code_review.config import get_llm_config
 from code_review.logging_config import emit_package_log
@@ -97,9 +96,7 @@ def build_context_cache_config(*, agent=None) -> Any | None:
 
 
 def _agent_model_name(agent) -> str | None:
-    """Return an agent's concrete model name, or None when it has no model field."""
-    if isinstance(agent, Mock):
-        return ""
+    """Return the agent's model name string, "" for LiteLLM-wrapped models, or None when absent."""
     model = getattr(agent, "model", None)
     if isinstance(model, str):
         return model
