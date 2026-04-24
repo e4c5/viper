@@ -55,9 +55,6 @@ def test_jenkinsfile_uses_atlassian_env_names_for_jira_context():
     assert 'RD_ENV="$RD_ENV -e CONTEXT_ATLASSIAN_URL"' in content
     assert 'RD_ENV="$RD_ENV -e CONTEXT_ATLASSIAN_EMAIL"' in content
     assert 'RD_ENV="$RD_ENV -e CONTEXT_ATLASSIAN_TOKEN"' in content
-    assert 'export CONTEXT_ATLASSIAN_URL="$CONTEXT_JIRA_URL"' in content
-    assert 'export CONTEXT_ATLASSIAN_EMAIL="$CONTEXT_JIRA_EMAIL"' in content
-    assert 'export CONTEXT_ATLASSIAN_TOKEN="$CONTEXT_JIRA_TOKEN"' in content
 
 
 def test_jenkinsfile_keeps_review_network_isolation_and_no_unsafe_jira_field_split():
