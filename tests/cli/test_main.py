@@ -7,11 +7,9 @@ from unittest.mock import patch
 import pytest
 import typer
 
-# Typer raises click.exceptions.Exit
-try:
-    from click.exceptions import Exit as ClickExit
-except ImportError:
-    ClickExit = SystemExit
+# Use typer's own public Exit type: its internal click dependency (vendored
+# or not, depending on typer version) is not a stable import path.
+ClickExit = typer.Exit
 
 from code_review.__main__ import review
 
