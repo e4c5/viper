@@ -218,5 +218,27 @@
     "source": "Self-hosted model: token pricing and effective context depend on local runtime configuration",
     "source_url": "https://ollama.com/library/llama3.2",
     "verified_on": "2026-03-29"
+  },
+  {
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "context_window_tokens": 128000,
+    "max_output_tokens_default": 32000,
+    "input_cost_per_million_tokens": null,
+    "output_cost_per_million_tokens": null,
+    "source": "Empirically determined this session against api.deepseek.com: this is a reasoning model whose chain-of-thought consumed 2400-3700 of a 4096-token output budget across reasoning_effort levels, leaving too little room for the final JSON answer on non-trivial diffs and causing truncated/unparseable responses. Raised default well above observed reasoning usage; pricing intentionally left unset pending verified figures.",
+    "source_url": "",
+    "verified_on": "2026-07-13"
+  },
+  {
+    "provider": "deepseek",
+    "model": "deepseek-v4-flash",
+    "context_window_tokens": 128000,
+    "max_output_tokens_default": 32000,
+    "input_cost_per_million_tokens": null,
+    "output_cost_per_million_tokens": null,
+    "source": "Not independently benchmarked; same reasoning-model output-budget risk as deepseek-v4-pro assumed conservatively pending direct verification.",
+    "source_url": "",
+    "verified_on": "2026-07-13"
   }
 ]

@@ -274,10 +274,18 @@ def _get_configured_model_from_config(config: Any) -> Any:
     else:
         litellm_model = resolved_model
 
+    # DeepSeek's reasoning models spend a variable, sometimes very large, share of
+    # the output token budget on chain-of-thought before emitting the final JSON
+    # answer; capping reasoning effort leaves reliable headroom for the answer
+    # itself instead of truncating mid-thought.
+    extra_litellm_kwargs: dict = (
+        {"reasoning_effort": "high"} if config.provider == "deepseek" else {}
+    )
+
     try:
         from google.adk.models.lite_llm import LiteLlm
 
-        return LiteLlm(model=litellm_model)
+        return LiteLlm(model=litellm_model, **extra_litellm_kwargs)
     except ImportError:
         # Fallback if ADK LiteLLM not available
         return config.model
