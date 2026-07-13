@@ -1402,7 +1402,173 @@ def test_split_batch_for_retry_resegments_single_large_segment():
     assert len(split_batches) > 1
     assert all(len(split_batch.segments) == 1 for split_batch, _attempt in split_batches)
     assert all(split_batch.paths == ("foo.py",) for split_batch, _attempt in split_batches)
-    assert all(retry_attempt == 1 for _split_batch, retry_attempt in split_batches)
+    # Splitting itself consumes a retry attempt (attempt + 1, capped at max_retries) so
+    # that repeated splitting of a batch that keeps failing to parse is bounded.
+    assert all(retry_attempt == 2 for _split_batch, retry_attempt in split_batches)
+
+
+def test_split_batch_for_retry_stops_splitting_once_max_retries_reached():
+    """Once `attempt` has reached `max_retries`, splitting must not continue forever.
+
+    Regression test: previously the "split into multiple smaller batches" path had no
+    bound at all, so a batch whose LLM response kept failing to parse could be
+    halved/re-segmented indefinitely, eventually driving the per-fragment token budget
+    below the unavoidable rendering-overhead floor in `_split_long_line` and crashing
+    the whole review run with an uncaught ValueError.
+    """
+    from code_review.batching import ReviewBatch, ReviewSegment
+    from code_review.diff.utils import estimate_tokens
+    from code_review.orchestration.execution import _split_batch_for_retry
+
+    first_hunk = "\n".join(
+        f"+very_long_added_line_number_{i:02d}_with_extra_context_to_force_segmentation"
+        for i in range(1, 25)
+    )
+    second_hunk = "\n".join(
+        f"+second_hunk_long_added_line_number_{i:02d}_with_extra_context_to_force_segmentation"
+        for i in range(25, 49)
+    )
+    diff_text = (
+        "diff --git a/foo.py b/foo.py\n"
+        "--- a/foo.py\n"
+        "+++ b/foo.py\n"
+        "@@ -1,1 +1,25 @@\n"
+        "-old_line\n"
+        f"{first_hunk}\n"
+        "@@ -40,1 +64,25 @@\n"
+        "-old_line_2\n"
+        f"{second_hunk}\n"
+    )
+    estimated_tokens = estimate_tokens(diff_text)
+    batch = ReviewBatch(
+        batch_index=0,
+        estimated_tokens=estimated_tokens,
+        segments=(
+            ReviewSegment(
+                path="foo.py",
+                diff_text=diff_text,
+                estimated_tokens=estimated_tokens,
+                segment_index=0,
+                total_segments=1,
+                split_strategy="whole_file",
+            ),
+        ),
+        paths=("foo.py",),
+    )
+
+    # attempt has already reached max_retries: no further splitting should occur, even
+    # though the batch is still large enough to be re-segmented.
+    split_batches = _split_batch_for_retry(batch, attempt=2, max_retries=2)
+
+    assert len(split_batches) == 1
+    returned_batch, returned_attempt = split_batches[0]
+    assert returned_batch is batch
+    assert returned_attempt == 2
+
+
+def test_run_isolated_batches_with_retry_gives_up_after_max_retries_of_splitting(
+    caplog,
+):
+    """A batch whose response never parses must eventually be skipped, not looped on.
+
+    Simulates the production failure: every collected response is unparseable prose
+    (no JSON at all), so every attempt takes the "split for retry" path. With the fix,
+    this must terminate after `max_retries` rounds of splitting/retrying rather than
+    looping forever.
+    """
+    from unittest.mock import patch
+
+    from code_review import batching
+    from code_review.orchestration import execution as execution_mod
+
+    first_hunk = "\n".join(
+        f"+very_long_added_line_number_{i:02d}_with_extra_context_to_force_segmentation"
+        for i in range(1, 25)
+    )
+    diff_text = (
+        "diff --git a/foo.py b/foo.py\n"
+        "--- a/foo.py\n"
+        "+++ b/foo.py\n"
+        "@@ -1,1 +1,25 @@\n"
+        "-old_line\n"
+        f"{first_hunk}\n"
+    )
+    estimated_tokens = batching.estimate_tokens(diff_text)
+    batch = batching.ReviewBatch(
+        batch_index=0,
+        estimated_tokens=estimated_tokens,
+        segments=(
+            batching.ReviewSegment(
+                path="foo.py",
+                diff_text=diff_text,
+                estimated_tokens=estimated_tokens,
+                segment_index=0,
+                total_segments=1,
+                split_strategy="whole_file",
+            ),
+        ),
+        paths=("foo.py",),
+    )
+
+    call_count = 0
+
+    def fake_create_agent_and_runner(*_args, **_kwargs):
+        return "session-id", None, object()
+
+    def fake_attach(*_args, **_kwargs):
+        return None
+
+    def fake_build_content(*_args, **_kwargs):
+        return object()
+
+    def fake_collect_responses(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        # Always return a response with no parseable findings (simulating the model
+        # emitting only prose, never JSON) so every attempt fails to parse.
+        return [("batch_review_0", "not json, just prose")]
+
+    def fake_findings_from_batch_responses(_responses):
+        return [], [0]
+
+    with (
+        patch.object(
+            execution_mod, "create_agent_and_runner", side_effect=fake_create_agent_and_runner
+        ),
+        patch.object(execution_mod, "_attach_batch_user_messages", side_effect=fake_attach),
+        patch.object(
+            execution_mod, "build_batch_review_content", side_effect=fake_build_content
+        ),
+        patch.object(
+            execution_mod.runner_mod,
+            "_run_agent_and_collect_responses",
+            side_effect=fake_collect_responses,
+        ),
+        patch.object(
+            execution_mod,
+            "findings_from_batch_responses",
+            side_effect=fake_findings_from_batch_responses,
+        ),
+        caplog.at_level("WARNING"),
+    ):
+        findings = execution_mod._run_isolated_batches_with_retry(
+            pr_ctx=object(),
+            provider=object(),
+            review_standards="",
+            batches_to_run=[batch],
+            context_brief_attached=False,
+            prompt_suffix="",
+            max_retries=2,
+        )
+
+    assert findings == []
+    # The loop must terminate (it would hang/loop far longer than this without the fix)
+    # and must have given up rather than resplitting forever.
+    assert call_count < 50
+    assert any(
+        "Skipping batch after max retries due to malformed findings output" in record.message
+        for record in caplog.records
+    )
 
 
 # --- Multiline suggested_patch enforcement at post_inline ---

@@ -376,13 +376,25 @@ def _split_batch_for_retry(
     Prefer splitting across existing prepared segments first. If only a single segment
     remains, try to re-segment its diff text with a smaller budget. If neither produces
     smaller work units, return the original batch unchanged.
+
+    Splitting itself consumes a retry attempt, the same as a plain re-request does.
+    This is what bounds the "keep halving and re-splitting" path: once `attempt` has
+    reached `max_retries`, no further splitting is attempted here and the batch is
+    returned as a single unchanged unit so the caller's existing retry-exhaustion
+    branch (skip + log "Skipping batch after max retries...") takes over instead of
+    resplitting forever.
     """
     retry_attempt = min(attempt, max_retries)
+    if attempt >= max_retries:
+        return [(batch, retry_attempt)]
+
+    next_attempt = min(attempt + 1, max_retries)
+
     if len(batch.segments) > 1:
         midpoint = len(batch.segments) // 2
         return [
-            (_make_retry_batch(0, batch.segments[:midpoint]), retry_attempt),
-            (_make_retry_batch(1, batch.segments[midpoint:]), retry_attempt),
+            (_make_retry_batch(0, batch.segments[:midpoint]), next_attempt),
+            (_make_retry_batch(1, batch.segments[midpoint:]), next_attempt),
         ]
 
     if len(batch.segments) != 1:
@@ -400,7 +412,7 @@ def _split_batch_for_retry(
     if len(smaller_segments) <= 1:
         return [(batch, retry_attempt)]
     return [
-        (_make_retry_batch(index, (smaller_segment,)), retry_attempt)
+        (_make_retry_batch(index, (smaller_segment,)), next_attempt)
         for index, smaller_segment in enumerate(smaller_segments)
     ]
 

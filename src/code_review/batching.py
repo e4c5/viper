@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from typing import Literal
 from code_review.diff.parser import DiffHunk, parse_unified_diff
 from code_review.diff.utils import estimate_tokens
 from code_review.providers.base import FileInfo
+
+logger = logging.getLogger(__name__)
 
 _HUNK_HEADER_RE = re.compile(r"^@@ ")
 
@@ -430,10 +433,17 @@ def _split_long_line(
         if best_length == 0:
             minimum_fragment_tokens = estimate(remaining[:1])
             if minimum_fragment_tokens > segment_budget_tokens:
-                raise ValueError(
-                    "Cannot split diff line within segment budget: "
-                    f"minimum fragment requires {minimum_fragment_tokens} tokens "
-                    f"but budget is {segment_budget_tokens}"
+                # Even the smallest possible fragment (one character, plus whatever
+                # fixed rendering overhead `estimate` bakes in - e.g. a diff hunk
+                # header/path) exceeds the budget. This floor is unavoidable, so
+                # degrade gracefully instead of raising and killing the whole
+                # review run: emit the smallest fragment we can and move on.
+                logger.warning(
+                    "Diff line fragment exceeds segment budget even at minimum size "
+                    "(minimum fragment requires %d tokens but budget is %d); "
+                    "emitting smallest possible fragment instead of failing the split.",
+                    minimum_fragment_tokens,
+                    segment_budget_tokens,
                 )
             best_length = 1
         fragments.append(remaining[:best_length])
