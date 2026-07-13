@@ -24,6 +24,7 @@ _PROVIDER_API_KEY_ENV: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
 }
 
 _INJECTED_PROVIDER_API_ENV: str | None = None
@@ -259,7 +260,7 @@ def _get_configured_model_from_config(config: Any) -> Any:
 
     if config.provider in {"gemini", "vertex"}:
         return resolved_model
-    # Use LiteLLM for OpenAI, Anthropic, Ollama, OpenRouter
+    # Use LiteLLM for OpenAI, Anthropic, Ollama, OpenRouter, DeepSeek
     if config.provider == "openai":
         litellm_model = f"openai/{resolved_model}"
     elif config.provider == "anthropic":
@@ -268,6 +269,8 @@ def _get_configured_model_from_config(config: Any) -> Any:
         litellm_model = f"ollama_chat/{resolved_model}"
     elif config.provider == "openrouter":
         litellm_model = f"openrouter/{resolved_model}"
+    elif config.provider == "deepseek":
+        litellm_model = f"deepseek/{resolved_model}"
     else:
         litellm_model = resolved_model
 

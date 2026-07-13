@@ -115,6 +115,31 @@ def test_get_configured_model_openrouter_uses_litellm_or_fallback(mock_get_confi
 
 
 @patch("code_review.models.get_llm_config")
+def test_get_configured_model_deepseek_uses_litellm_or_fallback(mock_get_config):
+    mock_get_config.return_value = MagicMock(
+        provider="deepseek", model="deepseek-chat", api_key=None
+    )
+    result = get_configured_model()
+    # Either LiteLlm instance or model string if ImportError
+    if hasattr(result, "model"):
+        assert result.model == "deepseek/deepseek-chat"
+    else:
+        assert result == "deepseek-chat"
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_configured_model_deepseek_injects_api_key_env(mock_get_config):
+    from pydantic import SecretStr
+
+    mock_get_config.return_value = MagicMock(
+        provider="deepseek", model="deepseek-chat", api_key=SecretStr("sk-deepseek")
+    )
+    with patch.dict(os.environ, {}, clear=False):
+        get_configured_model()
+        assert os.environ.get("DEEPSEEK_API_KEY") == "sk-deepseek"
+
+
+@patch("code_review.models.get_llm_config")
 def test_get_context_window(mock_get_config):
     mock_get_config.return_value = MagicMock(context_window=64_000, api_key=None)
     assert get_context_window() == 64_000
