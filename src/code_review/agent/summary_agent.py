@@ -205,6 +205,21 @@ def split_summary_for_pr_description(full_text: str) -> tuple[str, str]:
     in a no-findings response), the full text is returned as the PR description part
     and the comment part is empty.
     """
+    # Reasoning models (e.g. DeepSeek) may prefix the intended Markdown output with
+    # unstructured chain-of-thought prose. That reasoning can itself narrate about
+    # producing a "## Summary" section (planning the format) before the real,
+    # final one — so take the LAST such heading in the text, not the first, to
+    # land on the model's actual answer rather than an earlier draft/mention.
+    summary_matches = list(
+        re.finditer(
+            r'^[ \t]*(?:#{1,6}[ \t]+|\d+\.[ \t]+\*\*|\*\*)[ \t]*Summary\b',
+            full_text,
+            re.MULTILINE | re.IGNORECASE,
+        )
+    )
+    if summary_matches:
+        full_text = full_text[summary_matches[-1].start() :]
+
     match = re.search(
         r'^[ \t]*(?:#{1,6}[ \t]+|\d+\.[ \t]+\*\*|\*\*)[ \t]*Walkthrough\b',
         full_text,
