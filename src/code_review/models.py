@@ -24,6 +24,7 @@ _PROVIDER_API_KEY_ENV: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
 }
 
 _INJECTED_PROVIDER_API_ENV: str | None = None
@@ -259,7 +260,7 @@ def _get_configured_model_from_config(config: Any) -> Any:
 
     if config.provider in {"gemini", "vertex"}:
         return resolved_model
-    # Use LiteLLM for OpenAI, Anthropic, Ollama, OpenRouter
+    # Use LiteLLM for OpenAI, Anthropic, Ollama, OpenRouter, DeepSeek
     if config.provider == "openai":
         litellm_model = f"openai/{resolved_model}"
     elif config.provider == "anthropic":
@@ -268,13 +269,23 @@ def _get_configured_model_from_config(config: Any) -> Any:
         litellm_model = f"ollama_chat/{resolved_model}"
     elif config.provider == "openrouter":
         litellm_model = f"openrouter/{resolved_model}"
+    elif config.provider == "deepseek":
+        litellm_model = f"deepseek/{resolved_model}"
     else:
         litellm_model = resolved_model
+
+    # DeepSeek's reasoning models spend a variable, sometimes very large, share of
+    # the output token budget on chain-of-thought before emitting the final JSON
+    # answer; capping reasoning effort leaves reliable headroom for the answer
+    # itself instead of truncating mid-thought.
+    extra_litellm_kwargs: dict = (
+        {"reasoning_effort": "high"} if config.provider == "deepseek" else {}
+    )
 
     try:
         from google.adk.models.lite_llm import LiteLlm
 
-        return LiteLlm(model=litellm_model)
+        return LiteLlm(model=litellm_model, **extra_litellm_kwargs)
     except ImportError:
         # Fallback if ADK LiteLLM not available
         return config.model

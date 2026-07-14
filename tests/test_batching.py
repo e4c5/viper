@@ -2,8 +2,6 @@
 
 from textwrap import dedent
 
-import pytest
-
 from code_review.batching import (
     build_review_batch_budget,
     build_review_batches,
@@ -163,15 +161,68 @@ def test_split_file_diff_into_segments_splits_oversized_single_hunk_line():
     assert all("@@ -1,0 +1,1 @@" in segment.diff_text for segment in segments)
 
 
-def test_split_file_diff_into_segments_raises_when_wrapper_overhead_exceeds_budget():
+def test_split_file_diff_into_segments_degrades_when_wrapper_overhead_exceeds_budget(
+    caplog,
+):
+    """When even the smallest possible fragment can't fit the budget (the fixed hunk
+    header/path rendering overhead alone exceeds it), splitting must degrade to the
+    smallest achievable fragment and log a warning instead of raising and crashing the
+    whole review run.
+    """
     diff_text = _file_diff("big.py", "+x", header="@@ -1,0 +1,1 @@")
 
-    with pytest.raises(ValueError, match="Cannot split diff line within segment budget"):
-        split_file_diff_into_segments(
+    with caplog.at_level("WARNING"):
+        segments = split_file_diff_into_segments(
             "big.py",
             diff_text,
             segment_budget_tokens=1,
         )
+
+    assert len(segments) >= 1
+    assert any(
+        "exceeds segment budget even at minimum size" in record.message
+        for record in caplog.records
+    )
+
+
+def test_split_long_line_degrades_to_smallest_fragment_below_floor(caplog):
+    """Unit-level check on `_split_long_line`: when the estimator reports a fixed cost
+    that exceeds the budget no matter how short the fragment is (simulating rendering
+    overhead like a hunk header/path that can't be reduced by shortening the line),
+    it must return the smallest fragment achievable rather than raising.
+    """
+    from code_review.batching import _split_long_line
+
+    line = "abcdef"
+
+    def estimate_with_fixed_overhead(fragment: str) -> int:
+        # Even an empty/1-char fragment cost 100 tokens of "overhead" - unsplittable
+        # within a budget of 10, regardless of fragment length.
+        return 100 + len(fragment)
+
+    with caplog.at_level("WARNING"):
+        fragments = _split_long_line(line, 10, estimate_with_fixed_overhead)
+
+    assert "".join(fragments) == line
+    assert all(len(fragment) == 1 for fragment in fragments)
+    assert any(
+        "exceeds segment budget even at minimum size" in record.message
+        for record in caplog.records
+    )
+
+
+def test_split_long_line_unaffected_for_achievable_budget():
+    """Normal case (budget is achievable) must be unchanged: no warning, and fragments
+    fit within budget.
+    """
+    from code_review.batching import _split_long_line
+
+    line = "x" * 50
+
+    fragments = _split_long_line(line, 10, len)
+
+    assert "".join(fragments) == line
+    assert all(len(fragment) <= 10 for fragment in fragments)
 
 
 def test_split_file_diff_into_segments_falls_back_when_no_hunks_exist():

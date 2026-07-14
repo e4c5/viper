@@ -103,6 +103,28 @@ def test_create_review_agent_output_key_omitted_when_none(
 
 
 @patch("google.adk.agents.Agent")
+@patch("code_review.agent.agent.get_llm_config")
+def test_create_review_agent_deepseek_omits_output_schema(
+    mock_get_llm_config, mock_agent_cls
+) -> None:
+    """DeepSeek's API rejects ADK's strict json_schema response_format, so
+    output_schema (and output_key, which depends on it) must be omitted; the
+    prompt's JSON-format instructions plus raw-text parsing carry the load instead.
+    """
+    provider = MagicMock()
+    mock_get_llm_config.return_value = MagicMock(
+        provider="deepseek", temperature=0.0, max_output_tokens=65_000
+    )
+    mock_agent_cls.return_value = MagicMock()
+
+    create_review_agent(provider, slim_output=True, output_key="findings_result")
+
+    _, kwargs = mock_agent_cls.call_args
+    assert "output_schema" not in kwargs
+    assert "output_key" not in kwargs
+
+
+@patch("google.adk.agents.Agent")
 @patch("code_review.agent.agent.get_code_review_app_config")
 @patch("code_review.agent.agent.get_llm_config")
 def test_create_review_agent_adds_visible_lines_override_when_enabled(

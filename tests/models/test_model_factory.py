@@ -115,6 +115,53 @@ def test_get_configured_model_openrouter_uses_litellm_or_fallback(mock_get_confi
 
 
 @patch("code_review.models.get_llm_config")
+def test_get_configured_model_deepseek_uses_litellm_or_fallback(mock_get_config):
+    mock_get_config.return_value = MagicMock(
+        provider="deepseek", model="deepseek-chat", api_key=None
+    )
+    result = get_configured_model()
+    # Either LiteLlm instance or model string if ImportError
+    if hasattr(result, "model"):
+        assert result.model == "deepseek/deepseek-chat"
+    else:
+        assert result == "deepseek-chat"
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_configured_model_deepseek_injects_api_key_env(mock_get_config):
+    from pydantic import SecretStr
+
+    mock_get_config.return_value = MagicMock(
+        provider="deepseek", model="deepseek-chat", api_key=SecretStr("sk-deepseek")
+    )
+    with patch.dict(os.environ, {}, clear=False):
+        get_configured_model()
+        assert os.environ.get("DEEPSEEK_API_KEY") == "sk-deepseek"
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_configured_model_deepseek_caps_reasoning_effort(mock_get_config):
+    """DeepSeek's reasoning can consume the whole output budget before emitting
+    JSON; capping reasoning_effort leaves reliable headroom for the answer."""
+    mock_get_config.return_value = MagicMock(
+        provider="deepseek", model="deepseek-v4-pro", api_key=None
+    )
+    result = get_configured_model()
+    if hasattr(result, "_additional_args"):
+        assert result._additional_args.get("reasoning_effort") == "high"
+
+
+@patch("code_review.models.get_llm_config")
+def test_get_configured_model_non_deepseek_omits_reasoning_effort(mock_get_config):
+    mock_get_config.return_value = MagicMock(
+        provider="openrouter", model="gpt-4.1-mini", api_key=None
+    )
+    result = get_configured_model()
+    if hasattr(result, "_additional_args"):
+        assert "reasoning_effort" not in result._additional_args
+
+
+@patch("code_review.models.get_llm_config")
 def test_get_context_window(mock_get_config):
     mock_get_config.return_value = MagicMock(context_window=64_000, api_key=None)
     assert get_context_window() == 64_000
@@ -153,6 +200,16 @@ def test_get_model_metadata_refreshed_gemini_limits():
     assert metadata is not None
     assert metadata.context_window_tokens == 200_000
     assert metadata.max_output_tokens_default == 65_536
+
+
+def test_get_model_metadata_deepseek_v4_pro_raised_output_budget():
+    """max_output_tokens_default must exceed the 4096 config default by a wide
+    margin: DeepSeek's reasoning alone consumed 2400-3700 tokens in testing,
+    leaving too little room for the JSON answer at the old default."""
+    metadata = get_model_metadata("deepseek", "deepseek-v4-pro")
+
+    assert metadata is not None
+    assert metadata.max_output_tokens_default >= 16_000
 
 
 def test_pr_context_gitlab_url_strips_api_prefix():

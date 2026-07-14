@@ -120,7 +120,9 @@ class LLMConfig(BaseSettings):
     # See note above: we do not auto-load .env; only real env vars are used.
     model_config = SettingsConfigDict(env_prefix="LLM_", extra="ignore")
 
-    provider: Literal["gemini", "openai", "anthropic", "ollama", "vertex", "openrouter"] = "gemini"
+    provider: Literal["gemini", "openai", "anthropic", "ollama", "vertex", "openrouter", "deepseek"] = (
+        "gemini"
+    )
     api_key: SecretStr | None = Field(
         default=None,
         description=(
@@ -174,9 +176,9 @@ class TaskLLMConfig(BaseSettings):
 
     model_config = SettingsConfigDict(extra="ignore")
 
-    provider: Literal["gemini", "openai", "anthropic", "ollama", "vertex", "openrouter"] | None = (
-        None
-    )
+    provider: Literal[
+        "gemini", "openai", "anthropic", "ollama", "vertex", "openrouter", "deepseek"
+    ] | None = None
     api_key: SecretStr | None = None
     model: str | None = None
 

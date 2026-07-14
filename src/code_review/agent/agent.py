@@ -459,6 +459,14 @@ EMBEDDED_DIFF_REVIEW_INSTRUCTION = (
 )
 
 
+# Providers whose API currently rejects ADK's strict `json_schema` response_format
+# (google-adk always requests it via LiteLLM when output_schema is set, with no
+# fallback to plain `json_object` mode). For these, we omit output_schema and rely
+# on the prompt's JSON-format instructions plus the raw-text JSON parsing fallback
+# already used when ADK's structured output_key state is unavailable.
+_PROVIDERS_WITHOUT_STRUCTURED_OUTPUT = {"deepseek"}
+
+
 def create_review_agent(
     provider: ProviderInterface,
     review_standards: str = "",
@@ -528,11 +536,12 @@ def create_review_agent(
         "name": "code_review_agent",
         "instruction": instruction,
         "tools": [],
-        "output_schema": FindingsBatchV1,
         "generate_content_config": generate_content_config,
         "before_model_callback": _before_model_callback,
         "after_model_callback": _after_model_callback,
     }
-    if output_key is not None:
-        agent_kwargs["output_key"] = output_key
+    if llm_cfg.provider not in _PROVIDERS_WITHOUT_STRUCTURED_OUTPUT:
+        agent_kwargs["output_schema"] = FindingsBatchV1
+        if output_key is not None:
+            agent_kwargs["output_key"] = output_key
     return Agent(**agent_kwargs)
