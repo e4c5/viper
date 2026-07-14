@@ -286,6 +286,30 @@ def test_split_summary_for_pr_description_prefers_last_summary_heading():
     assert "as above" not in desc
 
 
+def test_split_summary_for_pr_description_ignores_later_summary_of_changes_heading():
+    """A later '### Summary of Changes' subsection must not be mistaken for
+    the real Summary heading and used to discard the actual Summary/
+    Description block."""
+    text = (
+        "## Summary\n"
+        "No specific issues were identified in this incremental update.\n\n"
+        "## Description\n"
+        "This update adds two management commands.\n\n"
+        "## Walkthrough\n"
+        "### Summary of Changes\n"
+        "Some detailed narrative here."
+    )
+    desc, comment = split_summary_for_pr_description(text)
+    assert desc == (
+        "## Summary\n"
+        "No specific issues were identified in this incremental update.\n\n"
+        "## Description\n"
+        "This update adds two management commands."
+    )
+    assert comment.startswith("## Walkthrough")
+    assert "### Summary of Changes" in comment
+
+
 def test_split_summary_for_pr_description_strips_reasoning_before_walkthrough():
     text = (
         "Let me think through this diff carefully before writing the summary.\n\n"

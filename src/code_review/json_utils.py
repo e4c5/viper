@@ -47,14 +47,53 @@ def _extract_balanced_json_objects(text: str) -> list[str]:
 
     Brace counting ignores braces inside double-quoted strings so that prose
     or code snippets containing literal `{`/`}` characters don't throw off
-    matching of the actual JSON object(s).
+    matching of the actual JSON object(s). Each `{` is tried as a fresh
+    candidate start: an earlier unmatched/malformed `{` (e.g. from stray
+    prose) doesn't poison the scan for a later, well-formed object, since we
+    restart the attempt at the next `{` instead of carrying its depth
+    forward.
     """
     objects: list[str] = []
-    depth = 0
-    start: int | None = None
+    i = 0
+    n = len(text)
     in_string = False
     escape = False
-    for i, ch in enumerate(text):
+    while i < n:
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            i += 1
+            continue
+        if ch == "{":
+            end = _find_balanced_end(text, i)
+            if end is not None:
+                objects.append(text[i : end + 1])
+                i = end + 1
+                continue
+        i += 1
+    return objects
+
+
+def _find_balanced_end(text: str, start: int) -> int | None:
+    """Return the index of the closing brace matching text[start] == "{".
+
+    Returns None if the brace opened at `start` is never closed (accounting
+    for nested braces and skipping over braces inside quoted strings).
+    """
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
         if in_string:
             if escape:
                 escape = False
@@ -65,18 +104,13 @@ def _extract_balanced_json_objects(text: str) -> list[str]:
             continue
         if ch == '"':
             in_string = True
-            continue
-        if ch == "{":
-            if depth == 0:
-                start = i
+        elif ch == "{":
             depth += 1
         elif ch == "}":
-            if depth > 0:
-                depth -= 1
-                if depth == 0 and start is not None:
-                    objects.append(text[start : i + 1])
-                    start = None
-    return objects
+            depth -= 1
+            if depth == 0:
+                return i
+    return None
 
 
 def _extract_first_jsonish_fence(text: str) -> str | None:

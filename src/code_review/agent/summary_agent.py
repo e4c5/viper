@@ -212,7 +212,8 @@ def split_summary_for_pr_description(full_text: str) -> tuple[str, str]:
     # land on the model's actual answer rather than an earlier draft/mention.
     summary_matches = list(
         re.finditer(
-            r'^[ \t]*(?:#{1,6}[ \t]+|\d+\.[ \t]+\*\*|\*\*)[ \t]*Summary\b',
+            r'^[ \t]*(?:#{1,6}[ \t]+|\d+\.[ \t]+\*\*|\*\*)[ \t]*Summary'
+            r'(?:\*\*)?[ \t]*(?:#{1,6})?[ \t]*$',
             full_text,
             re.MULTILINE | re.IGNORECASE,
         )

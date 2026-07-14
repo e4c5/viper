@@ -64,6 +64,17 @@ def test_iter_json_candidates_ignores_braces_inside_quoted_strings():
     assert '{not json}' not in candidates
 
 
+def test_iter_json_candidates_recovers_from_unmatched_brace_before_valid_object():
+    """An earlier stray/unmatched '{' in prose (e.g. reasoning that mentions
+    a brace without closing it) must not prevent a later, well-formed JSON
+    object from being extracted."""
+    text = 'Reasoning has a stray { brace here. Final answer: {"findings": []}'
+
+    candidates = list(iter_json_candidates(text, include_embedded_objects=True))
+
+    assert '{"findings": []}' in candidates
+
+
 def test_iter_json_candidates_embedded_objects_off_by_default():
     """Callers like reply-dismissal verdict parsing deliberately want to reject
     messy prefixed/suffixed text rather than salvage an embedded object from it."""
