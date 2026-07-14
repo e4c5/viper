@@ -50,6 +50,17 @@ def test_parse_findings_json_structured_object():
     assert out["findings"][0]["path"] == "z"
 
 
+def test_parse_findings_json_recovers_from_unmatched_brace_before_valid_object():
+    """A stray unmatched '{' in reasoning prose must not prevent the later,
+    well-formed findings object from being parsed."""
+    text = (
+        'Reasoning has a stray { brace mentioned here. Final answer: '
+        '{"findings":[{"path":"y","line":2,"severity":"medium","code":"s","message":"msg"}]}'
+    )
+    out = _parse_findings_json(text)
+    assert out["findings"][0]["path"] == "y"
+
+
 def test_findings_from_response_valid():
     text = '{"findings":[{"path":"p","line":3,"severity":"high","code":"x","message":"fix it"}]}'
     findings = _findings_from_response(text)

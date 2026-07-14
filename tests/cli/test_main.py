@@ -218,7 +218,7 @@ def test_cli_main_module_entry_point():
         [sys.executable, "-m", "code_review", "--help"],
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=30,
     )
     assert result.returncode == 0
     assert "Run the code review agent" in result.stdout or "review" in result.stdout

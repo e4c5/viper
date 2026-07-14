@@ -235,3 +235,88 @@ def test_split_summary_for_pr_description_bold():
     desc, comment = split_summary_for_pr_description(text)
     assert desc == "**Summary**\nSum\n\n**Description**\nDesc"
     assert comment == "**Walkthrough**\nWalk"
+
+
+def test_split_summary_for_pr_description_strips_leading_reasoning_prose():
+    """Reasoning models (e.g. DeepSeek) may emit chain-of-thought prose before
+    the actual Markdown summary; it must never leak into the posted comment."""
+    text = (
+        "We need to produce a summary for an incremental review update. There "
+        "are no specific findings, so we must produce a summary with only "
+        '"Summary" and "Description". Let\'s craft a concise summary.\n\n'
+        "## Summary\n"
+        "No specific issues were identified in this incremental update.\n\n"
+        "## Description\n"
+        "This update adds two management commands."
+    )
+    desc, comment = split_summary_for_pr_description(text)
+    assert desc == (
+        "## Summary\n"
+        "No specific issues were identified in this incremental update.\n\n"
+        "## Description\n"
+        "This update adds two management commands."
+    )
+    assert comment == ""
+    assert "We need to produce" not in desc
+
+
+def test_split_summary_for_pr_description_prefers_last_summary_heading():
+    """Real captured deepseek-v4-pro response: the model's reasoning narrates
+    about the format it plans to write, including a literal '## Summary'
+    mention, before the actual final answer. Must not split at that false
+    positive — the LAST '## Summary' heading is the real one."""
+    text = (
+        'So final answer: \n## Summary\nNo specific issues were identified.\n\n'
+        '## Description\n... as above.\n\n'
+        "Keep technical and objective. So output only these two sections.\n"
+        "## Summary\n"
+        "No specific issues were identified in this incremental update.\n\n"
+        "## Description\n"
+        "This update adds two management commands."
+    )
+    desc, comment = split_summary_for_pr_description(text)
+    assert desc == (
+        "## Summary\n"
+        "No specific issues were identified in this incremental update.\n\n"
+        "## Description\n"
+        "This update adds two management commands."
+    )
+    assert comment == ""
+    assert "final answer" not in desc
+    assert "as above" not in desc
+
+
+def test_split_summary_for_pr_description_ignores_later_summary_of_changes_heading():
+    """A later '### Summary of Changes' subsection must not be mistaken for
+    the real Summary heading and used to discard the actual Summary/
+    Description block."""
+    text = (
+        "## Summary\n"
+        "No specific issues were identified in this incremental update.\n\n"
+        "## Description\n"
+        "This update adds two management commands.\n\n"
+        "## Walkthrough\n"
+        "### Summary of Changes\n"
+        "Some detailed narrative here."
+    )
+    desc, comment = split_summary_for_pr_description(text)
+    assert desc == (
+        "## Summary\n"
+        "No specific issues were identified in this incremental update.\n\n"
+        "## Description\n"
+        "This update adds two management commands."
+    )
+    assert comment.startswith("## Walkthrough")
+    assert "### Summary of Changes" in comment
+
+
+def test_split_summary_for_pr_description_strips_reasoning_before_walkthrough():
+    text = (
+        "Let me think through this diff carefully before writing the summary.\n\n"
+        "## Summary\nSum\n\n## Description\nDesc\n\n## Walkthrough\nWalk"
+    )
+    desc, comment = split_summary_for_pr_description(text)
+    assert desc == "## Summary\nSum\n\n## Description\nDesc"
+    assert comment == "## Walkthrough\nWalk"
+    assert "Let me think" not in desc
+    assert "Let me think" not in comment

@@ -250,7 +250,7 @@ def _run_agent_and_collect_responses(
 def _parse_findings_json(text: str) -> object:
     """Parse a structured findings object from raw text or a fenced JSON block."""
     last_error: json.JSONDecodeError | None = None
-    for raw in iter_json_candidates(text):
+    for raw in iter_json_candidates(text, include_embedded_objects=True):
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
