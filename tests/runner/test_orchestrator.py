@@ -121,8 +121,7 @@ def test_canonical_orchestrator_imports_without_circular_dependency():
 @contextmanager
 def _orchestrator_run_env(
     findings_json: str = (
-        '{"findings":[{"path":"foo.py","line":1,"severity":"low","code":"c",'
-        '"message":"m"}]}'
+        '{"findings":[{"path":"foo.py","line":1,"severity":"low","code":"c","message":"m"}]}'
     ),
 ):
     """Context manager: patch config/provider and ADK Runner; yield (provider, mock_runner)."""
@@ -1045,9 +1044,7 @@ def test_post_findings_and_summary_returns_zero_when_dry_run():
     )
     provider = MagicMock()
     to_post = []
-    count = handler.post_findings_and_summary(
-        provider, "", to_post, MagicMock(), MagicMock(), []
-    )
+    count = handler.post_findings_and_summary(provider, "", to_post, MagicMock(), MagicMock(), [])
     assert count == 0
     provider.post_review_comments.assert_not_called()
 
@@ -1205,12 +1202,7 @@ def test_setup_review_environment_skips_started_review_comment_when_already_post
     provider.get_pr_info.return_value = SimpleNamespace(description="")
     provider.get_pr_files.return_value = [FileInfo(path="foo.py", status="modified")]
     provider.get_pr_diff.return_value = (
-        "diff --git a/foo.py b/foo.py\n"
-        "--- a/foo.py\n"
-        "+++ b/foo.py\n"
-        "@@ -1,1 +1,1 @@\n"
-        "-old\n"
-        "+new\n"
+        "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py\n@@ -1,1 +1,1 @@\n-old\n+new\n"
     )
     provider.post_pr_summary_comment = MagicMock()
 
@@ -1361,7 +1353,7 @@ def test_build_review_batches_preserves_annotations_for_segment_diffs():
     assert "12: " in annotated
     removed_lines = [ln for ln in annotated.splitlines() if "-old_11" in ln]
     assert removed_lines, "Expected '-old_11' missing from the annotated segment text"
-    assert all(not ln.strip().split(':')[0].isdigit() for ln in removed_lines)
+    assert all(not ln.strip().split(":")[0].isdigit() for ln in removed_lines)
 
 
 def test_build_review_batches_for_scope_falls_back_when_diff_budget_is_zero():
@@ -1389,10 +1381,9 @@ def test_build_review_batches_for_scope_falls_back_when_diff_budget_is_zero():
     assert batches[0].segments[0].estimated_tokens > 0
 
 
-def test_split_batch_for_retry_resegments_single_large_segment():
+def _large_retry_batch():
     from code_review.batching import ReviewBatch, ReviewSegment
     from code_review.diff.utils import estimate_tokens
-    from code_review.orchestration.execution import _split_batch_for_retry
 
     first_hunk = "\n".join(
         f"+very_long_added_line_number_{i:02d}_with_extra_context_to_force_segmentation"
@@ -1414,7 +1405,7 @@ def test_split_batch_for_retry_resegments_single_large_segment():
         f"{second_hunk}\n"
     )
     estimated_tokens = estimate_tokens(diff_text)
-    batch = ReviewBatch(
+    return ReviewBatch(
         batch_index=0,
         estimated_tokens=estimated_tokens,
         segments=(
@@ -1430,6 +1421,11 @@ def test_split_batch_for_retry_resegments_single_large_segment():
         paths=("foo.py",),
     )
 
+
+def test_split_batch_for_retry_resegments_single_large_segment():
+    from code_review.orchestration.execution import _split_batch_for_retry
+
+    batch = _large_retry_batch()
     split_batches = _split_batch_for_retry(batch, attempt=1, max_retries=2)
 
     assert len(split_batches) > 1
@@ -1449,45 +1445,9 @@ def test_split_batch_for_retry_stops_splitting_once_max_retries_reached():
     below the unavoidable rendering-overhead floor in `_split_long_line` and crashing
     the whole review run with an uncaught ValueError.
     """
-    from code_review.batching import ReviewBatch, ReviewSegment
-    from code_review.diff.utils import estimate_tokens
     from code_review.orchestration.execution import _split_batch_for_retry
 
-    first_hunk = "\n".join(
-        f"+very_long_added_line_number_{i:02d}_with_extra_context_to_force_segmentation"
-        for i in range(1, 25)
-    )
-    second_hunk = "\n".join(
-        f"+second_hunk_long_added_line_number_{i:02d}_with_extra_context_to_force_segmentation"
-        for i in range(25, 49)
-    )
-    diff_text = (
-        "diff --git a/foo.py b/foo.py\n"
-        "--- a/foo.py\n"
-        "+++ b/foo.py\n"
-        "@@ -1,1 +1,25 @@\n"
-        "-old_line\n"
-        f"{first_hunk}\n"
-        "@@ -40,1 +64,25 @@\n"
-        "-old_line_2\n"
-        f"{second_hunk}\n"
-    )
-    estimated_tokens = estimate_tokens(diff_text)
-    batch = ReviewBatch(
-        batch_index=0,
-        estimated_tokens=estimated_tokens,
-        segments=(
-            ReviewSegment(
-                path="foo.py",
-                diff_text=diff_text,
-                estimated_tokens=estimated_tokens,
-                segment_index=0,
-                total_segments=1,
-                split_strategy="whole_file",
-            ),
-        ),
-        paths=("foo.py",),
-    )
+    batch = _large_retry_batch()
 
     # attempt has already reached max_retries: no further splitting should occur, even
     # though the batch is still large enough to be re-segmented.
@@ -1569,9 +1529,7 @@ def test_run_isolated_batches_with_retry_gives_up_after_max_retries_of_splitting
             execution_mod, "create_agent_and_runner", side_effect=fake_create_agent_and_runner
         ),
         patch.object(execution_mod, "_attach_batch_user_messages", side_effect=fake_attach),
-        patch.object(
-            execution_mod, "build_batch_review_content", side_effect=fake_build_content
-        ),
+        patch.object(execution_mod, "build_batch_review_content", side_effect=fake_build_content),
         patch.object(
             execution_mod.runner_mod,
             "_run_agent_and_collect_responses",
@@ -1709,12 +1667,12 @@ def test_maybe_generate_and_post_summary_skips_overwrite_when_description_update
 
     provider = MagicMock()
     pr_ctx = PRContext("o", "r", 1)
-    
+
     env = MagicMock()
     env.pr_info = MagicMock(description="")
     env.incremental_base_sha = ""
     env.paths = ["a.py"]
-    
+
     handler = StandardReviewHandler(
         pr_ctx,
         dry_run=False,
@@ -1723,7 +1681,7 @@ def test_maybe_generate_and_post_summary_skips_overwrite_when_description_update
         review_decision_handler=MagicMock(),
         result_builder=MagicMock(),
     )
-    
+
     with (
         patch(
             "code_review.agent.summary_agent.split_summary_for_pr_description",
@@ -1736,16 +1694,15 @@ def test_maybe_generate_and_post_summary_skips_overwrite_when_description_update
         ),
         patch("code_review.orchestration.standard_review.CommentPoster") as MockPoster,
     ):
-        
         poster_instance = MagicMock()
         MockPoster.return_value = poster_instance
-        
+
         current_pr_info = MagicMock()
         current_pr_info.description = "Someone added this in the meantime!"
         provider.get_pr_info.return_value = current_pr_info
-        
+
         handler._maybe_generate_and_post_summary(provider, env, [(MagicMock(), True)])
-        
+
         poster_instance.update_pr_description.assert_not_called()
         poster_instance.post_pr_summary.assert_called_once_with("New Comment")
 
@@ -1758,12 +1715,12 @@ def test_maybe_generate_and_post_summary_posts_walkthrough_when_findings_empty()
 
     provider = MagicMock()
     pr_ctx = PRContext("o", "r", 1)
-    
+
     env = MagicMock()
     env.pr_info = MagicMock(description="")
     env.incremental_base_sha = ""
     env.paths = ["a.py"]
-    
+
     handler = StandardReviewHandler(
         pr_ctx,
         dry_run=False,
@@ -1772,7 +1729,7 @@ def test_maybe_generate_and_post_summary_posts_walkthrough_when_findings_empty()
         review_decision_handler=MagicMock(),
         result_builder=MagicMock(),
     )
-    
+
     with (
         patch(
             "code_review.agent.summary_agent.split_summary_for_pr_description",
@@ -1785,15 +1742,14 @@ def test_maybe_generate_and_post_summary_posts_walkthrough_when_findings_empty()
         ),
         patch("code_review.orchestration.standard_review.CommentPoster") as MockPoster,
     ):
-        
         poster_instance = MagicMock()
         MockPoster.return_value = poster_instance
-        
+
         current_pr_info = MagicMock()
         current_pr_info.description = ""
         provider.get_pr_info.return_value = current_pr_info
-        
+
         handler._maybe_generate_and_post_summary(provider, env, [])
-        
+
         poster_instance.update_pr_description.assert_called_once_with("New Desc")
         poster_instance.post_pr_summary.assert_called_once_with("Walkthrough Comment")

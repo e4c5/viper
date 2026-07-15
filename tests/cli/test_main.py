@@ -96,6 +96,7 @@ def test_cli_review_decision_only_optioninfo_not_truthy_for_head_sha():
     ):
         mock_app.return_value = SimpleNamespace(review_decision_only=False)
         mock_run.return_value = []
+        decision_only_option = typer.Option(False, "--review-decision-only")
         with pytest.raises(ClickExit) as exc_info:
             review(
                 owner="o",
@@ -103,7 +104,7 @@ def test_cli_review_decision_only_optioninfo_not_truthy_for_head_sha():
                 pr=1,
                 head_sha="",
                 dry_run=False,
-                review_decision_only=typer.Option(False, "--review-decision-only"),
+                review_decision_only=decision_only_option,
             )
         assert exc_info.value.exit_code == 1
         mock_run.assert_not_called()

@@ -44,8 +44,12 @@ pipeline {
             steps {
                 script {
                     // Optional one-off overrides (params must not reuse env names — Jenkins would shadow folder env)
-                    if (params.SCM_PROVIDER_OVERRIDE?.trim()) env.SCM_PROVIDER = params.SCM_PROVIDER_OVERRIDE.trim()
-                    if (params.SCM_URL_OVERRIDE?.trim()) env.SCM_URL = params.SCM_URL_OVERRIDE.trim()
+                    if (params.SCM_PROVIDER_OVERRIDE?.trim()) {
+                        env.SCM_PROVIDER = params.SCM_PROVIDER_OVERRIDE.trim()
+                    }
+                    if (params.SCM_URL_OVERRIDE?.trim()) {
+                        env.SCM_URL = params.SCM_URL_OVERRIDE.trim()
+                    }
 
                     def image = env.IMAGE_NAME?.trim() ?: params.IMAGE_NAME?.trim() ?: 'code-review-agent'
                     def projectName = env.COMPOSE_PROJECT_NAME ?: params.COMPOSE_PROJECT_NAME
@@ -73,8 +77,11 @@ pipeline {
 
                     def scmProvider = env.SCM_PROVIDER ?: 'gitea'
                     // Bitbucket Data Center sends eventKey like pr:opened; infer provider if not set
-                    def isBitbucket = (scmProvider == 'bitbucket_server') || (prAction?.startsWith('pr:'))
-                    if (isBitbucket && scmProvider != 'bitbucket_server') scmProvider = 'bitbucket_server'
+                    final String bitbucketServer = 'bitbucket_server'
+                    def isBitbucket = (scmProvider == bitbucketServer) || (prAction?.startsWith('pr:'))
+                    if (isBitbucket && scmProvider != bitbucketServer) {
+                        scmProvider = bitbucketServer
+                    }
                     def scmUrl = isBitbucket
                         ? (env.SCM_URL ?: '')
                         : (env.SCM_URL ?: 'http://gitea:3000')

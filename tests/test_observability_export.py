@@ -41,13 +41,10 @@ def test_finish_run_no_op_without_prometheus_env():
 
 def test_get_prometheus_registry_none_without_env():
     """get_prometheus_registry returns None when CODE_REVIEW_METRICS not set."""
-    try:
-        reg = get_prometheus_registry()
-        # Without CODE_REVIEW_METRICS=prometheus we expect None (or a Registry
-        # if another test set it).
-        assert reg is None or hasattr(reg, "register")
-    except Exception:
-        pytest.fail("get_prometheus_registry should not raise when observability deps missing")
+    reg = get_prometheus_registry()
+    # Without CODE_REVIEW_METRICS=prometheus we expect None (or a Registry
+    # if another test set it).
+    assert reg is None or hasattr(reg, "register")
 
 
 def test_run_handle_end_with_no_span():

@@ -13,7 +13,7 @@ def adminPass = env.get('JENKINS_ADMIN_PASS', 'admin')
 
 def jenkins = Jenkins.get()
 
-if (jenkins.getSecurityRealm() instanceof HudsonPrivateSecurityRealm == false) {
+if (!(jenkins.getSecurityRealm() instanceof HudsonPrivateSecurityRealm)) {
     def realm = new HudsonPrivateSecurityRealm(false)
     realm.createAccount(adminUser, adminPass)
     jenkins.setSecurityRealm(realm)

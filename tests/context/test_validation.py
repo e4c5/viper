@@ -83,8 +83,9 @@ def test_github_enabled_with_token_passes():
 
 def test_github_enabled_no_token_no_github_scm_raises():
     ctx = _make_ctx(github_issues_enabled=True, github_token=None)
+    scm = _make_scm(provider="gitlab")
     with pytest.raises(ContextAwareFatalError, match="CONTEXT_GITHUB_ISSUES_ENABLED"):
-        validate_context_aware_sources(ctx, _make_scm(provider="gitlab"))
+        validate_context_aware_sources(ctx, scm)
 
 
 # ---------------------------------------------------------------------------
@@ -104,8 +105,9 @@ def test_gitlab_enabled_with_token_passes():
 
 def test_gitlab_enabled_no_token_no_gitlab_scm_raises():
     ctx = _make_ctx(gitlab_issues_enabled=True, gitlab_token=None)
+    scm = _make_scm(provider="github")
     with pytest.raises(ContextAwareFatalError, match="CONTEXT_GITLAB_ISSUES_ENABLED"):
-        validate_context_aware_sources(ctx, _make_scm(provider="github"))
+        validate_context_aware_sources(ctx, scm)
 
 
 # ---------------------------------------------------------------------------
@@ -130,8 +132,9 @@ def test_jira_enabled_missing_url_raises():
         atlassian_email="u@e.com",
         atlassian_token=_secret("t"),
     )
+    scm = _make_scm()
     with pytest.raises(ContextAwareFatalError, match="CONTEXT_ATLASSIAN_URL"):
-        validate_context_aware_sources(ctx, _make_scm())
+        validate_context_aware_sources(ctx, scm)
 
 
 def test_jira_enabled_missing_email_raises():
@@ -141,8 +144,9 @@ def test_jira_enabled_missing_email_raises():
         atlassian_email="",
         atlassian_token=_secret("t"),
     )
+    scm = _make_scm()
     with pytest.raises(ContextAwareFatalError, match="CONTEXT_ATLASSIAN_EMAIL"):
-        validate_context_aware_sources(ctx, _make_scm())
+        validate_context_aware_sources(ctx, scm)
 
 
 def test_jira_enabled_missing_token_raises():
@@ -152,8 +156,9 @@ def test_jira_enabled_missing_token_raises():
         atlassian_email="user@example.com",
         atlassian_token=None,
     )
+    scm = _make_scm()
     with pytest.raises(ContextAwareFatalError, match="CONTEXT_ATLASSIAN_TOKEN"):
-        validate_context_aware_sources(ctx, _make_scm())
+        validate_context_aware_sources(ctx, scm)
 
 
 # ---------------------------------------------------------------------------
@@ -178,8 +183,9 @@ def test_confluence_enabled_missing_url_raises():
         atlassian_email="u@e.com",
         atlassian_token=_secret("t"),
     )
+    scm = _make_scm()
     with pytest.raises(ContextAwareFatalError, match="CONTEXT_ATLASSIAN_URL"):
-        validate_context_aware_sources(ctx, _make_scm())
+        validate_context_aware_sources(ctx, scm)
 
 
 def test_confluence_enabled_missing_email_raises():
@@ -189,8 +195,9 @@ def test_confluence_enabled_missing_email_raises():
         atlassian_email="",
         atlassian_token=_secret("t"),
     )
+    scm = _make_scm()
     with pytest.raises(ContextAwareFatalError, match="CONTEXT_ATLASSIAN_EMAIL"):
-        validate_context_aware_sources(ctx, _make_scm())
+        validate_context_aware_sources(ctx, scm)
 
 
 def test_confluence_enabled_missing_token_raises():
@@ -200,5 +207,6 @@ def test_confluence_enabled_missing_token_raises():
         atlassian_email="user@example.com",
         atlassian_token=None,
     )
+    scm = _make_scm()
     with pytest.raises(ContextAwareFatalError, match="CONTEXT_ATLASSIAN_TOKEN"):
-        validate_context_aware_sources(ctx, _make_scm())
+        validate_context_aware_sources(ctx, scm)

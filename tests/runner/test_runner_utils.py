@@ -43,8 +43,9 @@ async def test_collect_final_response_texts_async_wraps_partial_rate_limit_error
         exc=RateLimitError("HTTP 429 Too Many Requests"),
     )
 
+    content = MagicMock()
     with pytest.raises(PartialResponseCollectionError) as exc_info:
-        await _collect_final_response_texts_async(runner, "session-1", MagicMock())
+        await _collect_final_response_texts_async(runner, "session-1", content)
 
     assert exc_info.value.responses == [("batch_review_0", '{"findings":[]}')]
     assert isinstance(exc_info.value.cause, RateLimitError)
@@ -55,8 +56,9 @@ async def test_collect_final_response_texts_async_does_not_wrap_runtime_error_be
     runner = SimpleNamespace(agent=MagicMock())
     runner.run_async = _run_async_with(exc=RuntimeError("unexpected LLM error"))
 
+    content = MagicMock()
     with pytest.raises(RuntimeError, match="unexpected LLM error"):
-        await _collect_final_response_texts_async(runner, "session-1", MagicMock())
+        await _collect_final_response_texts_async(runner, "session-1", content)
 
 
 @pytest.mark.asyncio
@@ -67,8 +69,9 @@ async def test_collect_final_response_texts_async_wraps_post_event_runtime_error
         exc=RuntimeError("unexpected LLM error"),
     )
 
+    content = MagicMock()
     with pytest.raises(PartialResponseCollectionError) as exc_info:
-        await _collect_final_response_texts_async(runner, "session-1", MagicMock())
+        await _collect_final_response_texts_async(runner, "session-1", content)
 
     assert exc_info.value.responses == [("batch_review_0", '{"findings":[]}')]
     assert isinstance(exc_info.value.cause, RuntimeError)
@@ -87,8 +90,9 @@ async def test_collect_final_response_texts_async_wraps_validation_error_before_
     runner = SimpleNamespace(agent=MagicMock())
     runner.run_async = _run_async_with(exc=exc_to_raise)
 
+    content = MagicMock()
     with pytest.raises(PartialResponseCollectionError) as exc_info:
-        await _collect_final_response_texts_async(runner, "session-1", MagicMock())
+        await _collect_final_response_texts_async(runner, "session-1", content)
 
     assert exc_info.value.responses == []
     assert isinstance(exc_info.value.cause, PydanticValidationError)
@@ -97,6 +101,7 @@ async def test_collect_final_response_texts_async_wraps_validation_error_before_
 # ---------------------------------------------------------------------------
 # _read_output_key_findings_async / _get_output_key_findings
 # ---------------------------------------------------------------------------
+
 
 def _make_session(state: dict):
     session = MagicMock()
@@ -115,7 +120,9 @@ def _make_session_service(session=None, raise_exc=None):
 
 @pytest.mark.asyncio
 async def test_read_output_key_findings_returns_findings_from_dict():
-    raw = {"findings": [{"path": "a.py", "line": 1, "severity": "medium", "code": "x", "message": "m"}]}
+    raw = {
+        "findings": [{"path": "a.py", "line": 1, "severity": "medium", "code": "x", "message": "m"}]
+    }
     svc = _make_session_service(_make_session({"findings_result": raw}))
 
     result = await _read_output_key_findings_async(svc, "sid", "findings_result")
@@ -129,9 +136,7 @@ async def test_read_output_key_findings_returns_findings_from_dict():
 @pytest.mark.asyncio
 async def test_read_output_key_findings_validates_object_state_from_attributes():
     raw = SimpleNamespace(
-        findings=[
-            SimpleNamespace(path="a.py", line=1, severity="medium", code="x", message="m")
-        ]
+        findings=[SimpleNamespace(path="a.py", line=1, severity="medium", code="x", message="m")]
     )
     svc = _make_session_service(_make_session({"findings_result": raw}))
 
@@ -191,7 +196,11 @@ async def test_read_output_key_findings_returns_none_on_invalid_object_schema():
 
 
 def test_get_output_key_findings_sync_wrapper():
-    raw = {"findings": [{"path": "b.py", "line": 5, "severity": "high", "code": "sec", "message": "Issue"}]}
+    raw = {
+        "findings": [
+            {"path": "b.py", "line": 5, "severity": "high", "code": "sec", "message": "Issue"}
+        ]
+    }
     svc = _make_session_service(_make_session({"findings_result": raw}))
 
     result = _get_output_key_findings(svc, "sid", "findings_result")
