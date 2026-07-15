@@ -417,6 +417,49 @@ def _split_batch_for_retry(
     ]
 
 
+def _run_retry_batch(
+    pr_ctx: PRContext,
+    provider,
+    review_standards: str,
+    batch: ReviewBatch,
+    *,
+    context_brief_attached: bool,
+    prompt_suffix: str,
+    review_visible_lines: bool | None,
+    llm_config: LLMConfig | None,
+    attempt: int,
+) -> tuple[list[runner_mod.FindingV1], bool, bool]:
+    """Run one retry batch and return findings, malformed-output, and rate-limit flags."""
+    session_id, _session_service, runner = create_agent_and_runner(
+        pr_ctx,
+        provider,
+        review_standards,
+        [batch],
+        context_brief_attached=context_brief_attached,
+        review_visible_lines=review_visible_lines,
+        llm_config=llm_config,
+    )
+    _attach_batch_user_messages(
+        runner,
+        pr_ctx=pr_ctx,
+        batches=[batch],
+        prompt_suffix=prompt_suffix,
+        retry_attempt=attempt,
+    )
+    content = build_batch_review_content(pr_ctx=pr_ctx, batch_count=1, retry_attempt=attempt)
+    try:
+        responses = runner_mod._run_agent_and_collect_responses(runner, session_id, content)
+    except runner_mod.PartialResponseCollectionError as exc:
+        if isinstance(exc.cause, runner_mod.RateLimitError):
+            return [], False, True
+        raise exc.cause from exc
+
+    findings, failed_indexes = findings_from_batch_responses(responses)
+    missing_indexes = missing_batch_response_indexes(responses, 1)
+    failed_indexes.extend(index for index in missing_indexes if index not in failed_indexes)
+    return findings, bool(failed_indexes or not responses), False
+
+
 def _run_isolated_batches_with_retry(
     pr_ctx: PRContext,
     provider,
@@ -437,57 +480,30 @@ def _run_isolated_batches_with_retry(
     ]
     while pending:
         batch, attempt = pending.pop(0)
-        # single_batch_mode is intentionally NOT set here: the retry path must be as robust
-        # as possible. output_key + output_schema causes ADK to validate the LLM response
-        # during event iteration; if the response is truncated (MAX_TOKENS), the validation
-        # throws pydantic.ValidationError before the event is yielded, bypassing all retry
-        # logic. Without output_key, truncated responses flow through as normal text events
-        # and our existing parse-failure handling can retry them.
-        session_id, _session_service, runner = create_agent_and_runner(
+        findings, malformed, rate_limited = _run_retry_batch(
             pr_ctx,
             provider,
             review_standards,
-            [batch],
+            batch,
             context_brief_attached=context_brief_attached,
+            prompt_suffix=prompt_suffix,
             review_visible_lines=review_visible_lines,
             llm_config=llm_config,
+            attempt=attempt,
         )
-        _attach_batch_user_messages(
-            runner,
-            pr_ctx=pr_ctx,
-            batches=[batch],
-            prompt_suffix=prompt_suffix,
-            retry_attempt=attempt,
-        )
-        content = build_batch_review_content(
-            pr_ctx=pr_ctx,
-            batch_count=1,
-            retry_attempt=attempt,
-        )
-        try:
-            responses = runner_mod._run_agent_and_collect_responses(runner, session_id, content)
-        except runner_mod.PartialResponseCollectionError as exc:
-            if isinstance(exc.cause, runner_mod.RateLimitError):
-                runner_mod.logger.warning(
-                    "Rate-limited on batch paths=%s (attempt %d/%d): %s",
-                    ", ".join(batch.paths),
-                    attempt + 1,
-                    max_retries + 1,
-                    exc.cause,
-                )
-                if attempt < max_retries:
-                    pending.insert(0, (batch, attempt + 1))
-                else:
-                    runner_mod.logger.warning(
-                        "Skipping batch after max retries due to rate limits."
-                    )
-                continue
-            raise exc.cause from exc
-
-        findings, failed_indexes = findings_from_batch_responses(responses)
-        missing_indexes = missing_batch_response_indexes(responses, 1)
-        failed_indexes.extend(idx for idx in missing_indexes if idx not in failed_indexes)
-        if not failed_indexes and responses:
+        if rate_limited:
+            runner_mod.logger.warning(
+                "Rate-limited on batch paths=%s (attempt %d/%d).",
+                ", ".join(batch.paths),
+                attempt + 1,
+                max_retries + 1,
+            )
+            if attempt < max_retries:
+                pending.insert(0, (batch, attempt + 1))
+            else:
+                runner_mod.logger.warning("Skipping batch after max retries due to rate limits.")
+            continue
+        if not malformed:
             all_findings.extend(findings)
             continue
 

@@ -79,7 +79,9 @@ class PRContext:
                 )
                 return f"{web_base_url}/{self.owner}/{self.repo}/-/merge_requests/{self.pr_number}"
             case "bitbucket":
-                return f"https://bitbucket.org/{self.owner}/{self.repo}/pull-requests/{self.pr_number}"
+                return (
+                    f"https://bitbucket.org/{self.owner}/{self.repo}/pull-requests/{self.pr_number}"
+                )
             case "bitbucket_server":
                 return (
                     f"{base_url}/projects/{self.owner}/repos/{self.repo}"
@@ -108,8 +110,10 @@ class PRContext:
 
 def _model_metadata_resource_text() -> str:
     """Load the packaged JSON seed for model metadata."""
-    return resources.files("code_review").joinpath(_MODEL_METADATA_FILENAME).read_text(
-        encoding="utf-8"
+    return (
+        resources.files("code_review")
+        .joinpath(_MODEL_METADATA_FILENAME)
+        .read_text(encoding="utf-8")
     )
 
 
@@ -221,8 +225,8 @@ def _task_config(primary: Any, task: Any) -> Any:
     task_api_key = getattr(task, "api_key", None)
     if task_api_key is not None:
         api_key = task_api_key
-    elif provider == getattr(primary, "provider"):
-        api_key = getattr(primary, "api_key")
+    elif provider == primary.provider:
+        api_key = primary.api_key
     else:
         api_key = None
 
@@ -233,6 +237,34 @@ def _task_config(primary: Any, task: Any) -> Any:
     )
 
 
+def _apply_provider_api_key(provider: str, api_key_value: Any) -> None:
+    """Expose one configured provider key while restoring previously injected state."""
+    global _INJECTED_PROVIDER_API_ENV, _PREVIOUS_PROVIDER_API_VALUE
+
+    env_var = _PROVIDER_API_KEY_ENV.get(provider)
+    api_key = _secret_value(api_key_value)
+    if _INJECTED_PROVIDER_API_ENV and (_INJECTED_PROVIDER_API_ENV != env_var or not api_key):
+        _clear_injected_provider_api_env()
+    if not env_var or not api_key:
+        return
+    if _INJECTED_PROVIDER_API_ENV != env_var:
+        _PREVIOUS_PROVIDER_API_VALUE = os.environ.get(env_var)
+    os.environ[env_var] = api_key
+    _INJECTED_PROVIDER_API_ENV = env_var
+
+
+def _litellm_model_name(provider: str, model: str) -> str:
+    prefixes = {
+        "openai": "openai",
+        "anthropic": "anthropic",
+        "ollama": "ollama_chat",
+        "openrouter": "openrouter",
+        "deepseek": "deepseek",
+    }
+    prefix = prefixes.get(provider)
+    return f"{prefix}/{model}" if prefix else model
+
+
 def _get_configured_model_from_config(config: Any) -> Any:
     """
     Return the configured LLM instance for ADK from a config-like object.
@@ -241,38 +273,13 @@ def _get_configured_model_from_config(config: Any) -> Any:
     ADK/LiteLLM see it. Gemini/Vertex return model strings for ADK's native
     registry; other providers use ADK LiteLLM when available.
     """
-    global _INJECTED_PROVIDER_API_ENV, _PREVIOUS_PROVIDER_API_VALUE
-
-    env_var = _PROVIDER_API_KEY_ENV.get(config.provider)
-    api_key = _secret_value(config.api_key)
-
-    # Keep injected provider credentials scoped to the current config/provider call.
-    if _INJECTED_PROVIDER_API_ENV and (_INJECTED_PROVIDER_API_ENV != env_var or not api_key):
-        _clear_injected_provider_api_env()
-
-    if env_var and api_key:
-        if _INJECTED_PROVIDER_API_ENV != env_var:
-            _PREVIOUS_PROVIDER_API_VALUE = os.environ.get(env_var)
-        os.environ[env_var] = api_key
-        _INJECTED_PROVIDER_API_ENV = env_var
+    _apply_provider_api_key(config.provider, config.api_key)
 
     resolved_model = _MODEL_ALIASES.get((config.provider, config.model), config.model)
 
     if config.provider in {"gemini", "vertex"}:
         return resolved_model
-    # Use LiteLLM for OpenAI, Anthropic, Ollama, OpenRouter, DeepSeek
-    if config.provider == "openai":
-        litellm_model = f"openai/{resolved_model}"
-    elif config.provider == "anthropic":
-        litellm_model = f"anthropic/{resolved_model}"
-    elif config.provider == "ollama":
-        litellm_model = f"ollama_chat/{resolved_model}"
-    elif config.provider == "openrouter":
-        litellm_model = f"openrouter/{resolved_model}"
-    elif config.provider == "deepseek":
-        litellm_model = f"deepseek/{resolved_model}"
-    else:
-        litellm_model = resolved_model
+    litellm_model = _litellm_model_name(config.provider, resolved_model)
 
     # DeepSeek's reasoning models spend a variable, sometimes very large, share of
     # the output token budget on chain-of-thought before emitting the final JSON

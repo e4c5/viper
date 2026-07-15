@@ -96,7 +96,7 @@ def parse_unified_diff(diff_text: str) -> list[DiffHunk]:
     for line in diff_text.splitlines():
         if line.startswith("diff --git "):
             st.on_diff_git_line(line)
-        elif line.startswith("--- ") or line.startswith("+++ "):
+        elif line.startswith(("--- ", "+++ ")):
             st.on_plus_minus_header_line(line)
         elif m := _HUNK_HEADER_RE.match(line):
             st.on_hunk_header_line(m)
@@ -159,12 +159,7 @@ def annotate_diff_with_line_numbers(diff_text: str) -> str:
 
     for line in diff_text.splitlines():
         # File-level header lines — pass through unchanged.
-        if (
-            line.startswith("diff --git ")
-            or line.startswith("index ")
-            or line.startswith("--- ")
-            or line.startswith("+++ ")
-        ):
+        if line.startswith(("diff --git ", "index ", "--- ", "+++ ")):
             in_hunk = False
             result_lines.append(line)
             continue

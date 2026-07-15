@@ -7,11 +7,6 @@ import logging
 import os
 import time  # noqa: F401
 import uuid  # noqa: F401
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    pass
-
 import code_review
 from code_review import observability  # noqa: F401
 from code_review.agent import (
@@ -53,7 +48,7 @@ from code_review.models import (
 from code_review.providers import get_provider  # noqa: F401
 from code_review.providers.base import (
     RateLimitError,  # noqa: F401
-    )
+)
 from code_review.refinement.filters.anchor_relocator import (
     _ANCHOR_RELOCATION_WINDOW,  # noqa: F401
     _find_closest_anchor_line,  # noqa: F401
@@ -119,6 +114,7 @@ def get_max_output_tokens_for_config(config) -> int:
     if current_get_max_output_tokens is not _DEFAULT_GET_MAX_OUTPUT_TOKENS:
         return current_get_max_output_tokens()
     return _model_get_max_output_tokens_for_config(config)
+
 
 # Fraction of context window reserved for diff content; rest for system prompt and response.
 # Configurable via LLM_DIFF_BUDGET_RATIO env var.
@@ -215,8 +211,6 @@ def _diff_visible_new_lines(diff_text: str) -> set[tuple[str, int]]:
             if new_ln is not None:  # ADDED (old_ln=None) and CONTEXT (old_ln!=None)
                 out.add((norm_path, new_ln))
     return out
-
-
 
 
 def _build_idempotency_key(
@@ -463,9 +457,7 @@ def _maybe_submit_review_decision(
                 )
                 return
         except Exception as e:
-            logger.debug(
-                "is_bot_currently_approved check failed; proceeding with submit: %s", e
-            )
+            logger.debug("is_bot_currently_approved check failed; proceeding with submit: %s", e)
 
     try:
         provider.submit_review_decision(
@@ -505,6 +497,7 @@ def _fingerprint_for_finding(
 # _normalize_scm_identity_fragment, _event_actor_matches_*, _reply_added_event_authored_by_bot,
 # _reply_dismissal_entry_*, _reply_dismissal_{original,existing,scm,diff}_*, ReplyDismissalContext
 # are all re-exported from orchestration.events above.
+
 
 # _format_reply_dismissal_user_message is aliased below for backward compatibility.
 def _format_reply_dismissal_user_message(
