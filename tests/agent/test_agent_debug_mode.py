@@ -314,6 +314,24 @@ def test_after_model_callback_logs_usage_metadata(caplog) -> None:
     assert "response_text_len=0" in caplog.text
 
 
+def test_after_model_callback_does_not_log_thought_text(caplog) -> None:
+    llm_response = SimpleNamespace(
+        usage_metadata=None,
+        content=SimpleNamespace(
+            parts=[
+                SimpleNamespace(text="internal reasoning", thought=True),
+                SimpleNamespace(text="final answer", thought=False),
+            ]
+        ),
+    )
+
+    caplog.set_level(logging.DEBUG, logger="code_review.agent.agent")
+    _after_model_callback(SimpleNamespace(agent_name="batch_review_0"), llm_response)
+
+    assert "final answer" in caplog.text
+    assert "internal reasoning" not in caplog.text
+
+
 def test_after_model_callback_logs_finish_reason_when_present(caplog) -> None:
     llm_response = SimpleNamespace(
         usage_metadata=SimpleNamespace(

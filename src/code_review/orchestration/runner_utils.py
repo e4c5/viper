@@ -97,7 +97,13 @@ async def _collect_response_async(runner, session_id: str, content: types.Conten
     ):
         if event.is_final_response() and event.content and event.content.parts:
             for part in event.content.parts:
-                if getattr(part, "text", None):
+                # Reasoning-capable providers (notably DeepSeek) can return
+                # internal chain-of-thought as text parts marked ``thought``.
+                # Only final-answer text may enter parsing or SCM output.
+                if (
+                    getattr(part, "text", None)
+                    and getattr(part, "thought", False) is not True
+                ):
                     parts.append(part.text)
     text = "\n".join(parts)
     if os.getenv("CODE_REVIEW_PRINT_RAW_RESPONSE", "").strip() in ("1", "true", "TRUE"):
@@ -153,10 +159,15 @@ def _log_batch_event(event_count: int, event) -> None:
 
 
 def _collect_text_parts(event) -> list[str]:
-    """Return all text parts from an event, preserving order."""
+    """Return non-reasoning text parts from an event, preserving order."""
     content = getattr(event, "content", None)
     parts = getattr(content, "parts", None) or []
-    return [part.text for part in parts if getattr(part, "text", None)]
+    return [
+        part.text
+        for part in parts
+        if getattr(part, "text", None)
+        and getattr(part, "thought", False) is not True
+    ]
 
 
 def _append_final_response_text(event, responses: list[tuple[str, str]]) -> None:
