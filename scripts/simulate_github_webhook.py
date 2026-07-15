@@ -8,10 +8,8 @@ and POSTs a mock webhook payload to a local application.
 import argparse
 import hashlib
 import hmac
-import ipaddress
 import json
 import os
-import socket
 import sys
 import urllib.parse
 import urllib.request
@@ -25,30 +23,13 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def validate_local_target(url: str) -> str:
-    """Validate that a webhook target is HTTP(S) on a loopback address."""
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme not in {"http", "https"}:
-        raise ValueError("Webhook target must use http or https")
-    if parsed.username or parsed.password:
-        raise ValueError("Webhook target must not contain credentials")
-    if not parsed.hostname:
-        raise ValueError("Webhook target must include a hostname")
-
-    try:
-        addresses = {
-            item[4][0]
-            for item in socket.getaddrinfo(
-                parsed.hostname,
-                parsed.port or (443 if parsed.scheme == "https" else 80),
-                type=socket.SOCK_STREAM,
-            )
-        }
-    except socket.gaierror as exc:
-        raise ValueError(f"Webhook target hostname cannot be resolved: {parsed.hostname}") from exc
-    if not addresses or not all(ipaddress.ip_address(address).is_loopback for address in addresses):
-        raise ValueError("Webhook target must resolve only to loopback addresses")
-    return url
+def local_target(port: int) -> str:
+    """Build the fixed loopback webhook URL for a validated TCP port."""
+    if not 1 <= port <= 65535:
+        raise ValueError("Webhook port must be between 1 and 65535")
+    return urllib.parse.urlunsplit(
+        ("http", f"localhost:{port}", "/webhooks/github", "", "")
+    )
 
 
 def parse_github_pr_url(url: str) -> tuple[str, str, int]:
@@ -78,9 +59,10 @@ def main():
         "url", help="GitHub Pull Request URL (e.g., https://github.com/owner/repo/pull/123)"
     )
     parser.add_argument(
-        "--target",
-        default="http://localhost:8080/webhooks/github",
-        help="Target webhook URL (default: http://localhost:8080/webhooks/github)",
+        "--port",
+        type=int,
+        default=8080,
+        help="Local webhook server port (default: 8080)",
     )
     parser.add_argument(
         "--action",
@@ -106,7 +88,7 @@ def main():
 
     try:
         owner, repo, pr_number = parse_github_pr_url(args.url)
-        target = validate_local_target(args.target)
+        target = local_target(args.port)
     except ValueError as e:
         print(f"Error: {e}")
         sys.exit(1)
