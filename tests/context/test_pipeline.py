@@ -350,16 +350,18 @@ def test_fatal_error_from_embedding_propagates():
 
     doc = _make_fetched_doc(body=large_body)
 
-    with patch("code_review.context.pipeline.ContextStore", return_value=store_instance):
-        with patch("code_review.context.pipeline.fetch_reference", return_value=doc):
-            with patch(
-                "code_review.context.pipeline.embed_query_text",
-                side_effect=Exception("embed fail"),
-            ):
-                with pytest.raises(ContextAwareFatalError, match="embedding"):
-                    build_context_brief_for_pr(
-                        _make_ctx(max_bytes=20000), _make_scm(), [_GITHUB_REF], "diff"
-                    )
+    ctx = _make_ctx(max_bytes=20000)
+    scm = _make_scm()
+    with (
+        patch("code_review.context.pipeline.ContextStore", return_value=store_instance),
+        patch("code_review.context.pipeline.fetch_reference", return_value=doc),
+        patch(
+            "code_review.context.pipeline.embed_query_text",
+            side_effect=Exception("embed fail"),
+        ),
+        pytest.raises(ContextAwareFatalError, match="embedding"),
+    ):
+        build_context_brief_for_pr(ctx, scm, [_GITHUB_REF], "diff")
 
 
 # ---------------------------------------------------------------------------

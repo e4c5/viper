@@ -9,16 +9,12 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from google.genai import types
 from pydantic import ValidationError as PydanticValidationError
 
 import code_review
-
-if TYPE_CHECKING:
-    pass
-
 from code_review import observability
 from code_review.json_utils import iter_json_candidates
 from code_review.models import PRContext
@@ -35,6 +31,7 @@ AGENT_VERSION = getattr(code_review, "__version__", "0.1.0")
 # ---------------------------------------------------------------------------
 # SSL teardown suppressor
 # ---------------------------------------------------------------------------
+
 
 def _suppress_ssl_teardown_errors(loop, context: dict) -> None:
     """Asyncio exception handler that silences known SSL-transport teardown noise."""
@@ -53,6 +50,7 @@ def _suppress_ssl_teardown_errors(loop, context: dict) -> None:
 # PartialResponseCollectionError
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class PartialResponseCollectionError(Exception):
     """Raised when a workflow emits some final responses before failing."""
@@ -64,6 +62,7 @@ class PartialResponseCollectionError(Exception):
 # ---------------------------------------------------------------------------
 # ADK templating bypass
 # ---------------------------------------------------------------------------
+
 
 def _bypass_adk_templating(agent: Any) -> None:
     """Recursively wrap agent instructions in a provider that bypasses ADK templating."""
@@ -84,6 +83,7 @@ def _bypass_adk_templating(agent: Any) -> None:
 # Single-response async runner
 # ---------------------------------------------------------------------------
 
+
 async def _collect_response_async(runner, session_id: str, content: types.Content) -> str:
     """Run agent once via run_async and return concatenated final response text."""
     asyncio.get_running_loop().set_exception_handler(_suppress_ssl_teardown_errors)
@@ -100,10 +100,7 @@ async def _collect_response_async(runner, session_id: str, content: types.Conten
                 # Reasoning-capable providers (notably DeepSeek) can return
                 # internal chain-of-thought as text parts marked ``thought``.
                 # Only final-answer text may enter parsing or SCM output.
-                if (
-                    getattr(part, "text", None)
-                    and getattr(part, "thought", False) is not True
-                ):
+                if getattr(part, "text", None) and getattr(part, "thought", False) is not True:
                     parts.append(part.text)
     text = "\n".join(parts)
     if os.getenv("CODE_REVIEW_PRINT_RAW_RESPONSE", "").strip() in ("1", "true", "TRUE"):
@@ -111,9 +108,7 @@ async def _collect_response_async(runner, session_id: str, content: types.Conten
     return text
 
 
-def _run_agent_and_collect_response(
-    runner, session_id: str, content: types.Content
-) -> str:
+def _run_agent_and_collect_response(runner, session_id: str, content: types.Content) -> str:
     """Run agent once and return concatenated final response text (uses async API)."""
     return asyncio.run(_collect_response_async(runner, session_id, content))
 
@@ -165,8 +160,7 @@ def _collect_text_parts(event) -> list[str]:
     return [
         part.text
         for part in parts
-        if getattr(part, "text", None)
-        and getattr(part, "thought", False) is not True
+        if getattr(part, "text", None) and getattr(part, "thought", False) is not True
     ]
 
 
@@ -210,6 +204,7 @@ def _raise_collection_error(
         raise PartialResponseCollectionError(responses=responses, cause=exc) from exc
     raise exc
 
+
 async def _collect_final_response_texts_async(
     runner, session_id: str, content: types.Content
 ) -> list[tuple[str, str]]:
@@ -249,14 +244,13 @@ def _run_agent_and_collect_responses(
     runner, session_id: str, content: types.Content
 ) -> list[tuple[str, str]]:
     """Run agent once and return text-bearing final responses from all participating agents."""
-    return asyncio.run(
-        _collect_final_response_texts_async(runner, session_id, content)
-    )
+    return asyncio.run(_collect_final_response_texts_async(runner, session_id, content))
 
 
 # ---------------------------------------------------------------------------
 # Structured findings parsing
 # ---------------------------------------------------------------------------
+
 
 def _parse_findings_json(text: str) -> object:
     """Parse a structured findings object from raw text or a fenced JSON block."""
@@ -303,8 +297,7 @@ def _findings_from_response(response_text: str, *, raise_errors: bool = False) -
     except Exception as e:
         if raise_errors:
             raise ValueError(
-                "Failed to validate structured findings JSON from agent response: "
-                f"{e}"
+                f"Failed to validate structured findings JSON from agent response: {e}"
             ) from e
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
@@ -319,6 +312,7 @@ def _findings_from_response(response_text: str, *, raise_errors: bool = False) -
 # ---------------------------------------------------------------------------
 # output_key session-state reader (Phase 0 durable improvement)
 # ---------------------------------------------------------------------------
+
 
 async def _read_output_key_findings_async(
     session_service, session_id: str, output_key: str
@@ -359,14 +353,13 @@ def _get_output_key_findings(
     session_service, session_id: str, output_key: str
 ) -> list[FindingV1] | None:
     """Synchronous wrapper: read ADK validated findings from session state."""
-    return asyncio.run(
-        _read_output_key_findings_async(session_service, session_id, output_key)
-    )
+    return asyncio.run(_read_output_key_findings_async(session_service, session_id, output_key))
 
 
 # ---------------------------------------------------------------------------
 # Observability
 # ---------------------------------------------------------------------------
+
 
 def _log_run_complete(
     trace_id: str,
@@ -451,6 +444,7 @@ class ReviewRunObservability:
 # ---------------------------------------------------------------------------
 # Reply-dismissal LLM runner (lives here because it instantiates a Runner)
 # ---------------------------------------------------------------------------
+
 
 def _run_reply_dismissal_llm(user_message: str) -> str:
     """Run the tool-free reply-dismissal agent once; return raw model text."""

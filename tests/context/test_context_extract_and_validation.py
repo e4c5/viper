@@ -216,7 +216,7 @@ def test_extract_confluence_refs_keeps_links_outside_fenced_code():
 
 def _clear_context_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in tuple(os.environ):
-        if key.startswith("CONTEXT_") or key.startswith("CONTEXT_AWARE"):
+        if key.startswith(("CONTEXT_", "CONTEXT_AWARE")):
             monkeypatch.delenv(key, raising=False)
 
 

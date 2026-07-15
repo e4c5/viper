@@ -1079,13 +1079,9 @@ def test_post_review_comments_409_without_hashes_propagates(mock_client):
     http.post.return_value = mock_post
 
     p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+    comments = [InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")]
     with pytest.raises(httpx.HTTPStatusError):
-        p.post_review_comments(
-            "PROJ",
-            "repo",
-            1,
-            [InlineComment(path="foo.java", line=10, body="Bug", line_type="ADDED")],
-        )
+        p.post_review_comments("PROJ", "repo", 1, comments)
 
     # Only one POST attempt (no retry since there were no hashes to remove)
     assert http.post.call_count == 1

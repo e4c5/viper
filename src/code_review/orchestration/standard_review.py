@@ -187,9 +187,7 @@ class StandardReviewHandler:
         return count
 
     @staticmethod
-    def print_findings_summary(
-        print_findings: bool, to_post: list[tuple[FindingV1, str]]
-    ) -> None:
+    def print_findings_summary(print_findings: bool, to_post: list[tuple[FindingV1, str]]) -> None:
         if not print_findings:
             return
         if to_post:
@@ -221,9 +219,7 @@ class StandardReviewHandler:
             logger.info("Posted %d comment(s)", successful_post_count)
 
     @staticmethod
-    def filter_findings_to_pr_paths(
-        findings: list[FindingV1], paths: list[str]
-    ) -> list[FindingV1]:
+    def filter_findings_to_pr_paths(findings: list[FindingV1], paths: list[str]) -> list[FindingV1]:
         if not paths:
             return findings
         allowed_normalized = {runner_mod._normalize_path_for_anchor(p) for p in paths}
@@ -308,8 +304,8 @@ class StandardReviewHandler:
         """Validate context-aware sources when enabled and finish observability on fatal config."""
         try:
             self.context_enricher.validate_context_sources_or_raise(ctx_cfg, cfg)
-        except runner_mod.ContextAwareFatalError as e:
-            logger.error("Context-aware review configuration error: %s", e)
+        except runner_mod.ContextAwareFatalError:
+            logger.exception("Context-aware review configuration error")
             run_observability.finish(self.pr_ctx, [], [], [])
             raise
 
@@ -534,13 +530,9 @@ class StandardReviewHandler:
         description_was_empty = not (getattr(env.pr_info, "description", "") or "").strip()
         is_initial_review = not env.incremental_base_sha
 
-
-
         try:
             summary_text = self._generate_summary_text(provider, env, to_post)
-            self._post_summary(
-                provider, env, summary_text, description_was_empty, is_initial_review, to_post
-            )
+            self._post_summary(provider, summary_text, description_was_empty, is_initial_review)
         except Exception as e:
             logger.warning("Failed to generate/post PR summary: %s", e, exc_info=True)
 
@@ -590,11 +582,9 @@ class StandardReviewHandler:
     def _post_summary(
         self,
         provider: ProviderInterface,
-        env: _ReviewEnv,
         summary_text: str,
         description_was_empty: bool,
         is_initial_review: bool,
-        to_post: list[tuple[FindingV1, bool]],
     ) -> None:
         """Post the generated summary text to the PR."""
         from code_review.agent.summary_agent import split_summary_for_pr_description
@@ -614,13 +604,16 @@ class StandardReviewHandler:
                     logger.info(
                         "PR description was updated while review ran; skipping overwrite "
                         "owner=%s repo=%s pr=%s",
-                        self.owner, self.repo, self.pr_number,
+                        self.owner,
+                        self.repo,
+                        self.pr_number,
                     )
                 else:
                     logger.info(
-                        "Updating PR description with LLM-generated summary "
-                        "owner=%s repo=%s pr=%s",
-                        self.owner, self.repo, self.pr_number,
+                        "Updating PR description with LLM-generated summary owner=%s repo=%s pr=%s",
+                        self.owner,
+                        self.repo,
+                        self.pr_number,
                     )
                     poster.update_pr_description(description_part)
             if comment_part:

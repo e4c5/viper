@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 from code_review.config import get_llm_config, get_summary_llm_config
@@ -119,6 +118,7 @@ def create_summary_agent():
         ),
     )
 
+
 def generate_pr_summary(
     agent,
     pr_info: Any,
@@ -148,9 +148,7 @@ def generate_pr_summary(
             items = grouped[severity]
             if items:
                 findings_lines.append(f"\n{severity.upper()} ({len(items)}):")
-                findings_lines.extend(
-                    f"  - {f.path}:{f.line} - {f.message}" for f in items
-                )
+                findings_lines.extend(f"  - {f.path}:{f.line} - {f.message}" for f in items)
         findings_summary = "\n".join(findings_lines)
     else:
         findings_summary = "No specific findings identified."
@@ -171,9 +169,9 @@ def generate_pr_summary(
     description_part = f"PR Description: {pr_desc}\n" if pr_desc else ""
 
     prompt = f"""\
-PR Title: {getattr(pr_info, 'title', 'Unknown')}
+PR Title: {getattr(pr_info, "title", "Unknown")}
 {description_part}{incremental_context}
-Changed Files: {', '.join(changed_paths)}
+Changed Files: {", ".join(changed_paths)}
 
 Findings:
 {findings_summary}
@@ -189,6 +187,35 @@ Findings:
     session_id = f"summary/{uuid.uuid4().hex[:12]}"
     content = types.Content(role="user", parts=[types.Part(text=prompt)])
     return _run_agent_and_collect_response(runner, session_id, content)
+
+
+def _summary_heading_name(line: str) -> str | None:
+    """Return a supported Summary/Walkthrough heading name without backtracking regexes."""
+    candidate = line.lstrip(" \t")
+    if candidate.startswith("#"):
+        hashes = len(candidate) - len(candidate.lstrip("#"))
+        if not 1 <= hashes <= 6 or candidate[hashes : hashes + 1] not in {" ", "\t"}:
+            return None
+        candidate = candidate[hashes:].strip(" \t*#")
+    elif candidate[:1].isdigit():
+        dot = candidate.find(".")
+        if dot < 1 or not candidate[:dot].isdigit():
+            return None
+        candidate = candidate[dot + 1 :].strip(" \t")
+        if not candidate.startswith("**"):
+            return None
+        candidate = candidate.strip("* \t")
+    elif candidate.startswith("**"):
+        candidate = candidate.strip("* \t")
+    else:
+        return None
+
+    normalized = candidate.casefold()
+    if normalized == "summary":
+        return "summary"
+    if normalized == "walkthrough" or normalized.startswith("walkthrough "):
+        return "walkthrough"
+    return None
 
 
 def split_summary_for_pr_description(full_text: str) -> tuple[str, str]:
@@ -210,21 +237,31 @@ def split_summary_for_pr_description(full_text: str) -> tuple[str, str]:
     # producing a "## Summary" section (planning the format) before the real,
     # final one — so take the LAST such heading in the text, not the first, to
     # land on the model's actual answer rather than an earlier draft/mention.
-    summary_matches = list(
-        re.finditer(
-            r'^[ \t]*(?:#{1,6}[ \t]+|\d+\.[ \t]+\*\*|\*\*)[ \t]*Summary[ \t*#]*$',
-            full_text,
-            re.MULTILINE | re.IGNORECASE,
-        )
-    )
-    if summary_matches:
-        full_text = full_text[summary_matches[-1].start() :]
+    lines = full_text.splitlines(keepends=True)
+    offsets: list[int] = []
+    offset = 0
+    for line in lines:
+        offsets.append(offset)
+        offset += len(line)
 
-    match = re.search(
-        r'^[ \t]*(?:#{1,6}[ \t]+|\d+\.[ \t]+\*\*|\*\*)[ \t]*Walkthrough\b',
-        full_text,
-        re.MULTILINE | re.IGNORECASE,
-    )
-    if not match:
+    summary_offsets = [
+        offsets[index]
+        for index, line in enumerate(lines)
+        if _summary_heading_name(line.rstrip("\r\n")) == "summary"
+    ]
+    if summary_offsets:
+        full_text = full_text[summary_offsets[-1] :]
+
+    offset = 0
+    walkthrough_offset: int | None = None
+    for line in full_text.splitlines(keepends=True):
+        if _summary_heading_name(line.rstrip("\r\n")) == "walkthrough":
+            walkthrough_offset = offset
+            break
+        offset += len(line)
+    if walkthrough_offset is None:
         return full_text.strip(), ""
-    return full_text[: match.start()].strip(), full_text[match.start() :].strip()
+    return (
+        full_text[:walkthrough_offset].strip(),
+        full_text[walkthrough_offset:].strip(),
+    )
