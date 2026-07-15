@@ -568,6 +568,39 @@ async def test_collect_response_async_bypasses_adk_templating_for_single_respons
     assert agent.instruction(None) == "Keep literal braces like {path} in prompts."
 
 
+@pytest.mark.asyncio
+async def test_collect_response_async_omits_thought_parts():
+    from code_review.orchestration.runner_utils import _collect_response_async
+
+    agent = SimpleNamespace(instruction=None, global_instruction=None, sub_agents=[])
+    event = MagicMock()
+    event.is_final_response.return_value = True
+    event.content.parts = [
+        MagicMock(text="internal reasoning", thought=True),
+        MagicMock(text="final response", thought=False),
+    ]
+    runner = SimpleNamespace(agent=agent, run_async=runner_run_async_returning([event]))
+
+    result = await _collect_response_async(runner, "session-1", MagicMock())
+
+    assert result == "final response"
+
+
+def test_collect_text_parts_omits_thought_parts():
+    from code_review.orchestration.runner_utils import _collect_text_parts
+
+    event = SimpleNamespace(
+        content=SimpleNamespace(
+            parts=[
+                SimpleNamespace(text="internal reasoning", thought=True),
+                SimpleNamespace(text="final response", thought=False),
+            ]
+        )
+    )
+
+    assert _collect_text_parts(event) == ["final response"]
+
+
 @patch("code_review.orchestration.execution.runner_mod._run_agent_and_collect_responses")
 def test_run_agent_and_collect_findings_parses_sequential_workflow_responses(
     mock_collect_responses,

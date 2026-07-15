@@ -401,7 +401,12 @@ def _after_model_callback(
     if not logger.isEnabledFor(logging.DEBUG):
         return None
     parts = getattr(getattr(llm_response, "content", None), "parts", None) or ()
-    texts = [part.text for part in parts if getattr(part, "text", None)]
+    texts = [
+        part.text
+        for part in parts
+        if getattr(part, "text", None)
+        and getattr(part, "thought", False) is not True
+    ]
     if texts:
         logger.debug(
             "ADK after_model agent=%s response=%s",
