@@ -22,7 +22,7 @@ except ImportError:
     respx = None
 
 # Use a hostname without dots so respx exact URL matching works (dots can be regex)
-BASE = "http://gitea-test"
+BASE = "https://gitea-test"
 API = f"{BASE}/api/v1"
 
 # Minimal unified diff for one file
