@@ -22,7 +22,6 @@ from code_review.providers.url_policy import validate_scm_base_url
 from code_review.schemas.findings import FindingV1
 from code_review.schemas.review_decision_event import (
     ReviewDecisionConfig,
-    ReviewDecisionEventContext,
 )
 
 logger = logging.getLogger(__name__)

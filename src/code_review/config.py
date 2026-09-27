@@ -12,8 +12,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SCM_CONFIG: "SCMConfig | None" = None
 _LLM_CONFIG: "LLMConfig | None" = None
-_SUMMARY_LLM_CONFIG: "TaskLLMConfig | None" = None
-_VERIFICATION_LLM_CONFIG: "TaskLLMConfig | None" = None
+_SUMMARY_LLM_CONFIG: "SummaryLLMConfig | None" = None
+_VERIFICATION_LLM_CONFIG: "VerificationLLMConfig | None" = None
 _CONTEXT_AWARE_CONFIG: "ContextAwareReviewConfig | None" = None
 _CODE_REVIEW_APP_CONFIG: "CodeReviewAppConfig | None" = None
 logger = logging.getLogger(__name__)
@@ -128,9 +128,9 @@ class LLMConfig(BaseSettings):
     # See note above: we do not auto-load .env; only real env vars are used.
     model_config = SettingsConfigDict(env_prefix="LLM_", extra="ignore")
 
-    provider: Literal["gemini", "openai", "anthropic", "ollama", "vertex", "openrouter", "deepseek"] = (
-        "gemini"
-    )
+    provider: Literal[
+        "gemini", "openai", "anthropic", "ollama", "vertex", "openrouter", "deepseek"
+    ] = "gemini"
     api_key: SecretStr | None = Field(
         default=None,
         description=(

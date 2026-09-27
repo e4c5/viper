@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from code_review.config import LLMConfig, SCMConfig
 from code_review.agent import create_review_agent
+from code_review.config import LLMConfig, SCMConfig
 from code_review.providers.base import (
     BotAttributionIdentity,
     FileInfo,
@@ -1953,7 +1953,7 @@ def test_maybe_submit_review_decision_skips_repeated_approve_when_bot_already_ap
 
 
 def test_maybe_submit_review_decision_still_submits_request_changes_when_bot_is_approved():
-    """A REQUEST_CHANGES decision must always be submitted even when the bot is currently approved."""
+    """A REQUEST_CHANGES decision must be submitted even when the bot is approved."""
     from code_review.orchestration_deps import _maybe_submit_review_decision
     from code_review.quality.outcome import QualityGateOutcome
 

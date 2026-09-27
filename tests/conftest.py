@@ -22,6 +22,11 @@ def _reset_code_review_logger():
     saved_level = log.level
     saved_propagate = log.propagate
     saved_handlers = list(log.handlers)
+    # When run under the repo-root suite, importing viper_webhooks.tasks during
+    # collection calls configure_logging(), which sets propagate=False and
+    # blinds caplog — force records through to the root handler per test.
+    log.propagate = True
+    log.setLevel(logging.NOTSET)
     yield
     log.setLevel(saved_level)
     log.propagate = saved_propagate

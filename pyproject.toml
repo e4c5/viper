@@ -41,6 +41,8 @@ dev = [
     "respx>=0.21",
     # Tests exercise LiteLlm-backed providers.
     "litellm>=1.83.7",
+    "mypy>=1.10",
+    "types-PyYAML>=6.0",
 ]
 observability = [
     "prometheus-client>=0.19",
@@ -102,3 +104,17 @@ select = ["E", "F", "I", "B", "C4", "UP"]
 # LLM instruction strings are intentionally long single lines.
 [tool.ruff.lint.per-file-ignores]
 "src/code_review/agent/agent.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+files = [
+    "src/code_review/__init__.py",
+    "src/code_review/config.py",
+    "src/code_review/schemas/",
+    "src/code_review/providers/url_policy.py",
+    "src/code_review/providers/http_retry.py",
+    "src/code_review/providers/base.py",
+]
+ignore_missing_imports = true
+check_untyped_defs = true
+plugins = ["pydantic.mypy"]

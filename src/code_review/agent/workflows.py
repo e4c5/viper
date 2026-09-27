@@ -42,8 +42,8 @@ class BatchReviewWorkflowAgent(BaseAgent):
     current_index: int = Field(default=0)
 
     async def _run_async_impl(
-        self, ctx: "InvocationContext"
-    ) -> "AsyncGenerator[Event, None]":
+        self, ctx: InvocationContext
+    ) -> AsyncGenerator[Event, None]:
         from google.adk.events import Event
 
         while self.current_index < len(self.sub_agents):

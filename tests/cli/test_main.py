@@ -7,11 +7,11 @@ from unittest.mock import patch
 import pytest
 import typer
 
+from code_review.__main__ import review
+
 # Use typer's own public Exit type: its internal click dependency (vendored
 # or not, depending on typer version) is not a stable import path.
 ClickExit = typer.Exit
-
-from code_review.__main__ import review
 
 
 def test_cli_ensure_logging_logs_startup_config():

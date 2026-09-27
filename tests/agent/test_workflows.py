@@ -175,12 +175,16 @@ async def test_batch_review_workflow_passes_distinct_user_messages_to_sub_agents
 
     ctx = _Ctx(types.Content(role="user", parts=[types.Part(text="root")]))
 
-    async for _event in workflow._run_async_impl(ctx):  # exhaust the generator; side-effects are what we assert
+    # exhaust the generator; side-effects are what we assert
+    async for _event in workflow._run_async_impl(ctx):
         pass
 
     assert sub_agent_a.seen_user_messages == ["batch A"]
     assert sub_agent_b.seen_user_messages == ["batch B"]
-    appended_events = [call.kwargs["event"] for call in ctx.session_service.append_event.call_args_list]
+    appended_events = [
+        call.kwargs["event"]
+        for call in ctx.session_service.append_event.call_args_list
+    ]
     assert [event.content.parts[0].text for event in appended_events] == ["batch A", "batch B"]
 
 @pytest.mark.asyncio
@@ -220,7 +224,8 @@ async def test_batch_review_workflow_resumes_from_correct_sub_agent() -> None:
     ctx = _Ctx()
 
     # Run 1: Should pause on sub_agent_a
-    async for _event in workflow._run_async_impl(ctx):  # exhaust the generator; side-effects are what we assert
+    # exhaust the generator; side-effects are what we assert
+    async for _event in workflow._run_async_impl(ctx):
         pass
 
     assert workflow.current_index == 0
@@ -231,7 +236,8 @@ async def test_batch_review_workflow_resumes_from_correct_sub_agent() -> None:
     sub_agent_a.pause_on_call = False
     
     # Run 2: Should finish sub_agent_a, then run sub_agent_b
-    async for _event in workflow._run_async_impl(ctx):  # exhaust the generator; side-effects are what we assert
+    # exhaust the generator; side-effects are what we assert
+    async for _event in workflow._run_async_impl(ctx):
         pass
 
     assert workflow.current_index == 2
@@ -309,9 +315,9 @@ def test_batch_user_message_omits_test_quality_rules_for_test_files() -> None:
 def test_test_quality_rules_in_agent_instruction() -> None:
     """Test-quality rules must be part of the stable agent instruction."""
     from code_review.agent.agent import (
+        _SHARED_TEST_QUALITY_RULES,
         BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION,
         EMBEDDED_DIFF_REVIEW_INSTRUCTION,
-        _SHARED_TEST_QUALITY_RULES,
     )
 
     assert _SHARED_TEST_QUALITY_RULES in BATCH_EMBEDDED_DIFF_REVIEW_INSTRUCTION
@@ -344,7 +350,7 @@ def test_batch_sub_agents_have_identical_instruction_text(
 def test_linked_context_flag_causes_context_instruction_in_agent(
     mock_app_cfg, mock_llm_cfg, _temp, _tokens, _model,
 ) -> None:
-    """When context_brief_attached=True, the agent instruction must include linked-context guidance."""
+    """context_brief_attached=True must include linked-context guidance."""
     from code_review.agent.agent import _CONTEXT_FROM_LINKED_SOURCES, create_review_agent
 
     mock_app_cfg.return_value = MagicMock(review_visible_lines=False, log_prompts=False)
@@ -355,7 +361,9 @@ def test_linked_context_flag_causes_context_instruction_in_agent(
     )
 
     agent_with = create_review_agent(provider, "", context_brief_attached=True, slim_output=True)
-    agent_without = create_review_agent(provider, "", context_brief_attached=False, slim_output=True)
+    agent_without = create_review_agent(
+        provider, "", context_brief_attached=False, slim_output=True
+    )
 
     assert _CONTEXT_FROM_LINKED_SOURCES.strip() in agent_with.instruction
     assert _CONTEXT_FROM_LINKED_SOURCES.strip() not in agent_without.instruction

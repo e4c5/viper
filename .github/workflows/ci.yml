@@ -26,13 +26,15 @@ jobs:
         run: uv sync --frozen --extra dev
 
       - name: Lint (ruff)
-        continue-on-error: true
         run: uv run --frozen ruff check src tests
+
+      - name: Type check (mypy)
+        run: uv run --frozen mypy
 
       - name: Run tests
         env:
           PYTHONWARNINGS: ignore
-        run: uv run --frozen pytest --ignore=tests/e2e --maxfail=1 --disable-warnings -q
+        run: uv run --frozen pytest --ignore=tests/e2e --maxfail=1 --disable-warnings -q --cov --cov-report=term-missing:skip-covered
 
       - name: Run parser eval corpus
         env:

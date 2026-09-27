@@ -7,7 +7,7 @@ import logging
 import os
 import time  # noqa: F401
 import uuid  # noqa: F401
-import code_review
+
 from code_review import observability  # noqa: F401
 from code_review.agent import (
     create_review_agent,  # noqa: F401
@@ -40,9 +40,17 @@ from code_review.diff.utils import estimate_tokens as _estimate_tokens  # noqa: 
 from code_review.diff.utils import normalize_path as _normalize_path_for_anchor  # noqa: F401
 from code_review.models import (
     PRContext,
+)
+from code_review.models import (
     get_context_window as _model_get_context_window,
+)
+from code_review.models import (
     get_context_window_for_config as _model_get_context_window_for_config,
+)
+from code_review.models import (
     get_max_output_tokens as _model_get_max_output_tokens,
+)
+from code_review.models import (
     get_max_output_tokens_for_config as _model_get_max_output_tokens_for_config,
 )
 from code_review.providers import get_provider  # noqa: F401
@@ -82,9 +90,8 @@ from code_review.schemas.review_decision_event import (
 from code_review.standards.detector import detect_from_paths  # noqa: F401
 from code_review.standards.prompts import get_review_standards  # noqa: F401
 
-APP_NAME = "code_review"
-USER_ID = "reviewer"
-AGENT_VERSION = getattr(code_review, "__version__", "0.1.0")
+# APP_NAME / USER_ID / AGENT_VERSION are re-exported from
+# orchestration.runner_utils below (their canonical definitions).
 logger = logging.getLogger(__name__)
 
 
@@ -126,12 +133,14 @@ except ValueError:
 # ---------------------------------------------------------------------------
 # Re-exports from focused submodules (canonical implementations live there).
 # ---------------------------------------------------------------------------
-from code_review.orchestration.events import (  # noqa: E402
-    ReplyDismissalContext,
+from google.genai import types  # noqa: E402,F401
+
+from code_review.models import (  # noqa: E402
+    get_context_window,  # noqa: F401
+    get_max_output_tokens,  # noqa: F401
 )
-from code_review.context.errors import ContextAwareFatalError  # noqa: E402,F401
-from code_review.diff.utils import normalize_path as _normalize_path_for_anchor  # noqa: E402,F401
-from code_review.orchestration.events import (  # noqa: E402
+from code_review.orchestration.events import (  # noqa: E402  # noqa: E402
+    ReplyDismissalContext,
     _reply_added_event_authored_by_bot,  # noqa: F401
 )
 from code_review.orchestration.idempotency import (  # noqa: E402
@@ -148,7 +157,9 @@ from code_review.orchestration.prompts import (  # noqa: E402
     _format_review_prompt_supplement,  # noqa: F401
 )
 from code_review.orchestration.runner_utils import (  # noqa: E402
+    AGENT_VERSION,  # noqa: F401
     APP_NAME,  # noqa: F401
+    USER_ID,  # noqa: F401
     LLMTimeoutError,  # noqa: F401
     PartialResponseCollectionError,  # noqa: F401
     _bypass_adk_templating,  # noqa: F401
@@ -163,37 +174,9 @@ from code_review.orchestration.runner_utils import (  # noqa: E402
     is_transient_llm_error,  # noqa: F401
     retry_after_seconds,  # noqa: F401
 )
-from code_review.reply_dismissal_state import (  # noqa: E402
-    REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT,  # noqa: F401
-)
-from code_review.agent.reply_dismissal_agent import (  # noqa: E402
-    reply_dismissal_verdict_from_llm_text,  # noqa: F401
-)
-from code_review.config import (  # noqa: E402
-    get_code_review_app_config,  # noqa: F401
-    get_context_aware_config,  # noqa: F401
-    get_llm_config,  # noqa: F401
-    get_scm_config,  # noqa: F401
-)
-from code_review.context.extract import extract_context_references  # noqa: E402,F401
-from code_review.context.pipeline import build_context_brief_for_pr  # noqa: E402,F401
-from code_review.context.validation import validate_context_aware_sources  # noqa: E402,F401
-from code_review.models import (  # noqa: E402
-    get_context_window,  # noqa: F401
-    get_max_output_tokens,  # noqa: F401
-)
-from code_review.providers import get_provider  # noqa: E402,F401
 from code_review.providers.base import (  # noqa: E402
-    RateLimitError,  # noqa: F401
     unified_diff_for_path,  # noqa: F401
 )
-from code_review.schemas.findings import FindingV1  # noqa: E402,F401
-from code_review.schemas.review_decision_event import (  # noqa: E402
-    event_allows_decision_only_skip_when_bot_not_blocking,  # noqa: F401
-)
-from code_review.standards.detector import detect_from_paths  # noqa: E402,F401
-from code_review.standards.prompts import get_review_standards  # noqa: E402,F401
-from google.genai import types  # noqa: E402,F401
 
 
 def _diff_visible_new_lines(diff_text: str) -> set[tuple[str, int]]:
