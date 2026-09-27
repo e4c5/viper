@@ -141,16 +141,16 @@ class LLMConfig(BaseSettings):
         default=60.0,
         description=(
             "Per-request timeout for LLM API calls. "
-            "NOTE: currently configuration-only; see IMPROVEMENT_PLAN "
-            "§2.4/§5.5 before relying on it."
+            "NOTE: currently configuration-only; see Code-Sally docs/REVIEW.md "
+            "W2 before relying on it."
         ),
     )
     max_retries: int = Field(
         default=3,
         description=(
             "Max retries on transient LLM failures. "
-            "NOTE: currently configuration-only; see IMPROVEMENT_PLAN "
-            "§2.4/§5.5 before relying on it."
+            "NOTE: currently configuration-only; see Code-Sally docs/REVIEW.md "
+            "W2 before relying on it."
         ),
     )
 
