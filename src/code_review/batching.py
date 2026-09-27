@@ -103,6 +103,7 @@ def build_review_batches(
     diff_by_path: Mapping[str, str],
     *,
     diff_budget_tokens: int,
+    token_counter: Callable[[str], int] = estimate_tokens,
 ) -> list[ReviewBatch]:
     """Group ordered file diffs into ordered review batches."""
     if diff_budget_tokens <= 0:
@@ -121,6 +122,7 @@ def build_review_batches(
                 path,
                 diff_text,
                 segment_budget_tokens=diff_budget_tokens,
+                token_counter=token_counter,
             )
         )
 
@@ -147,6 +149,7 @@ def split_file_diff_into_segments(
     diff_text: str,
     *,
     segment_budget_tokens: int,
+    token_counter: Callable[[str], int] = estimate_tokens,
 ) -> list[ReviewSegment]:
     """Split one file diff into budget-fitting review segments."""
     if segment_budget_tokens <= 0:
@@ -156,7 +159,7 @@ def split_file_diff_into_segments(
     if not normalized_path or not normalized_diff:
         return []
 
-    whole_file_tokens = estimate_tokens(normalized_diff)
+    whole_file_tokens = token_counter(normalized_diff)
     if whole_file_tokens <= segment_budget_tokens:
         return [
             ReviewSegment(
@@ -173,7 +176,9 @@ def split_file_diff_into_segments(
     if not hunks:
         return _finalize_segments(
             normalized_path,
-            _split_plain_text_segment(normalized_diff, segment_budget_tokens),
+            _split_plain_text_segment(
+                normalized_diff, segment_budget_tokens, token_counter
+            ),
             split_strategy="line_fallback",
         )
 
@@ -184,18 +189,19 @@ def split_file_diff_into_segments(
     for hunk in hunks:
         candidate_hunks = pending_hunks + [hunk]
         candidate_text = _render_hunk_group(header_lines, candidate_hunks)
-        if pending_hunks and estimate_tokens(candidate_text) > segment_budget_tokens:
+        if pending_hunks and token_counter(candidate_text) > segment_budget_tokens:
             rendered_segments.append(("hunk", _render_hunk_group(header_lines, pending_hunks)))
             pending_hunks = []
 
         single_hunk_text = _render_hunk_group(header_lines, [hunk])
-        if estimate_tokens(single_hunk_text) > segment_budget_tokens:
+        if token_counter(single_hunk_text) > segment_budget_tokens:
             rendered_segments.extend(
                 ("intra_hunk", chunk)
                 for chunk in _split_single_hunk(
                     header_lines,
                     hunk,
                     segment_budget_tokens=segment_budget_tokens,
+                    token_counter=token_counter,
                 )
             )
             continue
@@ -205,7 +211,9 @@ def split_file_diff_into_segments(
     if pending_hunks:
         rendered_segments.append(("hunk", _render_hunk_group(header_lines, pending_hunks)))
 
-    return _finalize_segments(normalized_path, rendered_segments, split_strategy=None)
+    return _finalize_segments(
+        normalized_path, rendered_segments, split_strategy=None, token_counter=token_counter
+    )
 
 
 def _build_batch(
@@ -225,6 +233,7 @@ def _finalize_segments(
     rendered_segments: list[tuple[str, str]],
     *,
     split_strategy: str | None,
+    token_counter: Callable[[str], int] = estimate_tokens,
 ) -> list[ReviewSegment]:
     total_segments = len(rendered_segments)
     finalized: list[ReviewSegment] = []
@@ -234,7 +243,7 @@ def _finalize_segments(
             ReviewSegment(
                 path=path,
                 diff_text=text,
-                estimated_tokens=estimate_tokens(text),
+                estimated_tokens=token_counter(text),
                 segment_index=index,
                 total_segments=total_segments,
                 split_strategy=final_strategy,
@@ -272,6 +281,7 @@ def _split_single_hunk(
     hunk: DiffHunk,
     *,
     segment_budget_tokens: int,
+    token_counter: Callable[[str], int] = estimate_tokens,
 ) -> list[str]:
     out: list[str] = []
     start_index = 0
@@ -280,7 +290,7 @@ def _split_single_hunk(
         best_end_index = start_index
         while end_index <= len(hunk.lines):
             candidate = _render_hunk_slice(header_lines, hunk, start_index, end_index)
-            if estimate_tokens(candidate) > segment_budget_tokens:
+            if token_counter(candidate) > segment_budget_tokens:
                 break
             best_end_index = end_index
             end_index += 1
@@ -306,6 +316,7 @@ def _split_oversized_hunk_line(
     line_index: int,
     *,
     segment_budget_tokens: int,
+    token_counter: Callable[[str], int] = estimate_tokens,
 ) -> list[str]:
     content, old_ln, new_ln = hunk.lines[line_index]
     old_start, new_start = _slice_start_positions(hunk, line_index)
@@ -326,7 +337,7 @@ def _split_oversized_hunk_line(
     fragments = _split_long_line(
         content,
         segment_budget_tokens,
-        lambda fragment: estimate_tokens(render_fragment(fragment)),
+        lambda fragment: token_counter(render_fragment(fragment)),
     )
     return [render_fragment(fragment) for fragment in fragments]
 
@@ -378,7 +389,11 @@ def _render_hunk_lines(lines: Sequence[tuple[str, int | None, int | None]]) -> l
     return rendered
 
 
-def _split_plain_text_segment(diff_text: str, segment_budget_tokens: int) -> list[tuple[str, str]]:
+def _split_plain_text_segment(
+    diff_text: str,
+    segment_budget_tokens: int,
+    token_counter: Callable[[str], int] = estimate_tokens,
+) -> list[tuple[str, str]]:
     lines = diff_text.splitlines()
     if not lines:
         return []
@@ -389,7 +404,7 @@ def _split_plain_text_segment(diff_text: str, segment_budget_tokens: int) -> lis
         best_end_index = start_index
         while end_index <= len(lines):
             candidate = "\n".join(lines[start_index:end_index]).strip()
-            if estimate_tokens(candidate) > segment_budget_tokens:
+            if token_counter(candidate) > segment_budget_tokens:
                 break
             best_end_index = end_index
             end_index += 1
@@ -399,7 +414,7 @@ def _split_plain_text_segment(diff_text: str, segment_budget_tokens: int) -> lis
                 for fragment in _split_long_line(
                     lines[start_index],
                     segment_budget_tokens,
-                    estimate_tokens,
+                    token_counter,
                 )
             )
             start_index += 1

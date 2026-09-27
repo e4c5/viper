@@ -1081,6 +1081,9 @@ class GitHubProvider(ProviderInterface):
     def capabilities(self) -> ProviderCapabilities:
         """GitHub supports suggestion blocks; resolved is per-conversation, not per-comment."""
         return ProviderCapabilities(
+            # PyGithub shares one requests.Session per Requester — keep fetches
+            # sequential rather than racing the shared connection pool.
+            supports_concurrent_fetches=False,
             resolvable_comments=False,
             supports_suggestions=True,
             supports_multiline_suggestions=True,

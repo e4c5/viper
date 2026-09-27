@@ -246,7 +246,10 @@ class CommentPoster:
                 continue
             try:
                 self.provider.resolve_comment(
-                    self.pr_ctx.owner, self.pr_ctx.repo, c.id
+                    self.pr_ctx.owner,
+                    self.pr_ctx.repo,
+                    c.id,
+                    pr_number=self.pr_ctx.pr_number,
                 )
             except Exception as e:
                 logger.warning(

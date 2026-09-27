@@ -61,6 +61,12 @@ In **Manage Jenkins → Credentials → System → Global credentials (unrestric
 
 If your SCM is **Bitbucket Data Center**, use the same credential ID `SCM_TOKEN` (with your Bitbucket token) and follow [Bitbucket Data Center](BITBUCKET-DATACENTER.md) for webhook setup.
 
+The credential IDs are configurable if your Jenkins already stores these secrets
+under different names: set `SCM_CREDENTIALS_ID` / `LLM_CREDENTIALS_ID` as
+folder/global/job environment variables (or use the same-named build
+parameters). Defaults stay `SCM_TOKEN` and `LLM_API_KEY`, so existing jobs are
+unaffected.
+
 ---
 
 ## 3. Configure SCM and LLM environment variables

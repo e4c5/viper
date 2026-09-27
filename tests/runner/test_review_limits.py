@@ -416,7 +416,7 @@ def test_resolve_stale_skips_unreviewed_paths():
     ]
     poster.resolve_stale(existing, [], dry_run=False,
                          skip_paths={"skipped.py"})
-    provider.resolve_comment.assert_called_once_with("o", "r", "c-2")
+    provider.resolve_comment.assert_called_once_with("o", "r", "c-2", pr_number=1)
 
 
 def test_resolve_stale_resolves_unprotected_comments():
@@ -432,4 +432,4 @@ def test_resolve_stale_resolves_unprotected_comments():
         existing, posted, dry_run=False,
         keep_fingerprints={"fp-kept"}, skip_paths={"other.py"},
     )
-    provider.resolve_comment.assert_called_once_with("o", "r", "c-1")
+    provider.resolve_comment.assert_called_once_with("o", "r", "c-1", pr_number=1)

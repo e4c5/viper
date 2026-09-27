@@ -448,3 +448,35 @@ def test_capabilities():
     assert caps.resolvable_comments is False
     assert caps.supports_suggestions is True
     assert caps.supports_review_decisions is True
+
+
+def test_get_existing_review_comments_paginates():
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    page1 = [
+        {"id": i, "path": "a.py", "line": i, "body": f"b{i}", "resolved": False}
+        for i in range(50)
+    ]
+    page2 = [{"id": 50, "path": "b.py", "line": 1, "body": "b50", "resolved": False}]
+    calls = []
+
+    def fake_get(path, params=None):
+        calls.append(dict(params))
+        return page1 if len(calls) == 1 else page2
+
+    p._get = fake_get
+    comments = p.get_existing_review_comments("owner", "repo", 1)
+    assert len(comments) == 51
+    assert calls[0]["page"] == 1 and calls[0]["limit"] == 50
+    assert calls[1]["page"] == 2
+
+
+def test_get_existing_review_comments_404_returns_empty():
+    p = GiteaProvider("https://gitea.example.com", "tok")
+    resp = MagicMock()
+    resp.status_code = 404
+
+    def boom(path, params=None):
+        raise httpx.HTTPStatusError("nf", request=MagicMock(), response=resp)
+
+    p._get = boom
+    assert p.get_existing_review_comments("owner", "repo", 1) == []

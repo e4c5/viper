@@ -131,6 +131,8 @@ weak findings.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CODE_REVIEW_LOG_LEVEL` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (case-insensitive). |
+| `CODE_REVIEW_LOG_FORMAT` | `text` | `text` or `json`. `json` emits one JSON object per line (`ts`, `level`, `logger`, `message`, `trace_id`, `exc_info`, plus JSON-serialisable extra fields). |
+| `CODE_REVIEW_SCM_FETCH_CONCURRENCY` | `4` | Max parallel read-only SCM file-content fetches (fingerprint anchoring). `0`/`1` disables; providers whose clients are not thread-safe (GitHub/PyGithub) stay sequential. |
 | `CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT` | `true` | Include a PR commit-message block in the review prompt. |
 | `CODE_REVIEW_REVIEW_VISIBLE_LINES` | `false` | Review-scope line guardrail. Default `false` restricts findings to changed (`+`) lines only. Set `true` to allow findings on all diff-visible new-file lines (including context lines). |
 | `CODE_REVIEW_REVIEW_DECISION_ONLY` | `false` | When `true` / `1`, skip the LLM and inline posting; only recompute the quality gate and submit a PR review decision (requires `SCM_REVIEW_DECISION_ENABLED` for submission). Same effect as CLI `--review-decision-only`. |

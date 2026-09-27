@@ -5,12 +5,42 @@ Log level is controlled by the CODE_REVIEW_LOG_LEVEL environment variable
 normal runs stay quiet; set to INFO for progress messages, DEBUG for verbose.
 """
 
+import json
 import logging
 import os
 
 LOG_LEVEL_ENV = "CODE_REVIEW_LOG_LEVEL"
+LOG_FORMAT_ENV = "CODE_REVIEW_LOG_FORMAT"
 DEFAULT_LEVEL = "WARNING"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+# Standard LogRecord attributes; anything else on the record is an "extra" field
+# that the JSON formatter includes when JSON-serialisable.
+_STANDARD_RECORD_ATTRS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", (), None)))
+
+
+class JsonFormatter(logging.Formatter):
+    """One JSON object per line: ts, level, logger, message, trace_id, extras."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, object] = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "trace_id": getattr(record, "trace_id", "-"),
+        }
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        for key, value in vars(record).items():
+            if key in _STANDARD_RECORD_ATTRS or key in payload or key.startswith("_"):
+                continue
+            try:
+                json.dumps(value)
+            except (TypeError, ValueError):
+                continue
+            payload[key] = value
+        return json.dumps(payload, ensure_ascii=False)
 
 
 def _filter_non_text_parts_warning(record: logging.LogRecord) -> bool:
@@ -54,10 +84,16 @@ def configure_logging(level: str | None = None) -> None:
     log = logging.getLogger("code_review")
     log.setLevel(numeric)
     _suppress_third_party_loggers()
+    formatter: logging.Formatter = (
+        JsonFormatter()
+        if (os.environ.get(LOG_FORMAT_ENV) or "").strip().lower() == "json"
+        else logging.Formatter(LOG_FORMAT)
+    )
     if not log.handlers:
         handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter(LOG_FORMAT))
         log.addHandler(handler)
+    for existing in log.handlers:
+        existing.setFormatter(formatter)
     for handler in log.handlers:
         handler.setLevel(numeric)
     # Prevent propagation to root so we don't double-print if root is configured

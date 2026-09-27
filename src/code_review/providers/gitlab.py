@@ -500,14 +500,96 @@ class GitLabProvider(HttpXProvider):
                 out.append(item)
         return out
 
-    def resolve_comment(self, owner: str, repo: str, comment_id: str) -> None:
-        """
-        Resolve a discussion thread.
+    def _gitlab_discussion_for_note_id(
+        self, owner: str, repo: str, pr_number: int, note_id: str
+    ) -> dict[str, Any] | None:
+        """Return the discussion dict containing the note, or None."""
+        want = (note_id or "").strip()
+        if not want:
+            return None
+        try:
+            data = self._get_mr_discussions_paginated(owner, repo, pr_number)
+        except Exception as e:
+            logger.warning(
+                "GitLab discussion lookup failed owner=%s repo=%s pr=%s: %s",
+                owner,
+                repo,
+                pr_number,
+                e,
+            )
+            return None
+        for disc in data:
+            if not isinstance(disc, dict):
+                continue
+            if _gitlab_notes_contain_id(disc.get("notes") or [], want):
+                return disc
+        return None
 
-        Not implemented; capabilities() returns resolvable_comments=False so callers
-        do not attempt this.
+    def _gitlab_set_comment_resolved(
+        self, owner: str, repo: str, comment_id: str, pr_number: int | None, resolved: bool
+    ) -> None:
+        """Resolve/unresolve the MR discussion containing note ``comment_id``.
+
+        Notes that are not flagged ``resolvable`` in the discussion payload (e.g.
+        plain MR comments) are skipped, matching the GitLab API which rejects
+        resolving non-resolvable discussions.
         """
-        pass
+        if pr_number is None:
+            logger.warning(
+                "GitLab resolve_comment needs pr_number owner=%s repo=%s comment_id=%s",
+                owner,
+                repo,
+                comment_id,
+            )
+            return
+        disc = self._gitlab_discussion_for_note_id(owner, repo, pr_number, comment_id)
+        if disc is None:
+            logger.warning(
+                "GitLab no discussion for note id=%s owner=%s repo=%s pr=%s",
+                comment_id,
+                owner,
+                repo,
+                pr_number,
+            )
+            return
+        want = str(comment_id).strip()
+        note = next(
+            (
+                n
+                for n in (disc.get("notes") or [])
+                if isinstance(n, dict) and str(n.get("id") or "") == want
+            ),
+            None,
+        )
+        if note is not None and note.get("resolvable") is not True:
+            logger.debug(
+                "GitLab note id=%s is not resolvable; skipping", comment_id
+            )
+            return
+        discussion_id = str(disc.get("id") or "")
+        if not discussion_id:
+            return
+        path = self._path(
+            owner,
+            repo,
+            "merge_requests",
+            str(pr_number),
+            "discussions",
+            discussion_id,
+        )
+        self._put(path, {"resolved": resolved})
+
+    def resolve_comment(
+        self, owner: str, repo: str, comment_id: str, *, pr_number: int | None = None
+    ) -> None:
+        """Resolve the MR discussion containing note ``comment_id``."""
+        self._gitlab_set_comment_resolved(owner, repo, comment_id, pr_number, True)
+
+    def unresolve_comment(
+        self, owner: str, repo: str, comment_id: str, *, pr_number: int | None = None
+    ) -> None:
+        """Reopen the MR discussion containing note ``comment_id``."""
+        self._gitlab_set_comment_resolved(owner, repo, comment_id, pr_number, False)
 
     def resolve_review_thread(
         self,
@@ -750,11 +832,11 @@ class GitLabProvider(HttpXProvider):
         """
         Return provider capability flags for GitLab.
 
-        GitLab supports suggestion blocks. resolve_comment is not implemented, so
-        resolvable_comments=False to avoid silent failures.
+        GitLab supports suggestion blocks and resolving the discussion that
+        contains a note via resolve_comment/unresolve_comment.
         """
         return ProviderCapabilities(
-            resolvable_comments=False,
+            resolvable_comments=True,
             supports_suggestions=True,
             supports_multiline_suggestions=True,
             supports_review_decisions=True,

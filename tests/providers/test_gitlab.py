@@ -687,3 +687,69 @@ def test_get_bot_blocking_state_paginates_reviews(mock_get):
     mock_get.side_effect = [{"id": 10}, page1, page2]
     p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
     assert p.get_bot_blocking_state("owner", "repo", 3) == "BLOCKING"
+
+
+def test_resolve_comment_resolves_discussion():
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p._get_mr_discussions_paginated = MagicMock(
+        return_value=[
+            {
+                "id": "disc-9",
+                "notes": [
+                    {"id": 42, "resolvable": True, "body": "bot comment"},
+                ],
+            },
+            {"id": "disc-other", "notes": [{"id": 7, "resolvable": True}]},
+        ]
+    )
+    p._put = MagicMock()
+    p.resolve_comment("owner", "repo", "42", pr_number=7)
+    p._put.assert_called_once_with(
+        "https://gitlab.example.com/api/v4/projects/owner%2Frepo/merge_requests/7/discussions/disc-9",
+        {"resolved": True},
+    )
+
+
+def test_unresolve_comment_reopens_discussion():
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p._get_mr_discussions_paginated = MagicMock(
+        return_value=[{"id": "disc-9", "notes": [{"id": 42, "resolvable": True}]}]
+    )
+    p._put = MagicMock()
+    p.unresolve_comment("owner", "repo", "42", pr_number=7)
+    p._put.assert_called_once_with(
+        "https://gitlab.example.com/api/v4/projects/owner%2Frepo/merge_requests/7/discussions/disc-9",
+        {"resolved": False},
+    )
+
+
+def test_resolve_comment_skips_non_resolvable_note():
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p._get_mr_discussions_paginated = MagicMock(
+        return_value=[{"id": "disc-9", "notes": [{"id": 42, "resolvable": False}]}]
+    )
+    p._put = MagicMock()
+    p.resolve_comment("owner", "repo", "42", pr_number=7)
+    p._put.assert_not_called()
+
+
+def test_resolve_comment_no_pr_number_no_call():
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p._put = MagicMock()
+    p.resolve_comment("owner", "repo", "42")
+    p._put.assert_not_called()
+
+
+def test_resolve_comment_unknown_note_no_call():
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p._get_mr_discussions_paginated = MagicMock(
+        return_value=[{"id": "disc-9", "notes": [{"id": 1, "resolvable": True}]}]
+    )
+    p._put = MagicMock()
+    p.resolve_comment("owner", "repo", "999", pr_number=7)
+    p._put.assert_not_called()
+
+
+def test_gitlab_resolvable_comments_capability():
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    assert p.capabilities().resolvable_comments is True

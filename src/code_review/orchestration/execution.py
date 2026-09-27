@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import random
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from google.genai import types
@@ -400,7 +401,11 @@ def _make_retry_batch(batch_index: int, segments: tuple[ReviewSegment, ...]) -> 
 
 
 def _split_batch_for_retry(
-    batch: ReviewBatch, *, attempt: int, max_retries: int
+    batch: ReviewBatch,
+    *,
+    attempt: int,
+    max_retries: int,
+    token_counter: Callable[[str], int] = estimate_tokens,
 ) -> list[tuple[ReviewBatch, int]]:
     """Return smaller retry batches when a batch's response is malformed.
 
@@ -439,6 +444,7 @@ def _split_batch_for_retry(
         segment.path,
         segment.diff_text,
         segment_budget_tokens=smaller_budget,
+        token_counter=token_counter,
     )
     if len(smaller_segments) <= 1:
         return [(batch, retry_attempt)]
@@ -595,7 +601,11 @@ def _run_isolated_batches_with_retry(
 
 
 def build_review_batches_for_scope(
-    files: list[object], paths: list[str], full_diff: str, diff_budget: int
+    files: list[object],
+    paths: list[str],
+    full_diff: str,
+    diff_budget: int,
+    token_counter: Callable[[str], int] = estimate_tokens,
 ) -> list[ReviewBatch]:
     """Slice the scoped diff by file and pack the resulting segments into ordered batches."""
     scoped_diff_by_path = {
@@ -605,7 +615,7 @@ def build_review_batches_for_scope(
     if effective_diff_budget <= 0:
         effective_diff_budget = max(
             (
-                estimate_tokens(diff_text)
+                token_counter(diff_text)
                 for diff_text in scoped_diff_by_path.values()
                 if diff_text.strip()
             ),
@@ -621,6 +631,7 @@ def build_review_batches_for_scope(
         files,
         scoped_diff_by_path,
         diff_budget_tokens=effective_diff_budget,
+        token_counter=token_counter,
     )
 
 

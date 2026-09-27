@@ -146,9 +146,12 @@ def _reload_observability():
 def test_prometheus_enabled_but_package_missing_is_noop(monkeypatch, _reload_observability):
     monkeypatch.setenv("CODE_REVIEW_METRICS", "prometheus")
     monkeypatch.delitem(sys.modules, "prometheus_client", raising=False)
+    # Simulate the package being absent even though the venv now has it
+    # installed (webhooks depends on it): `import prometheus_client` fails.
+    monkeypatch.setitem(sys.modules, "prometheus_client", None)
     importlib.reload(observability_module)
     assert observability_module.PROMETHEUS_ENABLED is True
-    # prometheus_client genuinely absent in this env -> init fails, no-op
+    # simulated absence -> init fails, no-op
     assert observability_module.get_prometheus_registry() is None
     observability_module.record_reply_dismissal_outcome("agreed")  # must not raise
     h = observability_module.start_run("t1")

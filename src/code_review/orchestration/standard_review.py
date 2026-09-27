@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -19,6 +20,7 @@ from code_review.providers.base import FileInfo, PRInfo, ProviderInterface
 from code_review.quality.gate import QualityGate
 from code_review.refinement.pipeline import FindingRefinementPipeline
 from code_review.schemas.findings import FindingV1
+from code_review.tokens import count_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +89,8 @@ class StandardReviewHandler:
     @staticmethod
     def detect_languages_for_files(paths: list[str]):
         """Run language detection on paths and return (detected, review_standards)."""
-        detected = runner_mod.detect_from_paths(paths)
-        review_standards = runner_mod.get_review_standards(detected.language, detected.framework)
+        detected, contexts = runner_mod.detect_review_contexts(paths)
+        review_standards = runner_mod.get_review_standards_multi(contexts)
         return (detected, review_standards)
 
     def make_fingerprint_fn(self, provider):
@@ -472,8 +474,15 @@ class StandardReviewHandler:
         )
         self.log_context_aware_prompt_inputs(refs, context_brief)
 
+        token_counter = functools.partial(
+            count_tokens, model=getattr(effective_llm_cfg, "model", None)
+        )
         batches = execution_mod.build_review_batches_for_scope(
-            env.files, env.paths, env.full_diff, diff_budget
+            env.files,
+            env.paths,
+            env.full_diff,
+            diff_budget,
+            token_counter=token_counter,
         )
         context_brief_attached = bool(context_brief and _CONTEXT_TAG in prompt_suffix)
         execution_mod.log_review_batch_plan(batches, env.paths, env.incremental_base_sha)

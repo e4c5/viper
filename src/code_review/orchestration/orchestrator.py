@@ -56,6 +56,7 @@ class ReviewOrchestrator:
         self._scm_config_override = scm_config
         self._llm_config_override = llm_config
         self._app_config_override = app_config
+        self._labels_capability_warned = False
 
     @property
     def owner(self) -> str:
@@ -115,6 +116,19 @@ class ReviewOrchestrator:
         """Emit observability and return [] if skip config matches, else None."""
         if not configured_skip_labels(cfg) and not cfg.skip_title_pattern:
             return None
+        if configured_skip_labels(cfg) and not self._labels_capability_warned:
+            try:
+                supports_labels = provider.capabilities().supports_pr_labels
+            except Exception:
+                supports_labels = True
+            if not supports_labels:
+                self._labels_capability_warned = True
+                notice = (
+                    "WARNING: SCM_SKIP_LABEL is set but this SCM provider has no "
+                    "PR labels; only SCM_SKIP_TITLE_PATTERN applies."
+                )
+                logger.warning(notice)
+                print(notice)
         pr_info = provider.get_pr_info(self.owner, self.repo, self.pr_number)
         skip_reason = ReviewFilter().should_skip(pr_info, cfg)
         if skip_reason is None:

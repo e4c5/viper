@@ -193,16 +193,25 @@ class GiteaProvider(HttpXProvider):
         path = f"/repos/{owner}/{repo}/pulls/{pr_number}/comments"
         # Older Gitea versions (e.g. 1.21.x) do not expose this endpoint and return 404.
         # Treat 404 as "no existing review comments" instead of failing the whole run.
+        page_iter = self._paginate_list(
+            path,
+            mode="page",
+            page_size=50,
+            params={"limit": 50},
+        )
+        data_pages: list[Any] = []
         try:
-            data = self._get(path)
+            for data in page_iter:
+                if isinstance(data, list):
+                    data_pages.append(data)
         except httpx.HTTPStatusError as exc:
             if exc.response is not None and exc.response.status_code == 404:
+                if data_pages:
+                    raise
                 return []
             raise
-        if not isinstance(data, list):
-            return []
         result: list[ReviewComment] = []
-        for c in data:
+        for c in (item for page in data_pages for item in page):
             # Gitea PR comments: id, path, line, body; resolved status may be absent
             result.append(
                 ReviewComment(
@@ -311,7 +320,9 @@ class GiteaProvider(HttpXProvider):
                 return
             raise
 
-    def resolve_comment(self, owner: str, repo: str, comment_id: str) -> None:
+    def resolve_comment(
+        self, owner: str, repo: str, comment_id: str, *, pr_number: int | None = None
+    ) -> None:
         """Mark comment as resolved. Gitea does not support updating PR review comments; no-op."""
         try:
             self._patch(
@@ -323,7 +334,9 @@ class GiteaProvider(HttpXProvider):
             # No-op for runtime safety if called despite capabilities() returning False
             pass
 
-    def unresolve_comment(self, owner: str, repo: str, comment_id: str) -> None:
+    def unresolve_comment(
+        self, owner: str, repo: str, comment_id: str, *, pr_number: int | None = None
+    ) -> None:
         """Mark comment as unresolved. Gitea does not support updating PR review comments; no-op."""
         try:
             self._patch(

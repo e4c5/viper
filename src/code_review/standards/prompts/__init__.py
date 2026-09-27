@@ -43,3 +43,34 @@ def get_review_standards(language: str, framework: str | None) -> str:
     if framework:
         parts.append(f"\n### Framework: {framework}\n")
     return "\n".join(parts)
+
+
+def get_review_standards_multi(contexts) -> str:
+    """Combine prompt fragments for several detected language/framework pairs.
+
+    Used for monorepo diffs (e.g. Python backend + TypeScript frontend): the
+    base prompt is emitted once, then each distinct detection contributes its
+    language fragment and framework note. Single-context input is identical to
+    ``get_review_standards``.
+    """
+    contexts = list(contexts or [])
+    if len(contexts) <= 1:
+        if not contexts:
+            return get_review_standards("unknown", None)
+        ctx = contexts[0]
+        return get_review_standards(ctx.language, ctx.framework)
+    parts: list[str] = [BASE_REVIEW_PROMPT]
+    seen: set[tuple[str, str | None]] = set()
+    for ctx in contexts:
+        language = getattr(ctx, "language", "") or ""
+        framework = getattr(ctx, "framework", None)
+        key = (language.lower(), framework)
+        if key in seen:
+            continue
+        seen.add(key)
+        fragment = _load_language_fragment(language.lower())
+        if fragment:
+            parts.append(fragment)
+        if framework:
+            parts.append(f"\n### Framework: {framework}\n")
+    return "\n".join(parts)

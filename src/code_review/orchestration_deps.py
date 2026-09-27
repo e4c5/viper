@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time  # noqa: F401
 import uuid  # noqa: F401
+from concurrent.futures import ThreadPoolExecutor
 
 from code_review import observability  # noqa: F401
 from code_review.agent import (
@@ -86,8 +88,14 @@ from code_review.schemas.review_decision_event import (
     ReviewDecisionEventContext,
     event_allows_decision_only_skip_when_bot_not_blocking,  # noqa: F401
 )
-from code_review.standards.detector import detect_from_paths  # noqa: F401
-from code_review.standards.prompts import get_review_standards  # noqa: F401
+from code_review.standards.detector import (  # noqa: F401
+    detect_from_paths,
+    detect_review_contexts,
+)
+from code_review.standards.prompts import (  # noqa: F401
+    get_review_standards,
+    get_review_standards_multi,
+)
 
 # APP_NAME / USER_ID / AGENT_VERSION are re-exported from
 # orchestration.runner_utils below (their canonical definitions).
@@ -212,15 +220,31 @@ def _build_idempotency_key(
     )
 
 
+def _scm_fetch_concurrency(provider) -> int:
+    """Worker count for read-only SCM fan-out; 0/1 or incapable → sequential."""
+    try:
+        limit = int(os.environ.get("CODE_REVIEW_SCM_FETCH_CONCURRENCY", "") or 4)
+    except ValueError:
+        limit = 4
+    if limit <= 1:
+        return 1
+    try:
+        if not provider.capabilities().supports_concurrent_fetches:
+            return 1
+    except Exception:
+        return 1
+    return limit
+
+
 def _get_file_lines_by_path(
     provider, owner: str, repo: str, ref: str, paths: list[str]
 ) -> dict[str, list[str]]:
     """Fetch file content at ref for each path; return dict path -> list of lines."""
-    out: dict[str, list[str]] = {}
-    for p in paths:
+
+    def fetch(p: str) -> list[str]:
         try:
             content = provider.get_file_content(owner, repo, ref, p)
-            out[p] = content.splitlines()
+            return content.splitlines()
         except Exception as e:
             logger.warning(
                 "get_file_content failed for path=%s owner=%s repo=%s ref=%s: %s",
@@ -231,8 +255,20 @@ def _get_file_lines_by_path(
                 e,
                 exc_info=True,
             )
-            out[p] = []
-    return out
+            return []
+
+    workers = _scm_fetch_concurrency(provider)
+    if workers <= 1 or len(paths) <= 1:
+        return {p: fetch(p) for p in paths}
+
+    results: dict[str, list[str]] = {}
+    with ThreadPoolExecutor(
+        max_workers=min(workers, len(paths)),
+        thread_name_prefix="scm-fetch",
+    ) as pool:
+        for path, lines in zip(paths, pool.map(fetch, paths), strict=True):
+            results[path] = lines
+    return results
 
 
 def _maybe_post_started_review_comment(

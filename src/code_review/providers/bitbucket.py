@@ -816,6 +816,7 @@ class BitbucketProvider(HttpXProvider):
         # PR labels are not supported by Bitbucket Cloud API.
         # Skip-by-label is ineffective; see get_pr_info.
         return ProviderCapabilities(
+            supports_pr_labels=False,
             resolvable_comments=False,
             supports_suggestions=True,
             supports_multiline_suggestions=False,
