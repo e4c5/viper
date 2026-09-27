@@ -549,7 +549,9 @@ context = [
     { name = "psycopg", extra = ["binary"] },
 ]
 dev = [
+    { name = "aiohttp" },
     { name = "litellm" },
+    { name = "msgpack" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -576,12 +578,14 @@ observability = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", marker = "extra == 'dev'", specifier = ">=3.14.3" },
     { name = "aiohttp", marker = "extra == 'litellm'", specifier = ">=3.14.3" },
     { name = "cryptography", specifier = ">=50.0.0" },
     { name = "google-adk", specifier = ">=1.25.0" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "litellm", marker = "extra == 'dev'", specifier = ">=1.83.7" },
     { name = "litellm", marker = "extra == 'litellm'", specifier = ">=1.83.7" },
+    { name = "msgpack", marker = "extra == 'dev'", specifier = ">=1.2.1" },
     { name = "msgpack", marker = "extra == 'litellm'", specifier = ">=1.2.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.20" },

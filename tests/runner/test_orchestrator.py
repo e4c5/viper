@@ -1720,6 +1720,7 @@ def test_post_inline_stamps_run_marker_when_complete():
     # Earlier comments carry fingerprint markers only; the run= stamp is
     # all-or-nothing so partial posts can never leave it behind.
     assert "fingerprint=" in captured[0].body
+    assert "run=" not in captured[0].body
 
 
 def test_post_inline_omits_run_marker_when_a_post_fails():

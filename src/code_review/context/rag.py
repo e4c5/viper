@@ -73,7 +73,8 @@ def _embedding_provider_matches_llm(model: str, llm_provider: str) -> bool:
     ``provider/model`` prefixes are honored; bare model names (e.g.
     ``text-embedding-3-small``) default to OpenAI embeddings in litellm.
     """
-    provider = (llm_provider or "").strip().lower()
+    raw_provider = (llm_provider or "").strip().lower()
+    provider = _EMBEDDING_PROVIDER_ALIASES.get(raw_provider, raw_provider)
     prefix, sep, _ = (model or "").partition("/")
     emb_provider = _EMBEDDING_PROVIDER_ALIASES.get(prefix.strip().lower())
     if not sep or emb_provider is None:

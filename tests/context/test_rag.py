@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from code_review.context.rag import (
+    _embedding_provider_matches_llm,
     build_semantic_query_from_diff,
     chunk_plain_text,
     embed_query_text,
@@ -178,3 +179,21 @@ def test_embed_query_text_returns_single_vector(mock_embedding):
     mock_embedding.return_value = _make_embedding_response([[0.5, 0.6, 0.7]])
     result = embed_query_text("my query", "text-embedding-3-small")
     assert result == [0.5, 0.6, 0.7]
+
+
+@pytest.mark.parametrize(
+    ("model", "llm_provider", "expected"),
+    [
+        ("openai/text-embedding-3-small", "openai", True),
+        ("openai/text-embedding-3-small", "gemini", False),
+        # vertex_ai is an alias for vertex on both sides of the comparison.
+        ("vertex_ai/text-embedding-004", "vertex", True),
+        ("vertex_ai/text-embedding-004", "vertex_ai", True),
+        ("vertex/text-embedding-004", "vertex_ai", True),
+        # Bare model names default to OpenAI embeddings in litellm.
+        ("text-embedding-3-small", "openai", True),
+        ("text-embedding-3-small", "gemini", False),
+    ],
+)
+def test_embedding_provider_matches_llm(model, llm_provider, expected):
+    assert _embedding_provider_matches_llm(model, llm_provider) is expected
