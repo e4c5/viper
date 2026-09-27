@@ -18,6 +18,7 @@ from code_review.orchestration.runner_utils import (
     _run_reply_dismissal_llm,
 )
 from code_review.orchestration.standard_review import StandardReviewHandler
+from code_review.providers.url_policy import validate_scm_base_url
 from code_review.schemas.findings import FindingV1
 from code_review.schemas.review_decision_event import (
     ReviewDecisionConfig,
@@ -92,6 +93,11 @@ class ReviewOrchestrator:
         llm_cfg = self._llm_config_override or runner_mod.get_llm_config()
         token_val = (
             cfg.token.get_secret_value() if hasattr(cfg.token, "get_secret_value") else cfg.token
+        )
+        validate_scm_base_url(
+            cfg.url,
+            allowed_hosts=getattr(cfg, "allowed_hosts", None),
+            block_private=bool(getattr(cfg, "block_private_hosts", False)),
         )
         provider = runner_mod.get_provider(
             cfg.provider,

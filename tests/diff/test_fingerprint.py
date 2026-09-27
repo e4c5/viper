@@ -100,3 +100,34 @@ def test_format_and_parse_commonmark_linkref_marker():
 
     empty = parse_marker_from_comment_body("no marker")
     assert empty["run"] is None
+
+
+def test_marker_unsigned_is_ignored_when_signing_key_set(monkeypatch):
+    """With CODE_REVIEW_SIGNING_KEY set, a marker lacking sig must not be trusted."""
+    monkeypatch.setenv("CODE_REVIEW_SIGNING_KEY", "test-secret")
+    unsigned = "<!-- code-review-agent:fingerprint=abc;version=0.1.0;run=key1 -->\n\nHi."
+    out = parse_marker_from_comment_body(unsigned)
+    assert out == {"fingerprint": None, "version": None, "run": None}
+
+
+def test_marker_signed_roundtrip_when_signing_key_set(monkeypatch):
+    monkeypatch.setenv("CODE_REVIEW_SIGNING_KEY", "test-secret")
+    body = format_comment_body_with_marker("Hi.", "fp1", "0.1.0", run_id="run-1")
+    assert ";sig=" in body
+    out = parse_marker_from_comment_body(body)
+    assert out["fingerprint"] == "fp1"
+    assert out["run"] == "run-1"
+
+
+def test_marker_bad_signature_is_ignored_when_signing_key_set(monkeypatch):
+    monkeypatch.setenv("CODE_REVIEW_SIGNING_KEY", "test-secret")
+    body = "<!-- code-review-agent:fingerprint=abc;version=0.1.0;run=k;sig=deadbeef -->"
+    out = parse_marker_from_comment_body(body)
+    assert out == {"fingerprint": None, "version": None, "run": None}
+
+
+def test_marker_unsigned_accepted_when_signing_key_unset(monkeypatch):
+    monkeypatch.delenv("CODE_REVIEW_SIGNING_KEY", raising=False)
+    unsigned = "<!-- code-review-agent:fingerprint=abc;version=0.1.0;run=key1 -->"
+    out = parse_marker_from_comment_body(unsigned)
+    assert out["fingerprint"] == "abc"

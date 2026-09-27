@@ -150,6 +150,8 @@ def _parse_retry_delay_value(value: object) -> float | None:
 
 def _retry_after_from_headers(exc: BaseException) -> float | None:
     """Read a numeric (or HTTP-date) Retry-After header off exc.response.headers."""
+    from code_review.providers.http_retry import parse_retry_after
+
     headers = getattr(getattr(exc, "response", None), "headers", None)
     if not headers:
         return None
@@ -159,18 +161,7 @@ def _retry_after_from_headers(exc: BaseException) -> float | None:
         raw = getter("retry-after") or getter("Retry-After")
     if not raw:
         return None
-    try:
-        return max(0.0, float(str(raw).strip()))
-    except ValueError:
-        pass
-    try:
-        from datetime import datetime
-        from email.utils import parsedate_to_datetime
-
-        retry_at = parsedate_to_datetime(str(raw).strip())
-        return max(0.0, (retry_at - datetime.now(retry_at.tzinfo)).total_seconds())
-    except Exception:
-        return None
+    return parse_retry_after(raw)
 
 
 def _retry_after_from_details(exc: BaseException) -> float | None:

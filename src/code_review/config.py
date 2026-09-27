@@ -69,6 +69,14 @@ class SCMConfig(BaseSettings):
             "SCM_URL must use one of these hosts."
         ),
     )
+    block_private_hosts: bool = Field(
+        default=False,
+        description=(
+            "When true, SCM_URL must not resolve to loopback, RFC1918/private, "
+            "CGNAT, link-local, or reserved addresses. Off by default because "
+            "self-hosted SCMs typically live on private networks."
+        ),
+    )
     bot_identity: str = Field(
         default="",
         description=(

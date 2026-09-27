@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+import random
+import time
 from abc import abstractmethod
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import httpx
 
@@ -14,15 +17,31 @@ from code_review.providers.base import (
     FileInfo,
     PRInfo,
     ProviderInterface,
+    RateLimitError,
     _log_pr_info_warning,
     pr_info_from_api_dict,
 )
+from code_review.providers.http_retry import parse_retry_after
 
 PaginationMode = Literal["page", "next", "start"]
 PageToken = str | int | None
 FetchPage = Callable[[str, dict[str, Any] | None], Any]
 NextPage = Callable[[Any, PageToken], PageToken]
 RepeatHook = Callable[[PageToken], None]
+
+logger = logging.getLogger(__name__)
+
+# Module-level so tests can patch it; retry sleeps must never really sleep.
+_sleep = time.sleep
+
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "PUT", "DELETE"})
+# Never wait longer than this on a server-supplied Retry-After; beyond it the
+# request fails fast as RateLimitError so callers can move on.
+_MAX_RETRY_AFTER_SECONDS = 30.0
+
+
+def _backoff_seconds(attempt: int) -> float:
+    return min(8.0, 0.5 * (2 ** attempt)) + random.uniform(0, 0.25)
 
 
 @dataclass
@@ -58,8 +77,41 @@ class HttpXProvider(ProviderInterface):
 
     def _build_url(self, path: str) -> str:
         if path.startswith(("http://", "https://")):
+            # Absolute URLs come from API responses (e.g. pagination `next`
+            # links). Sending the bearer token to a different origin would leak
+            # it, so cross-origin URLs are refused outright.
+            base = urlparse(self._base_url)
+            target = urlparse(path)
+            if (target.scheme, target.hostname, target.port) != (
+                base.scheme,
+                base.hostname,
+                base.port,
+            ):
+                raise ValueError(
+                    f"refusing cross-origin URL {path!r}: scheme/host/port must "
+                    f"match configured SCM base URL {self._base_url!r}"
+                )
             return path
         return f"{self._base_url}{self._api_prefix()}{path}"
+
+    # Retry policy (class attributes so providers/tests can tune):
+    #  - 502/503/504 and read timeouts: retry only for idempotent methods.
+    #  - ConnectError/ConnectTimeout: the request never reached the server, so
+    #    any method may be retried (never re-POST after a response or a read
+    #    timeout — that would risk duplicate comments).
+    #  - 429 (any method): honour Retry-After (seconds or HTTP-date), capped at
+    #    _MAX_RETRY_AFTER_SECONDS; a longer advertised wait fails fast.
+    _max_http_retries = 3
+    _retry_statuses = frozenset({502, 503, 504})
+
+    def _send_once(
+        self,
+        client: httpx.Client,
+        method: str,
+        url: str,
+        request_kwargs: dict[str, Any],
+    ) -> httpx.Response:
+        return getattr(client, method.lower())(url, **request_kwargs)
 
     def _request(
         self,
@@ -78,10 +130,64 @@ class HttpXProvider(ProviderInterface):
             request_kwargs["params"] = params
         if json is not None:
             request_kwargs["json"] = json
+        url = self._build_url(path)
+        idempotent = method.upper() in _IDEMPOTENT_METHODS
+        attempt = 0
         with self._httpx_module.Client(timeout=self._timeout) as client:
-            response = getattr(client, method.lower())(self._build_url(path), **request_kwargs)
-            response.raise_for_status()
-            return response
+            while True:
+                try:
+                    response = self._send_once(client, method, url, request_kwargs)
+                except (httpx.ConnectError, httpx.ConnectTimeout):
+                    # Never reached the server: safe to retry any method.
+                    if attempt < self._max_http_retries:
+                        _sleep(_backoff_seconds(attempt))
+                        attempt += 1
+                        continue
+                    raise
+                except (httpx.TimeoutException, httpx.TransportError):
+                    # A response may have been written (or timed out mid-read):
+                    # only idempotent methods may be retried.
+                    if idempotent and attempt < self._max_http_retries:
+                        _sleep(_backoff_seconds(attempt))
+                        attempt += 1
+                        continue
+                    raise
+                if response.status_code == 429:
+                    delay = parse_retry_after(response.headers.get("retry-after"))
+                    if delay is not None and delay > _MAX_RETRY_AFTER_SECONDS:
+                        raise RateLimitError(
+                            f"Rate limit exceeded (HTTP 429) for {method} {url}; "
+                            f"server asked for {delay:.0f}s, above the "
+                            f"{_MAX_RETRY_AFTER_SECONDS:.0f}s cap."
+                        )
+                    if attempt < self._max_http_retries:
+                        _sleep(
+                            delay if delay is not None else _backoff_seconds(attempt)
+                        )
+                        attempt += 1
+                        continue
+                    raise RateLimitError(
+                        f"Rate limit exceeded (HTTP 429) for {method} {url}: "
+                        f"{response.text}"
+                    )
+                if (
+                    response.status_code in self._retry_statuses
+                    and idempotent
+                    and attempt < self._max_http_retries
+                ):
+                    logger.debug(
+                        "retrying %s %s after HTTP %s (attempt %d/%d)",
+                        method,
+                        url,
+                        response.status_code,
+                        attempt + 1,
+                        self._max_http_retries,
+                    )
+                    _sleep(_backoff_seconds(attempt))
+                    attempt += 1
+                    continue
+                response.raise_for_status()
+                return response
 
     @staticmethod
     def _json_or_text_response(response: httpx.Response) -> Any:

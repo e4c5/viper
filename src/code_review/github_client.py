@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from github import Auth, Github
+from github import Auth, Github, GithubRetry
 
 
 class GitHubApiClient:
@@ -17,6 +17,16 @@ class GitHubApiClient:
             auth=auth,
             timeout=max(1, int(timeout)),
             per_page=100,
+            # GithubRetry adds GitHub-aware handling (403 secondary rate limits,
+            # Retry-After). allowed_methods is restricted to idempotent verbs so
+            # a POST that reached the server is never replayed.
+            retry=GithubRetry(
+                total=3,
+                backoff_factor=0.5,
+                allowed_methods=frozenset({"GET", "HEAD", "PUT", "DELETE"}),
+                respect_retry_after_header=True,
+                raise_on_status=False,
+            ),
         )
 
     def get_repo(self, owner: str, repo: str):

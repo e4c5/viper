@@ -59,7 +59,8 @@ Loaded via `SCMConfig` (`env_prefix="SCM_"`). Field names map to env vars in **U
 | `SCM_REVIEW_DECISION_HIGH_THRESHOLD` | `1` | Request changes when open high-severity count ≥ this. |
 | `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD` | `3` | Request changes when open medium-severity count ≥ this. |
 | `SCM_BOT_IDENTITY` | `""` | The bot account's login/slug, used to attribute idempotency checks, process review decisions, and filter bot comments from quality-gate counts. Required for Bitbucket Server/DC. For GitHub App integrations, this is automatically injected by the runner layer. |
-| `SCM_ALLOWED_HOSTS` | — | Optional comma-separated allowlist of SCM hosts; `SCM_URL` must match. |
+| `SCM_ALLOWED_HOSTS` | — | Optional comma-separated allowlist of SCM hosts (`host[:port]`). When set, `SCM_URL`'s host must match an entry: an entry without a port matches any port, and an entry starting with `.` matches subdomains (e.g. `.example.com` allows `git.example.com`). Enforced at provider construction before any request. |
+| `SCM_BLOCK_PRIVATE_HOSTS` | `false` | When `true`, `SCM_URL` must not resolve to loopback, RFC1918/private, CGNAT (100.64/10), link-local, unique-local (fc00::/7), unspecified, reserved, or multicast addresses. Metadata endpoints (`169.254.169.254`, `metadata.google.internal`, `fd00:ec2::254`, link-local) are always rejected regardless of this setting. Off by default because self-hosted SCMs typically live on private networks. |
 
 **Review decisions vs merge blocking:** Only some providers implement automatic submission; whether `APPROVE` / `REQUEST_CHANGES` actually prevents merging depends on branch protection or merge checks on the SCM. See [SCM review decisions and merge blocking](SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md).
 
@@ -136,7 +137,7 @@ weak findings.
 | `CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING` | `false` | **Review-decision-only:** if `CODE_REVIEW_EVENT_COMMENT_ID` is set, skip the run when the SCM provider reports the token user is **not** in a blocking review state (`NOT_BLOCKING`). Empty event context always recomputes. Providers without `supports_bot_blocking_state_query` never skip on this path. |
 | `CODE_REVIEW_REPLY_DISMISSAL_ENABLED` | `true` | **Review-decision-only:** when `CODE_REVIEW_EVENT_COMMENT_ID` is set, run the reply-dismissal flow on the review thread (GitHub, GitLab, Bitbucket Cloud, and Bitbucket Server / DC when `supports_review_thread_dismissal_context`). The runner may skip the LLM when the provider already indicates the concern is addressed (for example an applied/orphaned Bitbucket suggestion). Otherwise, if the model returns `agreed`, that thread is excluded from quality-gate counts for this run and, when the provider supports `supports_review_thread_resolution`, the thread is also resolved in the SCM. If `disagreed`, the runner posts a thread reply when the provider supports `supports_review_thread_reply` (unless `--dry-run`). Set to `false` to disable. **Gitea** does not implement thread context yet (`skipped_no_capability`). |
 | `CODE_REVIEW_PRINT_RAW_RESPONSE` | *(unset)* | `1` / `true` / `TRUE` to log the raw LLM final response (debug). |
-| `CODE_REVIEW_SIGNING_KEY` | *(unset)* | If set, HMAC-signs fingerprint markers in posted comments (see §8). |
+| `CODE_REVIEW_SIGNING_KEY` | *(unset)* | If set, HMAC-signs fingerprint markers in posted comments and rejects unsigned/invalid markers during dedup (see §8). |
 
 ### 5.1 Review-decision webhook context (`CODE_REVIEW_EVENT_*`)
 
@@ -219,7 +220,7 @@ When Prometheus is enabled, **`code_review_reply_dismissal_total`** counts reply
 
 | Variable | Description |
 |----------|-------------|
-| `CODE_REVIEW_SIGNING_KEY` | Optional secret used to HMAC-sign hidden marker payloads in comment bodies. If unset, markers may remain unsigned for backward compatibility. |
+| `CODE_REVIEW_SIGNING_KEY` | Optional secret used to HMAC-sign hidden marker payloads in comment bodies. When set, markers without a valid `sig` are ignored during dedup — note that previously posted *unsigned* markers then become invisible to dedup and their findings may be re-posted once. If unset, markers may remain unsigned for backward compatibility. |
 
 ---
 

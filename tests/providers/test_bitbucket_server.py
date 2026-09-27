@@ -1326,8 +1326,11 @@ def test_get_review_thread_dismissal_context_server_fails_closed_on_pagination_e
         raise httpx.ReadError("boom")
 
     mock_client.return_value.__enter__.return_value.get.side_effect = _get_side_effect
-    p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
-    ctx = p.get_review_thread_dismissal_context("PROJ", "repo", 7, "11")
+    # Shared HTTP retry policy retries transport errors on GET; disable it here
+    # so this test asserts the fail-closed behaviour specifically.
+    with patch.object(BitbucketServerProvider, "_max_http_retries", 0):
+        p = BitbucketServerProvider("https://bb:7990/rest/api/1.0", "tok")
+        ctx = p.get_review_thread_dismissal_context("PROJ", "repo", 7, "11")
     assert ctx is None
     calls = mock_client.return_value.__enter__.return_value.get.call_args_list
     assert len(calls) == 2

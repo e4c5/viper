@@ -1,7 +1,6 @@
 """Gitea API provider."""
 
 import logging
-import time
 from typing import Any
 
 import httpx
@@ -15,7 +14,6 @@ from code_review.providers.base import (
     InlineComment,
     PRInfo,
     ProviderCapabilities,
-    RateLimitError,
     ReviewComment,
     ReviewDecision,
     _log_pr_commit_messages_warning,
@@ -38,6 +36,15 @@ class GiteaProvider(HttpXProvider):
 
     _httpx_module = httpx
 
+    def _send_once(
+        self,
+        client: httpx.Client,
+        method: str,
+        url: str,
+        request_kwargs: dict[str, Any],
+    ) -> httpx.Response:
+        return client.request(method, url, **request_kwargs)
+
     def _auth_header(self) -> dict[str, str]:
         return {"Authorization": f"token {self._token}"}
 
@@ -46,55 +53,6 @@ class GiteaProvider(HttpXProvider):
 
     def _api_prefix(self) -> str:
         return "/api/v1"
-
-    _RETRY_STATUSES = (502, 503, 504)
-    _RETRY_DELAY_SECONDS = 1.0
-
-    def _request_with_retry(
-        self,
-        method: str,
-        url: str,
-        *,
-        headers: dict[str, str] | None = None,
-        max_retries: int = 1,
-        **kwargs: Any,
-    ) -> httpx.Response:
-        """Perform request with one retry on transient server errors (502, 503, 504).
-
-        Rate limit errors (429) are not retried; a RateLimitError is raised
-        immediately so callers can skip to the next task rather than making
-        the rate limit situation worse.
-        """
-        request_headers = self._headers()
-        if headers:
-            request_headers = {**request_headers, **headers}
-        with self._httpx_module.Client(timeout=self._timeout) as client:
-            r = client.request(method, url, headers=request_headers, **kwargs)
-            if r.status_code == 429:
-                raise RateLimitError(f"Rate limit exceeded (HTTP 429) for {method} {url}: {r.text}")
-            if r.status_code in self._RETRY_STATUSES and max_retries > 0:
-                time.sleep(self._RETRY_DELAY_SECONDS)
-                r = client.request(method, url, headers=request_headers, **kwargs)
-            return r
-
-    def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        params: dict[str, Any] | None = None,
-        json: Any = None,
-        headers: dict[str, str] | None = None,
-    ) -> httpx.Response:
-        r = self._request_with_retry(
-            method,
-            self._build_url(path),
-            params=params or None,
-            json=json,
-            headers=headers,
-        )
-        r.raise_for_status()
-        return r
 
     def get_pr_diff(self, owner: str, repo: str, pr_number: int) -> str:
         """Return unified diff for the PR."""

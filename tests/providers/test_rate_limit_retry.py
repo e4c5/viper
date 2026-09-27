@@ -1,6 +1,7 @@
 """Tests for rate limiting (429) and transient failure retries (Phase 5)."""
 
 import re
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -17,7 +18,7 @@ from code_review.providers.gitea import GiteaProvider
 @pytest.mark.skipif(respx is None, reason="respx required")
 @pytest.mark.respx(assert_all_mocked=True, assert_all_called=False)
 def test_gitea_raises_rate_limit_error_on_429(respx_mock):
-    """Provider raises RateLimitError immediately on 429 without retrying."""
+    """Provider retries 429 with backoff, then raises RateLimitError."""
     url_pattern = re.compile(r"^http://gitea\.test/api/v1/repos/o/r/pulls/1\.diff$")
     call_count = 0
 
@@ -29,10 +30,12 @@ def test_gitea_raises_rate_limit_error_on_429(respx_mock):
     respx_mock.get(url_pattern).mock(side_effect=side_effect)
 
     provider = GiteaProvider(base_url="http://gitea.test", token="x")
-    with pytest.raises(RateLimitError):
+    with (
+        patch("code_review.providers.http_base._sleep"),
+        pytest.raises(RateLimitError),
+    ):
         provider.get_pr_diff("o", "r", 1)
-    # Must not retry on 429 — only one request should be made
-    assert call_count == 1
+    assert call_count == provider._max_http_retries + 1
 
 
 @pytest.mark.skipif(respx is None, reason="respx required")
