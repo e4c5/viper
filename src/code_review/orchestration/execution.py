@@ -545,7 +545,7 @@ def _run_isolated_batches_with_retry(
                 type(transient_exc).__name__,
                 ", ".join(batch.paths),
                 transient_attempt + 1,
-                max_transient_retries,
+                max_transient_retries + 1,
             )
             if transient_attempt < max_transient_retries:
                 delay = runner_mod.retry_after_seconds(transient_exc)
