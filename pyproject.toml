@@ -32,6 +32,8 @@ litellm = [
     # Optional multi-provider LLM support (OpenAI, Anthropic, Ollama,
     # OpenRouter, DeepSeek). Required when LLM_PROVIDER is not gemini/vertex.
     "litellm>=1.83.7",
+    # Transitive floor: msgpack <1.2.1 is vulnerable (GHSA-6v7p-g79w-8964).
+    "msgpack>=1.2.1",
 ]
 dev = [
     "pytest>=8.0",
