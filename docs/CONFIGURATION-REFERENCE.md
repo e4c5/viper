@@ -74,9 +74,9 @@ Loaded via `LLMConfig` (`env_prefix="LLM_"`).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_PROVIDER` | `gemini` | `gemini` \| `openai` \| `anthropic` \| `ollama` \| `vertex` \| `openrouter` \| `deepseek` |
+| `LLM_PROVIDER` | `gemini` | `gemini` \| `openai` \| `anthropic` \| `ollama` \| `vertex` \| `openrouter` \| `deepseek`. Non-Google providers require the `litellm` extra (`pip install 'code-review-agent[litellm]'`). |
 | `LLM_MODEL` | `gemini-2.5-flash` | Model identifier for the provider. |
-| `LLM_API_KEY` | — | Single universal API key. Applied to the provider-specific runtime env var used by ADK / LiteLLM. |
+| `LLM_API_KEY` | — | Single universal API key. Passed per call to the provider client (never written to `os.environ`). |
 | `LLM_CONTEXT_WINDOW` | `128000` | Context window in tokens (used for chunking / budgets). |
 | `LLM_MAX_OUTPUT_TOKENS` | `4096` | Max output tokens for generation. |
 | `LLM_TEMPERATURE` | `0.0` | Sampling temperature. |

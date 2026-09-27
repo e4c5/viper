@@ -64,6 +64,9 @@ Per-SCM “open” semantics:
   Install with `pip install -e .` (or from wheel/PyPI), then:  
   `code-review --owner <owner> --repo <repo> --pr <n> --head-sha <sha>`  
   Same env vars; see [Jenkins without Docker](docs/JENKINS-NO-DOCKER.md) for Jenkins inline usage.
+  For non-Google providers (`openai`, `anthropic`, `ollama`, `openrouter`,
+  `deepseek`) install the optional extra: `pip install -e ".[litellm]"` (or
+  `code-review-agent[litellm]` from a wheel). Gemini and Vertex need no extra.
   Decision thresholds can also be overridden per run with
   `--review-decision-enabled`, `--review-decision-high-threshold`, and
   `--review-decision-medium-threshold`.

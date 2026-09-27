@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import code_review.models as model_factory
 from code_review.models import (
     PRContext,
     get_configured_model,
@@ -18,16 +17,6 @@ from code_review.models import (
     get_model_metadata_catalog,
     get_model_token_costs,
 )
-
-
-@pytest.fixture(autouse=True)
-def _reset_injected_env_tracking():
-    """Ensure module-level env-injection tracking does not leak across tests."""
-    model_factory._INJECTED_PROVIDER_API_ENV = None
-    model_factory._PREVIOUS_PROVIDER_API_VALUE = None
-    yield
-    model_factory._INJECTED_PROVIDER_API_ENV = None
-    model_factory._PREVIOUS_PROVIDER_API_VALUE = None
 
 
 @patch("code_review.models.get_llm_config")
@@ -82,8 +71,8 @@ def test_get_configured_model_ollama_uses_litellm_or_fallback(mock_get_config):
 
 
 @patch("code_review.models.get_llm_config")
-def test_get_configured_model_litellm_import_error_returns_model_string(mock_get_config):
-    """When LiteLlm cannot be imported, return config.model as fallback."""
+def test_get_configured_model_litellm_import_error_raises_clear_error(mock_get_config):
+    """Non-gemini providers without the litellm extra must fail with guidance."""
     import builtins
 
     mock_get_config.return_value = MagicMock(
@@ -96,9 +85,11 @@ def test_get_configured_model_litellm_import_error_returns_model_string(mock_get
             raise ImportError("no lite_llm")
         return real_import(name, *args, **kwargs)
 
-    with patch("builtins.__import__", side_effect=fake_import):
-        result = get_configured_model()
-    assert result == "openai/gpt-4o"
+    with (
+        patch("builtins.__import__", side_effect=fake_import),
+        pytest.raises(ImportError, match="litellm"),
+    ):
+        get_configured_model()
 
 
 @patch("code_review.models.get_llm_config")
@@ -128,15 +119,17 @@ def test_get_configured_model_deepseek_uses_litellm_or_fallback(mock_get_config)
 
 
 @patch("code_review.models.get_llm_config")
-def test_get_configured_model_deepseek_injects_api_key_env(mock_get_config):
+def test_get_configured_model_deepseek_passes_api_key_per_instance(mock_get_config):
     from pydantic import SecretStr
 
     mock_get_config.return_value = MagicMock(
         provider="deepseek", model="deepseek-chat", api_key=SecretStr("sk-deepseek")
     )
     with patch.dict(os.environ, {}, clear=False):
-        get_configured_model()
-        assert os.environ.get("DEEPSEEK_API_KEY") == "sk-deepseek"
+        os.environ.pop("DEEPSEEK_API_KEY", None)
+        result = get_configured_model()
+        assert "DEEPSEEK_API_KEY" not in os.environ
+    assert result._additional_args.get("api_key") == "sk-deepseek"
 
 
 @patch("code_review.models.get_llm_config")
@@ -237,6 +230,22 @@ def test_get_configured_model_gemini_alias_resolves_to_runtime_model(mock_get_co
     assert get_configured_model() == "gemini-3-flash-preview"
 
 
+@patch("code_review.models.get_llm_config")
+def test_get_configured_model_gemini_with_key_returns_keyed_instance(mock_get_config):
+    """Gemini + API key -> ADK Gemini with client_kwargs api_key; env untouched."""
+    from pydantic import SecretStr
+
+    mock_get_config.return_value = MagicMock(
+        provider="gemini", model="gemini-2.0-flash", api_key=SecretStr("g-key")
+    )
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("GOOGLE_API_KEY", None)
+        result = get_configured_model()
+        assert "GOOGLE_API_KEY" not in os.environ
+    assert result.model == "gemini-2.0-flash"
+    assert result.client_kwargs.get("api_key") == "g-key"
+
+
 @patch("code_review.models.get_summary_llm_config")
 @patch("code_review.models.get_llm_config")
 def test_get_configured_summary_model_falls_back_to_primary(mock_get_config, mock_get_summary):
@@ -249,7 +258,9 @@ def test_get_configured_summary_model_falls_back_to_primary(mock_get_config, moc
     )
     mock_get_summary.return_value = MagicMock(provider=None, model=None, api_key=None)
 
-    assert get_configured_summary_model() == "gemini-3-flash-preview"
+    result = get_configured_summary_model()
+    assert result.model == "gemini-3-flash-preview"
+    assert result.client_kwargs.get("api_key") == "primary-key"
 
 
 @patch("code_review.models.get_summary_llm_config")
@@ -313,9 +324,9 @@ def test_get_configured_summary_model_uses_task_api_key(mock_get_config, mock_ge
     with patch.dict(os.environ, {}, clear=False):
         os.environ.pop("OPENROUTER_API_KEY", None)
         result = get_configured_summary_model()
-        assert os.environ.get("OPENROUTER_API_KEY") == "summary-key"
-        if hasattr(result, "model"):
-            assert result.model == "openrouter/google/gemini-3-flash-lite-preview"
+        assert "OPENROUTER_API_KEY" not in os.environ
+    assert result.model == "openrouter/google/gemini-3-flash-lite-preview"
+    assert result._additional_args.get("api_key") == "summary-key"
 
 
 @patch("code_review.models.get_verification_llm_config")
@@ -333,8 +344,9 @@ def test_get_configured_verification_model_falls_back_to_primary_api_key(
     mock_get_verification.return_value = MagicMock(provider=None, model=None, api_key=None)
     with patch.dict(os.environ, {}, clear=False):
         os.environ.pop("OPENAI_API_KEY", None)
-        get_configured_verification_model()
-        assert os.environ.get("OPENAI_API_KEY") == "primary-key"
+        result = get_configured_verification_model()
+        assert "OPENAI_API_KEY" not in os.environ
+    assert result._additional_args.get("api_key") == "primary-key"
 
 
 @patch("code_review.models.get_summary_llm_config")
@@ -356,8 +368,13 @@ def test_get_configured_summary_model_does_not_reuse_primary_api_key_for_differe
     )
     with patch.dict(os.environ, {}, clear=False):
         os.environ.pop("GEMINI_API_KEY", None)
-        get_configured_summary_model()
+        os.environ.pop("GOOGLE_API_KEY", None)
+        result = get_configured_summary_model()
         assert "GEMINI_API_KEY" not in os.environ
+        assert "GOOGLE_API_KEY" not in os.environ
+    # Task override on a different provider must not reuse the primary key:
+    # with no key of its own, gemini falls back to env/ADC (plain model string).
+    assert result == "gemini-3-flash-preview"
 
 
 @patch("code_review.models.get_llm_config")
@@ -476,8 +493,8 @@ def test_get_configured_model_unknown_provider_uses_model_string_as_litellm(mock
 
 
 @patch("code_review.models.get_llm_config")
-def test_get_configured_model_sets_provider_env_var_from_llm_api_key(mock_get_config):
-    """When LLM_API_KEY is set, get_configured_model() sets the provider-specific env var."""
+def test_get_configured_model_passes_api_key_per_instance(mock_get_config):
+    """LLM_API_KEY goes to the LiteLlm instance, never os.environ."""
     from pydantic import SecretStr
 
     mock_get_config.return_value = MagicMock(
@@ -488,14 +505,14 @@ def test_get_configured_model_sets_provider_env_var_from_llm_api_key(mock_get_co
     with patch.dict(os.environ, {}, clear=False):
         os.environ.pop("OPENROUTER_API_KEY", None)
         result = get_configured_model()
-        assert os.environ.get("OPENROUTER_API_KEY") == "sk-fake"
-        if hasattr(result, "model"):
-            assert result.model == "openrouter/anthropic/claude-3.5-sonnet"
+        assert "OPENROUTER_API_KEY" not in os.environ
+    assert result.model == "openrouter/anthropic/claude-3.5-sonnet"
+    assert result._additional_args.get("api_key") == "sk-fake"
 
 
 @patch("code_review.models.get_llm_config")
 def test_get_configured_model_ignores_blank_api_key(mock_get_config):
-    """Blank API keys must not overwrite provider-specific credentials."""
+    """Blank API keys produce no per-instance credential."""
     from pydantic import SecretStr
 
     mock_get_config.return_value = MagicMock(
@@ -504,13 +521,15 @@ def test_get_configured_model_ignores_blank_api_key(mock_get_config):
         api_key=SecretStr("   "),
     )
     with patch.dict(os.environ, {"OPENROUTER_API_KEY": "existing-token"}, clear=False):
-        get_configured_model()
+        result = get_configured_model()
         assert os.environ.get("OPENROUTER_API_KEY") == "existing-token"
+    assert "api_key" not in result._additional_args
 
 
 @patch("code_review.models.get_llm_config")
-def test_get_configured_model_clears_injected_key_on_provider_switch(mock_get_config):
-    """Injected provider key should not leak after switching providers."""
+def test_get_configured_model_two_keys_no_env_mutation(mock_get_config):
+    """Two providers with different keys: each instance carries its own key and
+    os.environ is never touched."""
     from pydantic import SecretStr
 
     mock_get_config.side_effect = [
@@ -525,9 +544,9 @@ def test_get_configured_model_clears_injected_key_on_provider_switch(mock_get_co
         },
         clear=False,
     ):
-        get_configured_model()
-        assert os.environ.get("OPENROUTER_API_KEY") == "sk-openrouter"
-
-        get_configured_model()
+        first = get_configured_model()
+        second = get_configured_model()
         assert os.environ.get("OPENROUTER_API_KEY") == "previous-openrouter"
-        assert os.environ.get("OPENAI_API_KEY") == "sk-openai"
+        assert os.environ.get("OPENAI_API_KEY") == "previous-openai"
+    assert first._additional_args.get("api_key") == "sk-openrouter"
+    assert second._additional_args.get("api_key") == "sk-openai"

@@ -25,16 +25,22 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "typer>=0.12",
-    "litellm>=1.83.7",
 ]
 
 [project.optional-dependencies]
+litellm = [
+    # Optional multi-provider LLM support (OpenAI, Anthropic, Ollama,
+    # OpenRouter, DeepSeek). Required when LLM_PROVIDER is not gemini/vertex.
+    "litellm>=1.83.7",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=4.0",
     "ruff>=0.6",
     "respx>=0.21",
+    # Tests exercise LiteLlm-backed providers.
+    "litellm>=1.83.7",
 ]
 observability = [
     "prometheus-client>=0.19",

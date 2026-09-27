@@ -1,4 +1,5 @@
-# Keep this file in sync with [project.dependencies] in pyproject.toml.
+# Keep this file in sync with [project.dependencies] + the `litellm` extra in
+# pyproject.toml (the runtime image must support every LLM provider).
 google-adk>=1.31.0
 httpx>=0.28.0
 PyGithub>=2.5

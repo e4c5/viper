@@ -5,8 +5,6 @@ from __future__ import annotations
 import logging
 import re
 
-import litellm
-
 from code_review.config import get_llm_config
 from code_review.context.distiller import _litellm_model_name
 from code_review.llm_telemetry import log_llm_usage, usage_from_litellm_response
@@ -39,6 +37,15 @@ def _heuristic_query_from_diff(snippet: str) -> str:
     return f"Code changes in: {hint}" if hint else "pull request code changes"
 
 
+def _llm_api_key(llm: object) -> str | None:
+    """Return the configured provider API key as a plain string, or None."""
+    key = getattr(llm, "api_key", None)
+    if key is None:
+        return None
+    raw = key.get_secret_value() if hasattr(key, "get_secret_value") else str(key)
+    return raw.strip() or None
+
+
 def build_semantic_query_from_diff(diff_text: str, max_diff_chars: int = 14_000) -> str:
     """Lightweight LLM pass: intent + entities for similarity search."""
     snippet = (diff_text or "")[:max_diff_chars]
@@ -54,8 +61,11 @@ def build_semantic_query_from_diff(diff_text: str, max_diff_chars: int = 14_000)
     user = f"Unified diff (truncated):\n\n{snippet}"
     _temperature = get_effective_temperature(llm.temperature)
     try:
+        import litellm
+
         resp = litellm.completion(
             model=model,
+            api_key=_llm_api_key(llm),
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -115,7 +125,11 @@ def embed_texts(texts: list[str], model: str) -> list[list[float]]:
     if not texts:
         return []
     try:
-        resp = litellm.embedding(model=model, input=texts)
+        import litellm
+
+        resp = litellm.embedding(
+            model=model, input=texts, api_key=_llm_api_key(get_llm_config())
+        )
     except Exception as e:
         logger.warning("Embedding call failed (%s): %s", model, e)
         raise

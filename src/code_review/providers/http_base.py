@@ -82,10 +82,12 @@ class HttpXProvider(ProviderInterface):
             # it, so cross-origin URLs are refused outright.
             base = urlparse(self._base_url)
             target = urlparse(path)
-            if (target.scheme, target.hostname, target.port) != (
+            base_port = base.port or (443 if base.scheme == "https" else 80)
+            target_port = target.port or (443 if target.scheme == "https" else 80)
+            if (target.scheme, target.hostname, target_port) != (
                 base.scheme,
                 base.hostname,
-                base.port,
+                base_port,
             ):
                 raise ValueError(
                     f"refusing cross-origin URL {path!r}: scheme/host/port must "

@@ -77,6 +77,13 @@ def test_hostname_resolving_to_link_local_rejected():
             )
 
 
+def test_ec2_metadata_ipv6_literal_rejected():
+    with pytest.raises(ValueError, match="link-local"):
+        validate_scm_base_url(
+            "http://[fd00:ec2::254]/latest", allowed_hosts=None, block_private=False
+        )
+
+
 def test_metadata_hostname_rejected():
     with pytest.raises(ValueError, match="metadata"):
         validate_scm_base_url(
@@ -152,6 +159,20 @@ def test_build_url_refuses_cross_origin():
     provider = GiteaProvider(base_url="https://git.example.com", token="x")
     with pytest.raises(ValueError, match="cross-origin"):
         provider._build_url("https://evil.example.com/api/v1/repos/o/r")
+
+
+def test_build_url_allows_default_port_variant():
+    provider = GiteaProvider(base_url="https://git.example.com", token="x")
+    assert (
+        provider._build_url("https://git.example.com:443/api/v1/next")
+        == "https://git.example.com:443/api/v1/next"
+    )
+
+
+def test_build_url_refuses_non_default_port():
+    provider = GiteaProvider(base_url="https://git.example.com", token="x")
+    with pytest.raises(ValueError, match="cross-origin"):
+        provider._build_url("https://git.example.com:8443/api/v1/next")
 
 
 def test_build_url_allows_same_origin_absolute():

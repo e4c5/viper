@@ -22,7 +22,7 @@ _METADATA_HOSTNAMES = frozenset(
 _BLOCKED_NETWORKS_ALWAYS = (
     ipaddress.ip_network("169.254.0.0/16"),
     ipaddress.ip_network("fe80::/10"),
-    ipaddress.ip_network("fd00:ec2::/128"),
+    ipaddress.ip_network("fd00:ec2::254/128"),
 )
 
 # Only applied when SCM_BLOCK_PRIVATE_HOSTS=true — self-hosted SCMs routinely

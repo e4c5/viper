@@ -101,6 +101,15 @@ def _agent_model_name(agent) -> str | None:
     if isinstance(model, str):
         return model
     if getattr(model, "model", None):
+        # A keyed native Gemini (BaseLlm instance) still reports its real model
+        # id so the Gemini-3 cache gate keeps working; LiteLlm-wrapped models
+        # intentionally report "".
+        try:
+            from google.adk.models.google_llm import Gemini
+        except ImportError:
+            return ""
+        if isinstance(model, Gemini):
+            return model.model
         return ""
     return None
 

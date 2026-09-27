@@ -47,7 +47,7 @@ def test_semantic_query_empty_and_whitespace_diff():
 @patch("code_review.context.rag.get_llm_config")
 @patch("code_review.context.rag.get_configured_model")
 @patch("code_review.context.rag.log_llm_usage")
-@patch("code_review.context.rag.litellm.completion")
+@patch("litellm.completion")
 def test_build_semantic_query_from_diff_uses_llm_output(
     mock_completion, mock_log_llm_usage, mock_get_configured_model, mock_get_llm_config
 ):
@@ -66,7 +66,7 @@ def test_build_semantic_query_from_diff_uses_llm_output(
 
 @patch("code_review.context.rag.get_llm_config")
 @patch("code_review.context.rag.get_configured_model")
-@patch("code_review.context.rag.litellm.completion", side_effect=Exception("timeout"))
+@patch("litellm.completion", side_effect=Exception("timeout"))
 def test_semantic_query_falls_back_to_heuristic_on_llm_failure(
     mock_completion, mock_model, mock_llm
 ):
@@ -80,7 +80,7 @@ def test_semantic_query_falls_back_to_heuristic_on_llm_failure(
 
 @patch("code_review.context.rag.get_llm_config")
 @patch("code_review.context.rag.get_configured_model")
-@patch("code_review.context.rag.litellm.completion", side_effect=Exception("no creds"))
+@patch("litellm.completion", side_effect=Exception("no creds"))
 def test_semantic_query_heuristic_no_paths(mock_completion, mock_model, mock_llm):
     # Diff has no +++ / --- header lines, so the heuristic produces the generic fallback.
     mock_llm.return_value = MagicMock(model="gpt-4o-mini", temperature=0.0)
@@ -100,7 +100,7 @@ def _make_embedding_response(vectors: list[list[float]]) -> dict:
     }
 
 
-@patch("code_review.context.rag.litellm.embedding")
+@patch("litellm.embedding")
 def test_embed_texts_returns_vectors_in_order(mock_embedding):
     vecs = [[0.1, 0.2], [0.3, 0.4]]
     mock_embedding.return_value = _make_embedding_response(vecs)
@@ -109,14 +109,14 @@ def test_embed_texts_returns_vectors_in_order(mock_embedding):
     assert result == [[0.1, 0.2], [0.3, 0.4]]
 
 
-@patch("code_review.context.rag.litellm.embedding")
+@patch("litellm.embedding")
 def test_embed_texts_empty_input(mock_embedding):
     result = embed_texts([], "text-embedding-3-small")
     assert result == []
     mock_embedding.assert_not_called()
 
 
-@patch("code_review.context.rag.litellm.embedding")
+@patch("litellm.embedding")
 def test_embed_texts_count_mismatch_raises(mock_embedding):
     # API returns fewer embeddings than inputs — should raise.
     mock_embedding.return_value = _make_embedding_response([[0.1, 0.2]])
@@ -124,7 +124,7 @@ def test_embed_texts_count_mismatch_raises(mock_embedding):
         embed_texts(["a", "b"], "text-embedding-3-small")
 
 
-@patch("code_review.context.rag.litellm.embedding")
+@patch("litellm.embedding")
 def test_embed_query_text_returns_single_vector(mock_embedding):
     mock_embedding.return_value = _make_embedding_response([[0.5, 0.6, 0.7]])
     result = embed_query_text("my query", "text-embedding-3-small")
