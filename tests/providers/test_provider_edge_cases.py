@@ -585,3 +585,16 @@ def test_bbs_submit_retry_after_409_unreadable_version_raises():
         p._bbs_submit_review_decision_retry_after_409(
             "o", "r", 1, "/path", {}, cause=_http_error(409)
         )
+
+
+def test_gitlab_project_id_url_encodes_nested_namespace():
+    """A nested-group owner ("group/sub") must encode the whole project path."""
+    from code_review.providers.gitlab import _project_id
+
+    assert _project_id("group", "repo") == "group%2Frepo"
+    assert _project_id("group/sub", "repo") == "group%2Fsub%2Frepo"
+    p = _gitlab_provider()
+    p._get = MagicMock(return_value=[])
+    p.get_pr_files("group/sub", "repo", 1)
+    url = p._get.call_args.args[0]
+    assert "projects/group%2Fsub%2Frepo/" in url

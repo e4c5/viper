@@ -6,6 +6,7 @@ All methods write to the provider; none ever fetch data from it.
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from code_review.diff.fingerprint import (
@@ -216,8 +217,16 @@ class CommentPoster:
         existing: list,
         to_post: list[tuple[FindingV1, str]],
         dry_run: bool,
+        *,
+        keep_fingerprints: set[str] | frozenset[str] = frozenset(),
+        skip_paths: Collection[str] = (),
     ) -> None:
-        """If provider supports it, resolve comments whose fingerprint is no longer in to_post."""
+        """If provider supports it, resolve comments whose fingerprint is no longer in to_post.
+
+        ``keep_fingerprints`` protects comments for findings that survived review but were
+        dropped by operator caps (severity threshold / max findings) — they are still real.
+        ``skip_paths`` protects comments on files that were not reviewed at all.
+        """
         if not (
             self.provider.capabilities().resolvable_comments
             and self.pr_ctx.head_sha
@@ -225,11 +234,15 @@ class CommentPoster:
         ):
             return
         new_fps = {fp for _, fp in to_post if fp}
+        protected_fps = set(keep_fingerprints)
+        protected_paths = set(skip_paths)
         for c in existing:
             body = getattr(c, "body", "") or ""
             parsed = parse_marker_from_comment_body(body)
             fp_old = parsed.get("fingerprint")
-            if not fp_old or fp_old in new_fps:
+            if not fp_old or fp_old in new_fps or fp_old in protected_fps:
+                continue
+            if getattr(c, "path", "") in protected_paths:
                 continue
             try:
                 self.provider.resolve_comment(

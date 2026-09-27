@@ -126,13 +126,20 @@ class StandardReviewHandler:
         existing: list,
         full_diff: str = "",
         unreviewed_paths: tuple[str, ...] = (),
+        keep_fingerprints: set[str] | frozenset[str] = frozenset(),
     ) -> int:
         """
         Auto-resolve stale comments (if supported), then post inline comments.
         Returns successful_post_count.
         """
         poster = CommentPoster(provider, self.pr_ctx)
-        poster.resolve_stale(existing, to_post, self.dry_run)
+        poster.resolve_stale(
+            existing,
+            to_post,
+            self.dry_run,
+            keep_fingerprints=keep_fingerprints,
+            skip_paths=unreviewed_paths,
+        )
         if unreviewed_paths:
             logger.warning(
                 "Review coverage incomplete: %d file(s) were not reviewed: %s",
@@ -523,8 +530,14 @@ class StandardReviewHandler:
         env: _ReviewEnv,
         comment_mgr: CommentManager,
         all_findings: list[FindingV1],
-    ) -> list[tuple[FindingV1, bool]]:
-        """Filter by scope, deduplicate, and verify findings."""
+    ) -> tuple[list[tuple[FindingV1, str]], set[str]]:
+        """Filter by scope, deduplicate, verify, then apply operator caps.
+
+        Returns ``(to_post, pre_cap_fingerprints)`` where ``pre_cap_fingerprints``
+        contains the fingerprints of all findings that survived dedup and
+        verification *before* ``min_severity``/``max_findings`` caps — used to
+        protect their existing comments from stale-resolution.
+        """
         llm_returned_count = len(all_findings)
         review_visible_lines = bool(getattr(app_cfg, "review_visible_lines", False))
 
@@ -551,6 +564,7 @@ class StandardReviewHandler:
             logger.warning("Verification agent step failed; proceeding without it: %s", exc)
 
         after_verification_count = len(to_post)
+        pre_cap_fingerprints = {fp for _, fp in to_post if fp}
 
         # Operator caps: minimum severity, then a max-findings cap ordered by
         # severity desc, confidence desc, then original order.
@@ -593,7 +607,7 @@ class StandardReviewHandler:
             after_verification_count,
             len(to_post),
         )
-        return to_post
+        return to_post, pre_cap_fingerprints
 
     def _maybe_generate_and_post_summary(
         self,
@@ -780,7 +794,7 @@ class StandardReviewHandler:
         if execution.early_exit_result is not None:
             return execution.early_exit_result
 
-        to_post = self._refine_findings_funnel(
+        to_post, pre_cap_fingerprints = self._refine_findings_funnel(
             provider, app_cfg, env, comment_mgr, execution.all_findings
         )
 
@@ -794,6 +808,7 @@ class StandardReviewHandler:
             comment_mgr.existing_comments,
             full_diff=env.full_diff,
             unreviewed_paths=execution.unreviewed_paths,
+            keep_fingerprints=pre_cap_fingerprints,
         )
 
         self._maybe_generate_and_post_summary(provider, env, to_post)

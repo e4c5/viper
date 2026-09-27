@@ -218,7 +218,7 @@ def _funnel(app_cfg, pairs):
     handler.filter_findings_by_diff_scope = lambda f, paths, diff, **kw: f
     comment_mgr = MagicMock()
     comment_mgr.filter_duplicates = (
-        lambda findings, *a, **kw: [(f, False) for f in findings]
+        lambda findings, *a, **kw: [(f, f"fp-{f.code}") for f in findings]
     )
     env = SimpleNamespace(paths=["a.py"], full_diff="", pr_info=None)
 
@@ -226,9 +226,10 @@ def _funnel(app_cfg, pairs):
         "code_review.agent.verification_agent.verify_findings",
         lambda findings, diff: findings,
     ):
-        return handler._refine_findings_funnel(
+        to_post, _ = handler._refine_findings_funnel(
             MagicMock(), app_cfg, env, comment_mgr, list(pairs)
         )
+        return to_post
 
 
 def test_funnel_min_severity_drops_lower():
@@ -372,3 +373,63 @@ def test_orchestrator_app_config_overrides_env(monkeypatch):
     selected = orch._app_config_override or env_cfg
     assert selected.min_severity == "low"
     assert env_cfg.min_severity == "high"
+
+
+# ---------------------------------------------------------------------------
+# Stale-comment auto-resolve protections (keep_fingerprints / skip_paths)
+# ---------------------------------------------------------------------------
+
+
+def _resolvable_poster():
+    from code_review.models import PRContext
+    from code_review.orchestration.posting import CommentPoster
+
+    provider = MagicMock()
+    provider.capabilities.return_value.resolvable_comments = True
+    poster = CommentPoster(provider, PRContext("o", "r", 1, "sha"))
+    return poster, provider
+
+
+def _existing_comment(cid: str, fingerprint: str, path: str = "a.py"):
+    return SimpleNamespace(
+        id=cid,
+        path=path,
+        body=f"<!-- code-review-agent:fingerprint={fingerprint};version=1 -->\n\nbody",
+    )
+
+
+def test_resolve_stale_keeps_fingerprint_of_capped_finding():
+    """A finding dropped by min_severity/max_findings keeps its comment unresolved."""
+    poster, provider = _resolvable_poster()
+    existing = [_existing_comment("c-1", "fp-capped")]
+    poster.resolve_stale(existing, [], dry_run=False,
+                         keep_fingerprints={"fp-capped"})
+    provider.resolve_comment.assert_not_called()
+
+
+def test_resolve_stale_skips_unreviewed_paths():
+    """Comments on files that produced no review (incomplete coverage) are kept."""
+    poster, provider = _resolvable_poster()
+    existing = [
+        _existing_comment("c-1", "fp-old", path="skipped.py"),
+        _existing_comment("c-2", "fp-gone", path="reviewed.py"),
+    ]
+    poster.resolve_stale(existing, [], dry_run=False,
+                         skip_paths={"skipped.py"})
+    provider.resolve_comment.assert_called_once_with("o", "r", "c-2")
+
+
+def test_resolve_stale_resolves_unprotected_comments():
+    """Baseline: comments whose fingerprint is neither posted nor protected resolve."""
+    poster, provider = _resolvable_poster()
+    existing = [
+        _existing_comment("c-1", "fp-stale"),
+        _existing_comment("c-2", "fp-new"),
+        _existing_comment("c-3", "fp-kept", path="u.py"),
+    ]
+    posted = [(_finding("low"), "fp-new")]
+    poster.resolve_stale(
+        existing, posted, dry_run=False,
+        keep_fingerprints={"fp-kept"}, skip_paths={"other.py"},
+    )
+    provider.resolve_comment.assert_called_once_with("o", "r", "c-1")
