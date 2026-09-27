@@ -187,7 +187,9 @@ def test_run_review_disable_idempotency_env_bypasses_short_circuit(
         mock_get_scm_config, mock_get_llm_config, mock_get_context_window
     )
     mock_create_agent_and_runner.return_value = ("session-1", MagicMock(), MagicMock())
-    mock_run_agent_and_collect_findings.return_value = []
+    from code_review.orchestration.execution import BatchReviewOutcome
+
+    mock_run_agent_and_collect_findings.return_value = BatchReviewOutcome([])
     provider = _mock_provider_with_existing_run_comment(run_id)
     mock_get_provider.return_value = provider
 

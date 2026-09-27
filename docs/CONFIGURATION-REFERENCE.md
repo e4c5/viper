@@ -79,8 +79,8 @@ Loaded via `LLMConfig` (`env_prefix="LLM_"`).
 | `LLM_CONTEXT_WINDOW` | `128000` | Context window in tokens (used for chunking / budgets). |
 | `LLM_MAX_OUTPUT_TOKENS` | `4096` | Max output tokens for generation. |
 | `LLM_TEMPERATURE` | `0.0` | Sampling temperature. |
-| `LLM_TIMEOUT_SECONDS` | `60.0` | **Configuration-only** for now; not wired through ADK in all paths. |
-| `LLM_MAX_RETRIES` | `3` | **Configuration-only** for now. |
+| `LLM_TIMEOUT_SECONDS` | `300.0` | Idle timeout between LLM events during a run; exceeding it aborts the run as a transient timeout and the batch is retried. |
+| `LLM_MAX_RETRIES` | `3` | Max retries per batch on transient LLM errors (rate limits, timeouts, HTTP 429/5xx) with exponential backoff. |
 
 **Ollama:** No API key required. `OLLAMA_API_BASE` (default `http://localhost:11434`) is the usual convention for LiteLLM/Ollama; see `docs/DEVELOPER_GUIDE.md`.
 

@@ -618,7 +618,7 @@ def test_run_agent_and_collect_findings_parses_sequential_workflow_responses(
     ]
     runner = SimpleNamespace(_uses_sequential_batch_review=True)
 
-    findings = run_agent_and_collect_findings(
+    outcome = run_agent_and_collect_findings(
         PRContext("o", "r", 1, "sha1"),
         MagicMock(),
         "review standards",
@@ -628,7 +628,8 @@ def test_run_agent_and_collect_findings_parses_sequential_workflow_responses(
         review_visible_lines=None,
     )
 
-    assert [(f.path, f.line, f.message) for f in findings] == [
+    assert outcome.unreviewed_paths == ()
+    assert [(f.path, f.line, f.message) for f in outcome.findings] == [
         ("a.py", 1, "m1"),
         ("b.py", 2, "m2"),
     ]
@@ -1542,7 +1543,7 @@ def test_run_isolated_batches_with_retry_gives_up_after_max_retries_of_splitting
         ),
         caplog.at_level("WARNING"),
     ):
-        findings = execution_mod._run_isolated_batches_with_retry(
+        findings, unreviewed = execution_mod._run_isolated_batches_with_retry(
             pr_ctx=object(),
             provider=object(),
             review_standards="",
@@ -1553,6 +1554,7 @@ def test_run_isolated_batches_with_retry_gives_up_after_max_retries_of_splitting
         )
 
     assert findings == []
+    assert any("foo.py" in b.paths for b in unreviewed)
     # The loop must terminate (it would hang/loop far longer than this without the fix)
     # and must have given up rather than resplitting forever.
     assert call_count < 50

@@ -45,6 +45,7 @@ def _omit_marker_pr_summary_visible_text(
     cfg,
     provider,
     gate_outcome: QualityGateReviewOutcome,
+    unreviewed_count: int = 0,
 ) -> str:
     """Human-readable PR summary for providers that omit inline HTML markers (e.g. Bitbucket)."""
     lines: list[str] = [
@@ -58,7 +59,10 @@ def _omit_marker_pr_summary_visible_text(
         gate_in_summary = bool(getattr(cfg, "review_decision_enabled", False)) and (
             provider.capabilities().supports_review_decisions
         )
-        if not gate_in_summary or gate_outcome.decision != "REQUEST_CHANGES":
+        if (
+            unreviewed_count == 0
+            and (not gate_in_summary or gate_outcome.decision != "REQUEST_CHANGES")
+        ):
             lines.append(
                 "**From this automated pass, the change appears to meet expectations** "
                 "for the areas reviewed."
@@ -77,6 +81,12 @@ def _omit_marker_pr_summary_visible_text(
                 "**Could not post inline comments** (e.g. anchor conflicts); see CI logs. "
                 "Re-run after updating the PR or fixing the reported problems."
             )
+
+    if unreviewed_count > 0:
+        lines.append(
+            f"**Review coverage was incomplete**: {unreviewed_count} file(s) were not "
+            "reviewed; re-run required."
+        )
 
     extra = _optional_quality_gate_summary_suffix(provider, cfg, gate_outcome)
     if extra:
@@ -299,6 +309,7 @@ class CommentPoster:
         successful_inline_posts: int,
         gate_outcome: QualityGateReviewOutcome,
         include_run_marker: bool = True,
+        unreviewed_count: int = 0,
     ) -> None:
         """Post a PR-level summary for omit-marker providers.
 
@@ -314,6 +325,7 @@ class CommentPoster:
             cfg=cfg,
             provider=self.provider,
             gate_outcome=gate_outcome,
+            unreviewed_count=unreviewed_count,
         )
         if include_run_marker:
             run_id = self.pr_ctx.idempotency_key(cfg, llm_cfg, incremental_base_sha)

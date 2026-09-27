@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from code_review import orchestration_deps as runner_mod
@@ -125,6 +125,7 @@ class StandardReviewHandler:
         llm_cfg,
         existing: list,
         full_diff: str = "",
+        unreviewed_paths: tuple[str, ...] = (),
     ) -> int:
         """
         Auto-resolve stale comments (if supported), then post inline comments.
@@ -132,11 +133,27 @@ class StandardReviewHandler:
         """
         poster = CommentPoster(provider, self.pr_ctx)
         poster.resolve_stale(existing, to_post, self.dry_run)
+        if unreviewed_paths:
+            logger.warning(
+                "Review coverage incomplete: %d file(s) were not reviewed: %s",
+                len(unreviewed_paths),
+                ", ".join(unreviewed_paths),
+            )
         if self.dry_run:
             return 0
         gate_outcome = QualityGate(provider, self.owner, self.repo, self.pr_number, cfg).evaluate(
             to_post
         )
+        if unreviewed_paths and gate_outcome is not None:
+            # Never approve a partial review: force needs-work so a re-run is required.
+            gate_outcome = replace(
+                gate_outcome,
+                decision="REQUEST_CHANGES",
+                submission_reason=(
+                    f"Review coverage incomplete: {len(unreviewed_paths)} file(s) "
+                    "were not reviewed; re-run required."
+                ),
+            )
         if gate_outcome is not None:
             runner_mod._log_quality_gate_review_outcome("Full-review", gate_outcome)
         else:
@@ -158,13 +175,25 @@ class StandardReviewHandler:
                 llm_cfg,
                 full_diff=full_diff,
             )
+        if unreviewed_paths and self.head_sha:
+            shown = list(unreviewed_paths)[:20]
+            listed = ", ".join(f"`{path}`" for path in shown)
+            if len(unreviewed_paths) > len(shown):
+                listed += f", and {len(unreviewed_paths) - len(shown)} more"
+            poster.post_pr_summary(
+                "**Viper**: review coverage was incomplete — "
+                f"{len(unreviewed_paths)} file(s) were not reviewed: {listed}. "
+                "This review is incomplete and must be re-run."
+            )
         if (
             gate_outcome is not None
             and self.head_sha
             and provider.capabilities().omit_fingerprint_marker_in_body
         ):
             planned = len(to_post)
-            include_marker = planned == 0 or count == planned
+            # Incomplete coverage must not stamp the run= marker: a re-run on the
+            # same SHA would otherwise be treated as already reviewed.
+            include_marker = (planned == 0 or count == planned) and not unreviewed_paths
             poster.post_omit_marker_summary(
                 cfg,
                 llm_cfg,
@@ -173,6 +202,7 @@ class StandardReviewHandler:
                 successful_inline_posts=count,
                 gate_outcome=gate_outcome,
                 include_run_marker=include_marker,
+                unreviewed_count=len(unreviewed_paths),
             )
         runner_mod._maybe_submit_review_decision(
             provider,
@@ -390,6 +420,7 @@ class StandardReviewHandler:
         all_findings: list[FindingV1]
         context_brief_attached: bool
         prompt_suffix: str
+        unreviewed_paths: tuple[str, ...] = ()
         early_exit_result: list[FindingV1] | None = None
 
     def _execute_review_agent(
@@ -458,7 +489,7 @@ class StandardReviewHandler:
             review_visible_lines=review_visible_lines,
             llm_config=agent_llm_config,
         )
-        all_findings = execution_mod.run_agent_and_collect_findings(
+        outcome = execution_mod.run_agent_and_collect_findings(
             self.pr_ctx,
             provider,
             review_standards,
@@ -470,7 +501,12 @@ class StandardReviewHandler:
             review_visible_lines=review_visible_lines,
             llm_config=agent_llm_config,
         )
-        return self._ReviewExecution(all_findings, context_brief_attached, prompt_suffix)
+        return self._ReviewExecution(
+            outcome.findings,
+            context_brief_attached,
+            prompt_suffix,
+            unreviewed_paths=outcome.unreviewed_paths,
+        )
 
     def _refine_findings_funnel(
         self,
@@ -714,6 +750,7 @@ class StandardReviewHandler:
             llm_cfg,
             comment_mgr.existing_comments,
             full_diff=env.full_diff,
+            unreviewed_paths=execution.unreviewed_paths,
         )
 
         self._maybe_generate_and_post_summary(provider, env, to_post)

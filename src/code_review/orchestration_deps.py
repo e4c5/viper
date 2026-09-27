@@ -149,6 +149,7 @@ from code_review.orchestration.prompts import (  # noqa: E402
 )
 from code_review.orchestration.runner_utils import (  # noqa: E402
     APP_NAME,  # noqa: F401
+    LLMTimeoutError,  # noqa: F401
     PartialResponseCollectionError,  # noqa: F401
     _bypass_adk_templating,  # noqa: F401
     _findings_from_response,  # noqa: F401
@@ -159,6 +160,8 @@ from code_review.orchestration.runner_utils import (  # noqa: E402
     _run_agent_and_collect_responses,  # noqa: F401
     _run_reply_dismissal_llm,  # noqa: F401
     _suppress_ssl_teardown_errors,  # noqa: F401
+    is_transient_llm_error,  # noqa: F401
+    retry_after_seconds,  # noqa: F401
 )
 from code_review.reply_dismissal_state import (  # noqa: E402
     REPLY_DISMISSAL_ACCEPTED_REPLY_TEXT,  # noqa: F401
@@ -312,6 +315,7 @@ def _post_omit_marker_pr_summary_comment(
     successful_inline_posts: int,
     gate_outcome: QualityGateReviewOutcome,
     include_run_marker: bool = True,
+    unreviewed_count: int = 0,
 ) -> None:
     """Compatibility shim — delegates to CommentPoster."""
     CommentPoster(provider, pr_ctx).post_omit_marker_summary(
@@ -322,6 +326,7 @@ def _post_omit_marker_pr_summary_comment(
         successful_inline_posts=successful_inline_posts,
         gate_outcome=gate_outcome,
         include_run_marker=include_run_marker,
+        unreviewed_count=unreviewed_count,
     )
 
 

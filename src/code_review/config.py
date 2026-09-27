@@ -138,19 +138,18 @@ class LLMConfig(BaseSettings):
     max_output_tokens: int = Field(default=4096, description="Max output tokens")
     temperature: float = Field(default=0.0, description="0 or very low for deterministic review")
     timeout_seconds: float = Field(
-        default=60.0,
+        default=300.0,
         description=(
-            "Per-request timeout for LLM API calls. "
-            "NOTE: currently configuration-only; see Code-Sally docs/REVIEW.md "
-            "W2 before relying on it."
+            "Idle timeout in seconds between LLM events during a run. If no "
+            "event arrives within this window the run aborts as a transient "
+            "LLMTimeoutError and the batch is retried."
         ),
     )
     max_retries: int = Field(
         default=3,
         description=(
-            "Max retries on transient LLM failures. "
-            "NOTE: currently configuration-only; see Code-Sally docs/REVIEW.md "
-            "W2 before relying on it."
+            "Max retries per batch on transient LLM errors (rate limits, "
+            "timeouts, HTTP 429/5xx) with exponential backoff."
         ),
     )
 
