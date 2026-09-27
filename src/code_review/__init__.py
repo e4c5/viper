@@ -21,15 +21,24 @@ __all__ = [
     "ReviewDecisionEventContext",
     "SCMConfig",
     "LLMConfig",
+    "CodeReviewAppConfig",
     "get_scm_config",
     "get_llm_config",
+    "get_code_review_app_config",
     "get_provider",
     "configure_logging",
     "LOG_LEVEL_ENV",
 ]
 
 if TYPE_CHECKING:
-    from code_review.config import LLMConfig, SCMConfig, get_llm_config, get_scm_config
+    from code_review.config import (
+        CodeReviewAppConfig,
+        LLMConfig,
+        SCMConfig,
+        get_code_review_app_config,
+        get_llm_config,
+        get_scm_config,
+    )
     from code_review.logging_config import LOG_LEVEL_ENV, configure_logging
     from code_review.providers import get_provider
     from code_review.runner import run_review
@@ -52,8 +61,10 @@ _LAZY_ATTRS = {
     ),
     "SCMConfig": ("code_review.config", "SCMConfig"),
     "LLMConfig": ("code_review.config", "LLMConfig"),
+    "CodeReviewAppConfig": ("code_review.config", "CodeReviewAppConfig"),
     "get_scm_config": ("code_review.config", "get_scm_config"),
     "get_llm_config": ("code_review.config", "get_llm_config"),
+    "get_code_review_app_config": ("code_review.config", "get_code_review_app_config"),
     "get_provider": ("code_review.providers", "get_provider"),
     "configure_logging": ("code_review.logging_config", "configure_logging"),
     "LOG_LEVEL_ENV": ("code_review.logging_config", "LOG_LEVEL_ENV"),

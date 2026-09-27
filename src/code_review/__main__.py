@@ -151,6 +151,14 @@ def review(
         min=0,
         help="Request changes when open medium findings reach this threshold.",
     ),
+    min_severity: str | None = typer.Option(
+        None,
+        "--min-severity",
+        help=(
+            "Drop findings below this severity before posting "
+            "(low, medium, or high; also set CODE_REVIEW_MIN_SEVERITY)."
+        ),
+    ),
     review_decision_only: bool = typer.Option(
         False,
         "--review-decision-only",
@@ -179,6 +187,19 @@ def review(
         owner_f, repo_f, pr_num, head_sha_val, dry_run, review_decision_only=review_decision_only
     )
 
+    app_config = get_code_review_app_config()
+    if not isinstance(min_severity, str):
+        min_severity = None  # direct (non-Typer) invocation default
+    if min_severity is not None:
+        normalized = min_severity.strip().lower()
+        if normalized not in ("low", "medium", "high"):
+            typer.echo(
+                "Error: --min-severity must be one of low, medium, high.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        app_config = app_config.model_copy(update={"min_severity": normalized})
+
     _ensure_logging()
     findings = run_review(
         owner=owner_f,
@@ -187,6 +208,7 @@ def review(
         head_sha=head_sha_val,
         dry_run=dry_run,
         print_findings=print_findings,
+        app_config=app_config,
         review_decision=ReviewDecisionConfig(
             enabled=review_decision_enabled,
             high_threshold=review_decision_high_threshold,

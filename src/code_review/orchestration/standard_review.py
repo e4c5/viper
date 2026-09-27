@@ -439,6 +439,14 @@ class StandardReviewHandler:
             if agent_llm_config is not None
             else runner_mod.get_context_window()
         )
+        effective_llm_cfg = (
+            agent_llm_config
+            if agent_llm_config is not None
+            else runner_mod.get_llm_config()
+        )
+        diff_budget_ratio = getattr(effective_llm_cfg, "diff_budget_ratio", 0.5)
+        if not isinstance(diff_budget_ratio, int | float) or not 0 < diff_budget_ratio <= 1:
+            diff_budget_ratio = 0.5
         batch_budget = build_review_batch_budget(
             context_window_tokens=context_window,
             max_output_tokens=(
@@ -446,7 +454,7 @@ class StandardReviewHandler:
                 if agent_llm_config is not None
                 else runner_mod.get_max_output_tokens()
             ),
-            diff_budget_ratio=runner_mod.DIFF_TOKEN_BUDGET_RATIO,
+            diff_budget_ratio=diff_budget_ratio,
         )
         diff_budget = batch_budget.effective_diff_budget_tokens
         remaining_prompt_tokens = batch_budget.prompt_budget_tokens
@@ -543,12 +551,47 @@ class StandardReviewHandler:
             logger.warning("Verification agent step failed; proceeding without it: %s", exc)
 
         after_verification_count = len(to_post)
+
+        # Operator caps: minimum severity, then a max-findings cap ordered by
+        # severity desc, confidence desc, then original order.
+        min_severity = getattr(app_cfg, "min_severity", None)
+        severity_rank = {"nit": 0, "low": 1, "medium": 2, "high": 3}
+        if isinstance(min_severity, str) and min_severity in ("low", "medium", "high"):
+            threshold = severity_rank[min_severity]
+            to_post = [
+                item
+                for item in to_post
+                if severity_rank.get(item[0].severity, 0) >= threshold
+            ]
+            dropped = after_verification_count - len(to_post)
+            if dropped:
+                logger.info(
+                    "Funnel: dropped %d finding(s) below min_severity=%s",
+                    dropped,
+                    min_severity,
+                )
+
+        max_findings = getattr(app_cfg, "max_findings", None)
+        if isinstance(max_findings, int) and max_findings >= 1 and len(to_post) > max_findings:
+            confidence_rank = {"low": 1, "medium": 2, "high": 3}
+            ranked = sorted(
+                enumerate(to_post),
+                key=lambda t: (
+                    -severity_rank.get(t[1][0].severity, 0),
+                    -confidence_rank.get(getattr(t[1][0], "confidence", None) or "low", 0),
+                    t[0],
+                ),
+            )[:max_findings]
+            to_post = [item for _, item in ranked]
+            logger.info("Funnel: truncated to %d finding(s) by max_findings", max_findings)
+
         logger.info(
-            "Funnel: LLM=%d → Scoped=%d → Unique=%d → Verified=%d",
+            "Funnel: LLM=%d → Scoped=%d → Unique=%d → Verified=%d → Posted=%d",
             llm_returned_count,
             after_scope_count,
             after_unique_count,
             after_verification_count,
+            len(to_post),
         )
         return to_post
 

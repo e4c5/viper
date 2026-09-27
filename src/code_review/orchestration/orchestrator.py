@@ -8,7 +8,7 @@ from code_review import orchestration_deps as runner_mod
 from code_review.config import CodeReviewAppConfig, LLMConfig, SCMConfig
 from code_review.models import PRContext
 from code_review.orchestration.context_enricher import ContextEnricher
-from code_review.orchestration.filter import ReviewFilter
+from code_review.orchestration.filter import ReviewFilter, configured_skip_labels
 from code_review.orchestration.idempotency import _idempotency_key_seen_in_comments
 from code_review.orchestration.reply_dismissal import ReplyDismissalHandler
 from code_review.orchestration.review_decision import ReviewDecisionHandler
@@ -113,7 +113,7 @@ class ReviewOrchestrator:
         run_observability: ReviewRunObservability,
     ) -> list[FindingV1] | None:
         """Emit observability and return [] if skip config matches, else None."""
-        if not cfg.skip_label and not cfg.skip_title_pattern:
+        if not configured_skip_labels(cfg) and not cfg.skip_title_pattern:
             return None
         pr_info = provider.get_pr_info(self.owner, self.repo, self.pr_number)
         skip_reason = ReviewFilter().should_skip(pr_info, cfg)

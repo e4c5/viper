@@ -53,8 +53,8 @@ Loaded via `SCMConfig` (`env_prefix="SCM_"`). Field names map to env vars in **U
 | `SCM_HEAD_SHA` | `""` | Head commit SHA (needed to post comments). |
 | `SCM_BASE_SHA` | `""` | Optional review base SHA. When set with `SCM_HEAD_SHA`, Viper reviews only the incremental `SCM_BASE_SHA..SCM_HEAD_SHA` changes; if unset, it reviews the full PR diff. |
 | `SCM_EVENT` | `""` | Webhook event (e.g. `opened`). |
-| `SCM_SKIP_LABEL` | `skip-review` | If PR has this label, skip review (empty disables). |
-| `SCM_SKIP_TITLE_PATTERN` | `[skip-review]` | If title contains this substring, skip review (empty disables). |
+| `SCM_SKIP_LABEL` | `skip-review` | Comma-separated list of PR labels that skip review. Matching is case-insensitive; `"skip-review, wip"` skips when any listed label is present. Empty disables label-based skipping. |
+| `SCM_SKIP_TITLE_PATTERN` | `[skip-review]` | If the PR title contains this substring (case-insensitive), skip review. Empty disables. |
 | `SCM_REVIEW_DECISION_ENABLED` | `false` | Auto-submit PR review decision (provider-supported). |
 | `SCM_REVIEW_DECISION_HIGH_THRESHOLD` | `1` | Request changes when open high-severity count ≥ this. |
 | `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD` | `3` | Request changes when open medium-severity count ≥ this. |
@@ -122,7 +122,7 @@ weak findings.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_DIFF_BUDGET_RATIO` | `0.5` | Fraction of `LLM_CONTEXT_WINDOW` reserved for the unified diff; above this the runner switches to file-by-file review. |
+| `LLM_DIFF_BUDGET_RATIO` | `0.5` | Fraction of `LLM_CONTEXT_WINDOW` reserved for diff content (range `(0, 1]`); the rest is reserved for the prompt and response. Above this the runner switches to file-by-file review. |
 
 ---
 
@@ -138,6 +138,9 @@ weak findings.
 | `CODE_REVIEW_REPLY_DISMISSAL_ENABLED` | `true` | **Review-decision-only:** when `CODE_REVIEW_EVENT_COMMENT_ID` is set, run the reply-dismissal flow on the review thread (GitHub, GitLab, Bitbucket Cloud, and Bitbucket Server / DC when `supports_review_thread_dismissal_context`). The runner may skip the LLM when the provider already indicates the concern is addressed (for example an applied/orphaned Bitbucket suggestion). Otherwise, if the model returns `agreed`, that thread is excluded from quality-gate counts for this run and, when the provider supports `supports_review_thread_resolution`, the thread is also resolved in the SCM. If `disagreed`, the runner posts a thread reply when the provider supports `supports_review_thread_reply` (unless `--dry-run`). Set to `false` to disable. **Gitea** does not implement thread context yet (`skipped_no_capability`). |
 | `CODE_REVIEW_PRINT_RAW_RESPONSE` | *(unset)* | `1` / `true` / `TRUE` to log the raw LLM final response (debug). |
 | `CODE_REVIEW_SIGNING_KEY` | *(unset)* | If set, HMAC-signs fingerprint markers in posted comments and rejects unsigned/invalid markers during dedup (see §8). |
+| `CODE_REVIEW_MIN_SEVERITY` | *(unset)* | Drop findings below this severity before posting (`low`, `medium`, or `high`; `nit` is below `low`). Same effect as CLI `--min-severity`. Applied after dedup/verification, before posting. |
+| `CODE_REVIEW_MAX_FINDINGS` | *(unset)* | Post at most this many findings per run (≥ 1); kept findings are ordered by severity desc, then confidence desc, then original order. |
+| `CODE_REVIEW_CUSTOM_INSTRUCTIONS` | *(unset)* | Operator-supplied review guidance injected into the review prompt as a fenced "Operator review guidance" block (stripped, capped at 4000 chars). It cannot change the required JSON output format or instruct approval. |
 
 ### 5.1 Review-decision webhook context (`CODE_REVIEW_EVENT_*`)
 

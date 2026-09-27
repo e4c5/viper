@@ -369,7 +369,7 @@ When the PR diff is large, the runner splits work by file (file-by-file mode). S
 LLM_DIFF_BUDGET_RATIO=1.0 code-review --owner <owner> --repo <repo> --pr <n> [--head-sha <sha>]
 ```
 
-Compare with and without this env var; if you get findings only with `LLM_DIFF_BUDGET_RATIO=1.0`, the issue is file-by-file behaviour. You can leave it at `1.0` for that run or increase `LLM_CONTEXT_WINDOW` so that 25% of it is larger than your typical diff.
+Compare with and without this env var; if you get findings only with `LLM_DIFF_BUDGET_RATIO=1.0`, the issue is file-by-file behaviour. You can leave it at `1.0` for that run or increase `LLM_CONTEXT_WINDOW` so that 50% of it is larger than your typical diff.
 
 ### 6.4 Observability
 

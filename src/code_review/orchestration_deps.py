@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import time  # noqa: F401
 import uuid  # noqa: F401
 
@@ -122,13 +121,6 @@ def get_max_output_tokens_for_config(config) -> int:
         return current_get_max_output_tokens()
     return _model_get_max_output_tokens_for_config(config)
 
-
-# Fraction of context window reserved for diff content; rest for system prompt and response.
-# Configurable via LLM_DIFF_BUDGET_RATIO env var.
-try:
-    DIFF_TOKEN_BUDGET_RATIO = float(os.getenv("LLM_DIFF_BUDGET_RATIO", "0.5"))
-except ValueError:
-    DIFF_TOKEN_BUDGET_RATIO = 0.5
 
 # ---------------------------------------------------------------------------
 # Re-exports from focused submodules (canonical implementations live there).

@@ -39,7 +39,10 @@ class SCMConfig(BaseSettings):
     event: str = Field(default="", description="Webhook event: opened/synchronize/reopened")
     skip_label: str = Field(
         default="skip-review",
-        description="If PR has this label, skip review (empty to disable)",
+        description=(
+            "Comma-separated PR labels that skip review (case-insensitive; "
+            "empty disables label-based skipping)"
+        ),
     )
     skip_title_pattern: str = Field(
         default="[skip-review]",
@@ -115,6 +118,13 @@ class SCMConfig(BaseSettings):
         """Strip so whitespace-only env values do not look like a configured slug."""
         return (v or "").strip()
 
+    def skip_labels(self) -> list[str]:
+        """Return the configured skip labels (stripped, non-empty, order preserved)."""
+        raw = self.skip_label
+        if not isinstance(raw, str):
+            return []
+        return [label.strip() for label in raw.split(",") if label.strip()]
+
     @model_validator(mode="after")
     def _apply_bot_identity_fallback(self) -> "SCMConfig":
         if not self.bot_identity and self.bitbucket_server_user_slug:
@@ -158,6 +168,15 @@ class LLMConfig(BaseSettings):
         description=(
             "Max retries per batch on transient LLM errors (rate limits, "
             "timeouts, HTTP 429/5xx) with exponential backoff."
+        ),
+    )
+    diff_budget_ratio: float = Field(
+        default=0.5,
+        gt=0,
+        le=1,
+        description=(
+            "Fraction of the model context window reserved for diff content; "
+            "the rest is reserved for the prompt and response."
         ),
     )
 
@@ -330,7 +349,11 @@ class ContextAwareReviewConfig(BaseSettings):
 class CodeReviewAppConfig(BaseSettings):
     """Runner-level options not tied to SCM/LLM prefixes."""
 
-    model_config = SettingsConfigDict(extra="ignore", case_sensitive=False)
+    # populate_by_name lets callers (CLI, webhook service) construct a config
+    # with field names instead of the CODE_REVIEW_* env aliases.
+    model_config = SettingsConfigDict(
+        extra="ignore", case_sensitive=False, populate_by_name=True
+    )
 
     include_commit_messages_in_prompt: bool = Field(
         default=True,
@@ -385,6 +408,31 @@ class CodeReviewAppConfig(BaseSettings):
             "same PR head/config can be reviewed again."
         ),
     )
+    min_severity: Literal["low", "medium", "high"] | None = Field(
+        default=None,
+        validation_alias="CODE_REVIEW_MIN_SEVERITY",
+        description=(
+            "Drop findings below this severity before posting "
+            "(nit < low < medium < high; unset keeps everything)."
+        ),
+    )
+    max_findings: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias="CODE_REVIEW_MAX_FINDINGS",
+        description=(
+            "Post at most this many findings per run after severity filtering; "
+            "kept findings are ordered by severity then confidence."
+        ),
+    )
+    custom_instructions: str | None = Field(
+        default=None,
+        validation_alias="CODE_REVIEW_CUSTOM_INSTRUCTIONS",
+        description=(
+            "Operator-supplied review guidance injected into the reviewer prompt "
+            "(stripped, capped at 4000 chars; cannot change the JSON output format)."
+        ),
+    )
     reply_dismissal_enabled: bool = Field(
         default=True,
         validation_alias="CODE_REVIEW_REPLY_DISMISSAL_ENABLED",
@@ -395,6 +443,22 @@ class CodeReviewAppConfig(BaseSettings):
             "post a thread reply when the provider supports it."
         ),
     )
+
+    @field_validator("custom_instructions", mode="before")
+    @classmethod
+    def _normalize_custom_instructions(cls, v: object) -> str | None:
+        """Strip blank values to None and cap the block at 4000 characters."""
+        if v is None:
+            return None
+        raw = str(v).strip()
+        if not raw:
+            return None
+        if len(raw) > 4000:
+            logger.warning(
+                "CODE_REVIEW_CUSTOM_INSTRUCTIONS exceeds 4000 chars; truncating"
+            )
+            raw = raw[:4000]
+        return raw
 
 
 def get_scm_config() -> SCMConfig:
@@ -462,7 +526,7 @@ def _scm_startup_snapshot() -> dict[str, object]:
         }
     snapshot: dict[str, object] = {
         "provider": scm.provider,
-        "skip_label_enabled": bool(scm.skip_label),
+        "skip_label_enabled": bool(scm.skip_labels()),
         "skip_title_pattern_enabled": bool(scm.skip_title_pattern),
         "review_decision_enabled": scm.review_decision_enabled,
     }

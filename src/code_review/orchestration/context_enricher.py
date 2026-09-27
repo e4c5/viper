@@ -78,5 +78,6 @@ class ContextEnricher:
             commit_messages=commit_messages,
             include_commit_messages=app_cfg.include_commit_messages_in_prompt,
             remaining_tokens=remaining_tokens,
+            custom_instructions=getattr(app_cfg, "custom_instructions", None),
         )
         return (refs, context_brief, prompt_suffix)

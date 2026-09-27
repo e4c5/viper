@@ -96,6 +96,7 @@ def test_record_reply_dismissal_outcome_increments_when_prometheus_enabled(monke
 class _FakeMetric:
     def __init__(self, name, desc, labels=None, registry=None, **kwargs):
         self.name = name
+        self.kwargs = kwargs
         self.labelnames = labels or []
         self.values = []
         self.total = 0.0
@@ -192,6 +193,12 @@ def test_prometheus_enabled_with_fake_client_records_metrics(
         labels, _ = dismiss._label_instance
         assert labels == {"outcome": "disagreed"}
         assert dismiss.total == 1
+
+        # Run-duration histogram covers long reviews (buckets past 60s).
+        buckets = observability_module._prometheus_duration_histogram.kwargs["buckets"]
+        assert buckets == tuple(
+            sorted(buckets)
+        ) and max(buckets) >= 3600 and 120.0 in buckets
     finally:
         monkeypatch.delitem(sys.modules, "prometheus_client", raising=False)
 
