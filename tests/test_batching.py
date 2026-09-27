@@ -211,6 +211,38 @@ def test_split_long_line_degrades_to_smallest_fragment_below_floor(caplog):
     )
 
 
+def test_oversized_hunk_line_uses_injected_token_counter():
+    """_split_single_hunk must forward token_counter into _split_oversized_hunk_line
+    (and through it into _split_long_line)."""
+    from code_review.batching import split_file_diff_into_segments
+
+    diff = "\n".join(
+        [
+            "diff --git a/big.py b/big.py",
+            "--- a/big.py",
+            "+++ b/big.py",
+            "@@ -1,1 +1,1 @@",
+            "+" + "x" * 300,
+        ]
+    )
+    spy_calls: list[str] = []
+
+    def counter(text: str) -> int:
+        spy_calls.append(text)
+        return len(text)  # 1 token per char → forces fine-grained splitting
+
+    segments = split_file_diff_into_segments(
+        "big.py", diff, segment_budget_tokens=120, token_counter=counter
+    )
+    # Rendered fragments carry ~75 chars of header overhead, so a 120-token
+    # budget cuts the 300-char line into several segments. With the default
+    # chars/4 estimator the ~380-char render would count as ~95 and stay whole.
+    assert len(segments) >= 3
+    # The spy was consulted on short rendered fragments inside the oversized
+    # line split (fragments far shorter than the full 300-x line).
+    assert any(10 <= c.count("x") < 300 and "@@" in c for c in spy_calls)
+
+
 def test_split_long_line_unaffected_for_achievable_budget():
     """Normal case (budget is achievable) must be unchanged: no warning, and fragments
     fit within budget.

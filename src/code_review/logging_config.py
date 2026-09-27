@@ -28,7 +28,7 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
-            "trace_id": getattr(record, "trace_id", "-"),
+            "trace_id": str(getattr(record, "trace_id", "-")),
         }
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
@@ -70,6 +70,16 @@ def _suppress_third_party_loggers() -> None:
         genai_logger.addFilter(_filter_non_text_parts_warning)
 
 
+class _ManagedStreamHandler(logging.StreamHandler):
+    """StreamHandler installed by configure_logging.
+
+    Marked so that repeated configure_logging() calls only reformat/relevel
+    handlers this function installed and never clobber caller-supplied ones.
+    """
+
+    _code_review_managed = True
+
+
 def configure_logging(level: str | None = None) -> None:
     """Configure logging for the code_review package.
 
@@ -90,12 +100,14 @@ def configure_logging(level: str | None = None) -> None:
         else logging.Formatter(LOG_FORMAT)
     )
     if not log.handlers:
-        handler = logging.StreamHandler()
-        log.addHandler(handler)
+        log.addHandler(_ManagedStreamHandler())
+    # Only retouch handlers this function installed; a caller-supplied handler
+    # keeps its own formatter and level.
     for existing in log.handlers:
+        if not getattr(existing, "_code_review_managed", False):
+            continue
         existing.setFormatter(formatter)
-    for handler in log.handlers:
-        handler.setLevel(numeric)
+        existing.setLevel(numeric)
     # Prevent propagation to root so we don't double-print if root is configured
     log.propagate = False
 

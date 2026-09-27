@@ -145,7 +145,8 @@ class ReviewOrchestrator:
         incremental_base_sha: str = "",
     ) -> list[FindingV1] | None:
         """Short-circuit when this PR/range/config was already reviewed."""
-        if runner_mod.get_code_review_app_config().disable_idempotency:
+        app_cfg = self._app_config_override or runner_mod.get_code_review_app_config()
+        if getattr(app_cfg, "disable_idempotency", False):
             return None
         if not self.head_sha:
             return None

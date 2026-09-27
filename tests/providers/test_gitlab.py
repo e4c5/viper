@@ -1,5 +1,6 @@
 """Tests for GitLab provider (mocked HTTP)."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -689,17 +690,39 @@ def test_get_bot_blocking_state_paginates_reviews(mock_get):
     assert p.get_bot_blocking_state("owner", "repo", 3) == "BLOCKING"
 
 
-def test_resolve_comment_resolves_discussion():
+_BOT_AUTHOR = {"username": "review-bot", "id": 5}
+
+
+def _gitlab_provider_with_bot_identity() -> GitLabProvider:
+    """Provider whose bot identity is pre-seeded (no /user round-trip)."""
+    from code_review.providers.base import BotAttributionIdentity
+
     p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p._bot_identity_cache = BotAttributionIdentity(login="review-bot", id_str="5")
+    return p
+
+
+def test_resolve_comment_resolves_discussion():
+    p = _gitlab_provider_with_bot_identity()
     p._get_mr_discussions_paginated = MagicMock(
         return_value=[
             {
                 "id": "disc-9",
                 "notes": [
-                    {"id": 42, "resolvable": True, "body": "bot comment"},
+                    {
+                        "id": 42,
+                        "resolvable": True,
+                        "body": "bot comment",
+                        "author": dict(_BOT_AUTHOR),
+                    },
                 ],
             },
-            {"id": "disc-other", "notes": [{"id": 7, "resolvable": True}]},
+            {
+                "id": "disc-other",
+                "notes": [
+                    {"id": 7, "resolvable": True, "author": dict(_BOT_AUTHOR)}
+                ],
+            },
         ]
     )
     p._put = MagicMock()
@@ -711,9 +734,16 @@ def test_resolve_comment_resolves_discussion():
 
 
 def test_unresolve_comment_reopens_discussion():
-    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p = _gitlab_provider_with_bot_identity()
     p._get_mr_discussions_paginated = MagicMock(
-        return_value=[{"id": "disc-9", "notes": [{"id": 42, "resolvable": True}]}]
+        return_value=[
+            {
+                "id": "disc-9",
+                "notes": [
+                    {"id": 42, "resolvable": True, "author": dict(_BOT_AUTHOR)}
+                ],
+            }
+        ]
     )
     p._put = MagicMock()
     p.unresolve_comment("owner", "repo", "42", pr_number=7)
@@ -721,6 +751,121 @@ def test_unresolve_comment_reopens_discussion():
         "https://gitlab.example.com/api/v4/projects/owner%2Frepo/merge_requests/7/discussions/disc-9",
         {"resolved": False},
     )
+
+
+def test_resolve_comment_skips_discussion_with_non_bot_notes():
+    """Discussions containing human replies are never auto-resolved/unresolved."""
+    p = _gitlab_provider_with_bot_identity()
+    disc = {
+        "id": "disc-9",
+        "notes": [
+            {"id": 42, "resolvable": True, "author": dict(_BOT_AUTHOR)},
+            {
+                "id": 43,
+                "resolvable": True,
+                "author": {"username": "dev", "id": 99},
+            },
+        ],
+    }
+    p._get_mr_discussions_paginated = MagicMock(return_value=[disc])
+    p._put = MagicMock()
+    p.resolve_comment("owner", "repo", "42", pr_number=7)
+    p._put.assert_not_called()
+    p.unresolve_comment("owner", "repo", "42", pr_number=7)
+    p._put.assert_not_called()
+
+
+def test_resolve_comment_skips_when_bot_identity_unknown(caplog):
+    """If the bot identity cannot be determined, do not touch the discussion."""
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    from code_review.providers.base import BotAttributionIdentity
+
+    p._bot_identity_cache = BotAttributionIdentity()
+    p._get_mr_discussions_paginated = MagicMock(
+        return_value=[{"id": "disc-9", "notes": [{"id": 42, "resolvable": True}]}]
+    )
+    p._put = MagicMock()
+    p.resolve_comment("owner", "repo", "42", pr_number=7)
+    p._put.assert_not_called()
+
+
+def test_resolve_comment_propagates_discussion_fetch_errors():
+    """A failed discussions lookup must surface (not be read as 'not found')."""
+    p = _gitlab_provider_with_bot_identity()
+    p._get_mr_discussions_paginated = MagicMock(side_effect=RuntimeError("boom"))
+    p._put = MagicMock()
+    with pytest.raises(RuntimeError, match="boom"):
+        p.resolve_comment("owner", "repo", "42", pr_number=7)
+    p._put.assert_not_called()
+
+
+def test_resolve_comment_memoizes_discussions_list():
+    """Resolving two notes on one MR issues a single discussions fetch."""
+    p = _gitlab_provider_with_bot_identity()
+    discussions = [
+        {
+            "id": "disc-9",
+            "notes": [
+                {"id": 42, "resolvable": True, "author": dict(_BOT_AUTHOR)},
+            ],
+        },
+        {
+            "id": "disc-10",
+            "notes": [
+                {"id": 77, "resolvable": True, "author": dict(_BOT_AUTHOR)},
+            ],
+        },
+    ]
+    # Mock the raw fetch so the real memoized _get_mr_discussions_paginated runs.
+    p._fetch_mr_discussions = MagicMock(return_value=list(discussions))
+    p._put = MagicMock()
+    p.resolve_comment("owner", "repo", "42", pr_number=7)
+    p.resolve_comment("owner", "repo", "77", pr_number=7)
+    assert p._fetch_mr_discussions.call_count == 1
+    assert p._put.call_count == 2
+
+
+def test_get_mr_discussions_paginated_caches_results():
+    """The real memoized method issues one fetch per (owner, repo, pr)."""
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p._fetch_mr_discussions = MagicMock(return_value=[{"id": "disc-1", "notes": []}])
+    first = p._get_mr_discussions_paginated("o", "r", 1)
+    second = p._get_mr_discussions_paginated("o", "r", 1)
+    other = p._get_mr_discussions_paginated("o", "r", 2)
+    assert first == second == other == [{"id": "disc-1", "notes": []}]
+    assert p._fetch_mr_discussions.call_count == 2
+
+
+def test_get_mr_discussions_paginated_strict_raises():
+    p = GitLabProvider("https://gitlab.example.com/api/v4", "tok")
+    p._fetch_mr_discussions = MagicMock(side_effect=RuntimeError("api down"))
+    with pytest.raises(RuntimeError, match="api down"):
+        p._get_mr_discussions_paginated("o", "r", 1, strict=True)
+    # Non-strict callers still get [].
+    assert p._get_mr_discussions_paginated("o", "r", 2) == []
+
+
+def test_resolve_comment_updates_cached_discussion_resolved():
+    """After a resolve PUT, the memoized discussion reflects the new state."""
+    p = _gitlab_provider_with_bot_identity()
+    disc = {
+        "id": "disc-9",
+        "resolved": False,
+        "notes": [
+            {
+                "id": 42,
+                "resolvable": True,
+                "resolved": False,
+                "author": dict(_BOT_AUTHOR),
+            },
+        ],
+    }
+    p._mr_discussions_cache[("owner", "repo", 7)] = (time.monotonic(), [disc])
+    p._get_mr_discussions_paginated = MagicMock(return_value=[disc])
+    p._put = MagicMock()
+    p.resolve_comment("owner", "repo", "42", pr_number=7)
+    assert disc["resolved"] is True
+    assert disc["notes"][0]["resolved"] is True
 
 
 def test_resolve_comment_skips_non_resolvable_note():

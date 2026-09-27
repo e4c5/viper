@@ -4,7 +4,7 @@
 
 ```bash
 uv sync --extra dev        # or: pip install -e ".[dev]"
-pre-commit install         # optional; CI runs the same hooks
+pre-commit install         # optional; CI runs ruff and mypy, not the other hooks
 ```
 
 ## Tests

@@ -301,6 +301,7 @@ def _split_single_hunk(
                     hunk,
                     start_index,
                     segment_budget_tokens=segment_budget_tokens,
+                    token_counter=token_counter,
                 )
             )
             start_index += 1

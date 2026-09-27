@@ -138,12 +138,17 @@ def _fake_prometheus_client():
 
 @pytest.fixture
 def _reload_observability():
-    """Reload observability fresh; always restore the module afterwards."""
+    """Reload observability fresh; always restore the module afterwards.
+
+    Must be listed *before* ``monkeypatch`` in test params so it is set up
+    first and torn down *after* monkeypatch restores env/sys.modules —
+    otherwise the teardown reload runs while patches are still live.
+    """
     yield
     importlib.reload(observability_module)
 
 
-def test_prometheus_enabled_but_package_missing_is_noop(monkeypatch, _reload_observability):
+def test_prometheus_enabled_but_package_missing_is_noop(_reload_observability, monkeypatch):
     monkeypatch.setenv("CODE_REVIEW_METRICS", "prometheus")
     monkeypatch.delitem(sys.modules, "prometheus_client", raising=False)
     # Simulate the package being absent even though the venv now has it
@@ -162,7 +167,7 @@ def test_prometheus_enabled_but_package_missing_is_noop(monkeypatch, _reload_obs
 
 
 def test_prometheus_enabled_with_fake_client_records_metrics(
-    monkeypatch, _reload_observability
+    _reload_observability, monkeypatch
 ):
     fake = _fake_prometheus_client()
     monkeypatch.setitem(sys.modules, "prometheus_client", fake)
@@ -206,7 +211,7 @@ def test_prometheus_enabled_with_fake_client_records_metrics(
         monkeypatch.delitem(sys.modules, "prometheus_client", raising=False)
 
 
-def test_prometheus_disabled_get_registry_none(monkeypatch, _reload_observability):
+def test_prometheus_disabled_get_registry_none(_reload_observability, monkeypatch):
     monkeypatch.delenv("CODE_REVIEW_METRICS", raising=False)
     monkeypatch.delenv("CODE_REVIEW_PROMETHEUS", raising=False)
     importlib.reload(observability_module)
@@ -214,7 +219,7 @@ def test_prometheus_disabled_get_registry_none(monkeypatch, _reload_observabilit
     assert observability_module.get_prometheus_registry() is None
 
 
-def test_otel_missing_is_noop(monkeypatch, _reload_observability):
+def test_otel_missing_is_noop(_reload_observability, monkeypatch):
     monkeypatch.setenv("CODE_REVIEW_TRACING", "otel")
     monkeypatch.setitem(sys.modules, "opentelemetry", None)
     importlib.reload(observability_module)
@@ -225,7 +230,7 @@ def test_otel_missing_is_noop(monkeypatch, _reload_observability):
         monkeypatch.delitem(sys.modules, "opentelemetry", raising=False)
 
 
-def test_otel_enabled_creates_span(monkeypatch, _reload_observability):
+def test_otel_enabled_creates_span(_reload_observability, monkeypatch):
     pytest.importorskip("opentelemetry")
     monkeypatch.setenv("CODE_REVIEW_TRACING", "otel")
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
@@ -241,7 +246,7 @@ def test_otel_enabled_creates_span(monkeypatch, _reload_observability):
 
 
 def test_otel_endpoint_without_exporter_package_falls_back(
-    monkeypatch, _reload_observability
+    _reload_observability, monkeypatch
 ):
     pytest.importorskip("opentelemetry")
     monkeypatch.setenv("CODE_REVIEW_TRACING", "otel")

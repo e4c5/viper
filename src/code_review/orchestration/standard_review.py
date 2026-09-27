@@ -183,6 +183,10 @@ class StandardReviewHandler:
                 cfg,
                 llm_cfg,
                 full_diff=full_diff,
+                # Incomplete coverage must not stamp the run= marker on inline
+                # comments either: a same-SHA re-run would otherwise be skipped
+                # by the idempotency check even though the summary said "re-run".
+                include_run_marker=not unreviewed_paths,
             )
         if unreviewed_paths and self.head_sha:
             shown = list(unreviewed_paths)[:20]

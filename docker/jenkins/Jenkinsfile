@@ -6,7 +6,8 @@
 //   Do not declare pipeline parameters named LLM_PROVIDER / LLM_MODEL / SCM_PROVIDER / SCM_URL — Jenkins
 //   injects parameters into env and would overwrite folder/global env; use *_OVERRIDE parameters instead.
 // Credentials: default IDs "SCM_TOKEN" and "LLM_API_KEY" (required for non-ollama providers);
-//   override via env SCM_CREDENTIALS_ID / LLM_CREDENTIALS_ID or the same-named build parameters.
+//   override via env SCM_CREDENTIALS_ID / LLM_CREDENTIALS_ID or the SCM_CREDENTIALS_ID_OVERRIDE /
+//   LLM_CREDENTIALS_ID_OVERRIDE build parameters (params take precedence over env).
 // Optional review decisions (global/folder/job env): SCM_REVIEW_DECISION_ENABLED, SCM_REVIEW_DECISION_HIGH_THRESHOLD,
 // SCM_REVIEW_DECISION_MEDIUM_THRESHOLD, SCM_BITBUCKET_SERVER_USER_SLUG (Bitbucket Server/DC only for submit).
 // Optional Jenkins-side bot-event skip for comment jobs: CODE_REVIEW_BOT_USER_LOGIN and/or CODE_REVIEW_BOT_USER_ID.
@@ -36,8 +37,8 @@ pipeline {
         string(name: 'SCM_PROVIDER_OVERRIDE', defaultValue: '', description: 'Optional: overrides env SCM_PROVIDER (set provider via folder/global env; do not use a param named SCM_PROVIDER — it shadows env)')
         string(name: 'SCM_URL_OVERRIDE', defaultValue: '', description: 'Optional: overrides env SCM_URL')
         string(name: 'LLM_PROVIDER_OVERRIDE', defaultValue: '', description: 'Optional: overrides env LLM_PROVIDER (folder/global env; LLM_API_KEY credential unchanged)')
-        string(name: 'SCM_CREDENTIALS_ID', defaultValue: 'SCM_TOKEN', description: 'Jenkins credential ID bound to env SCM_TOKEN')
-        string(name: 'LLM_CREDENTIALS_ID', defaultValue: 'LLM_API_KEY', description: 'Jenkins credential ID bound to env LLM_API_KEY (unused for ollama)')
+        string(name: 'SCM_CREDENTIALS_ID_OVERRIDE', defaultValue: '', description: 'Optional: overrides env SCM_CREDENTIALS_ID; Jenkins credential ID bound to env SCM_TOKEN (default SCM_TOKEN)')
+        string(name: 'LLM_CREDENTIALS_ID_OVERRIDE', defaultValue: '', description: 'Optional: overrides env LLM_CREDENTIALS_ID; Jenkins credential ID bound to env LLM_API_KEY (default LLM_API_KEY; unused for ollama)')
         string(name: 'COMPOSE_PROJECT_NAME', defaultValue: 'code-review', description: 'Docker Compose project name')
         string(name: 'IMAGE_NAME', defaultValue: 'e4c5/code-review-agent:1.0.0', description: 'Container image name (e.g. user/name:tag); must match published image when using container agent. Pinning to a specific version (e.g. :1.2.3) is recommended over :latest.')
     }
@@ -109,11 +110,13 @@ pipeline {
                         (eventActorLogin && botActorLogin && eventActorLogin.equalsIgnoreCase(botActorLogin))
                         || (eventActorId && botActorId && eventActorId == botActorId)
                     )
-                    // Credential IDs: env SCM_CREDENTIALS_ID / LLM_CREDENTIALS_ID
-                    // (folder/global/job env) or the matching build parameters;
-                    // defaults keep existing jobs identical.
-                    def credId = env.SCM_CREDENTIALS_ID?.trim() ?: params.SCM_CREDENTIALS_ID?.trim() ?: 'SCM_TOKEN'
-                    def llmCredId = env.LLM_CREDENTIALS_ID?.trim() ?: params.LLM_CREDENTIALS_ID?.trim() ?: 'LLM_API_KEY'
+                    // Credential IDs: *_OVERRIDE build parameters win, then env
+                    // SCM_CREDENTIALS_ID / LLM_CREDENTIALS_ID (folder/global/job env),
+                    // then built-in defaults. Params use the _OVERRIDE suffix because
+                    // Jenkins injects parameters into env — a param named
+                    // SCM_CREDENTIALS_ID would shadow the folder/global env var.
+                    def credId = params.SCM_CREDENTIALS_ID_OVERRIDE?.trim() ?: env.SCM_CREDENTIALS_ID?.trim() ?: 'SCM_TOKEN'
+                    def llmCredId = params.LLM_CREDENTIALS_ID_OVERRIDE?.trim() ?: env.LLM_CREDENTIALS_ID?.trim() ?: 'LLM_API_KEY'
                     def unresolvedMarker = isBitbucket ? '$.pullRequest' : '$.pull_request'
 
                     if (prAction) {

@@ -102,11 +102,13 @@ from code_review.standards.prompts import (  # noqa: F401
 logger = logging.getLogger(__name__)
 
 
-def get_context_window() -> int:
-    return _model_get_context_window()
-
-
-_DEFAULT_GET_CONTEXT_WINDOW = get_context_window
+# `get_context_window` / `get_max_output_tokens` are re-exported from
+# code_review.models further below, so the objects bound in globals() at call
+# time are the models functions. The sentinels must therefore reference *those*
+# objects: when globals() holds the sentinel value, the env-default path was not
+# monkeypatched and we must call the config-aware models variant; when a test
+# replaces the module attr, we call the replacement (monkeypatch-compat).
+_DEFAULT_GET_CONTEXT_WINDOW = _model_get_context_window
 
 
 def get_context_window_for_config(config) -> int:
@@ -116,11 +118,7 @@ def get_context_window_for_config(config) -> int:
     return _model_get_context_window_for_config(config)
 
 
-def get_max_output_tokens() -> int:
-    return _model_get_max_output_tokens()
-
-
-_DEFAULT_GET_MAX_OUTPUT_TOKENS = get_max_output_tokens
+_DEFAULT_GET_MAX_OUTPUT_TOKENS = _model_get_max_output_tokens
 
 
 def get_max_output_tokens_for_config(config) -> int:
@@ -233,7 +231,7 @@ def _scm_fetch_concurrency(provider) -> int:
             return 1
     except Exception:
         return 1
-    return limit
+    return min(limit, 16)
 
 
 def _get_file_lines_by_path(
@@ -299,10 +297,16 @@ def _post_inline_comments(
     cfg,
     llm_cfg,
     full_diff: str = "",
+    include_run_marker: bool = True,
 ) -> int:
     """Compatibility shim — delegates to CommentPoster."""
     return CommentPoster(provider, pr_ctx).post_inline(
-        incremental_base_sha, to_post, cfg, llm_cfg, full_diff=full_diff
+        incremental_base_sha,
+        to_post,
+        cfg,
+        llm_cfg,
+        full_diff=full_diff,
+        include_run_marker=include_run_marker,
     )
 
 

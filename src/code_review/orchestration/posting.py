@@ -265,16 +265,26 @@ class CommentPoster:
         cfg,
         llm_cfg,
         full_diff: str = "",
+        *,
+        include_run_marker: bool = True,
     ) -> int:
-        """Build inline comments and post each one individually. Returns successful post count."""
+        """Build inline comments and post each one individually. Returns successful post count.
+
+        The ``run=`` idempotency marker is stamped only on the final inline comment —
+        and only when *include_run_marker* is true and every earlier post succeeded.
+        That way a partial post (or incomplete review coverage, signalled by the
+        caller via ``include_run_marker=False``) never leaves a ``run=`` marker behind
+        that would make a same-SHA re-run skip via the idempotency check. Successfully
+        posted findings are still deduplicated by their ``fingerprint=`` markers.
+        """
         import code_review as _pkg
         agent_version = getattr(_pkg, "__version__", "0.1.0")
 
         caps = self.provider.capabilities()
         run_id = self.pr_ctx.idempotency_key(cfg, llm_cfg, incremental_base_sha)
         added_set = _added_lines_in_diff(full_diff) if full_diff else set()
-        comments: list[InlineComment] = []
-        for f, fp in to_post:
+
+        def _build_comment(f: FindingV1, fp: str, run: str | None) -> InlineComment:
             body = finding_to_comment_body(
                 f, use_collapsible_prompt=caps.markup_supports_collapsible
             )
@@ -283,7 +293,7 @@ class CommentPoster:
                     body,
                     fp,
                     agent_version,
-                    run_id=run_id,
+                    run_id=run,
                     marker_at_end=not caps.markup_hides_html_comment,
                 )
             line_type: str | None = None
@@ -303,17 +313,25 @@ class CommentPoster:
                     f.line,
                 )
                 patch = None
-            comments.append(
-                InlineComment(
-                    path=f.path,
-                    line=f.line,
-                    body=body,
-                    end_line=f.end_line,
-                    suggested_patch=patch,
-                    line_type=line_type,
-                )
+            return InlineComment(
+                path=f.path,
+                line=f.line,
+                body=body,
+                end_line=f.end_line,
+                suggested_patch=patch,
+                line_type=line_type,
             )
-        return self._post_comments_one_by_one(comments)
+
+        comments = [_build_comment(f, fp, None) for f, fp in to_post]
+        if not comments:
+            return 0
+        count = self._post_comments_one_by_one(comments[:-1])
+        if include_run_marker and count == len(comments) - 1:
+            f, fp = to_post[-1]
+            last = _build_comment(f, fp, run_id)
+        else:
+            last = comments[-1]
+        return count + self._post_comments_one_by_one([last])
 
     def post_omit_marker_summary(
         self,

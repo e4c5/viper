@@ -158,6 +158,20 @@ def test_get_file_lines_sequential_for_github(monkeypatch):
     assert out == {"a": ["l"], "b": ["l"]}
 
 
+def test_scm_fetch_concurrency_clamped_to_16(monkeypatch):
+    """CODE_REVIEW_SCM_FETCH_CONCURRENCY is bounded — huge values can't
+    stampede the SCM with an unbounded thread fan-out."""
+    from code_review import orchestration_deps as deps
+
+    provider = _provider_with_caps(concurrent=True)
+    monkeypatch.setenv("CODE_REVIEW_SCM_FETCH_CONCURRENCY", "1000")
+    assert deps._scm_fetch_concurrency(provider) == 16
+    monkeypatch.setenv("CODE_REVIEW_SCM_FETCH_CONCURRENCY", "8")
+    assert deps._scm_fetch_concurrency(provider) == 8
+    monkeypatch.setenv("CODE_REVIEW_SCM_FETCH_CONCURRENCY", "16")
+    assert deps._scm_fetch_concurrency(provider) == 16
+
+
 def test_get_file_lines_error_per_path(monkeypatch):
     from code_review import orchestration_deps as deps
 
@@ -208,17 +222,34 @@ def test_json_formatter_exc_info_and_default_trace():
     assert "ValueError: boom" in payload["exc_info"]
 
 
+def test_json_formatter_stringifies_non_text_trace_id():
+    """A non-string trace_id (e.g. uuid4) must not break JSON serialisation."""
+    import uuid
+
+    formatter = JsonFormatter()
+    record = logging.LogRecord("x", logging.INFO, "f.py", 1, "msg", (), None)
+    record.trace_id = uuid.uuid4()
+    payload = json.loads(formatter.format(record))
+    assert isinstance(payload["trace_id"], str)
+    assert uuid.UUID(payload["trace_id"])  # round-trips to a valid UUID string
+
+
 def test_configure_logging_json(monkeypatch):
     monkeypatch.setenv("CODE_REVIEW_LOG_FORMAT", "json")
     monkeypatch.setenv("CODE_REVIEW_LOG_LEVEL", "INFO")
     log = logging.getLogger("code_review")
-    log.handlers.clear()
-    configure_logging()
-    assert any(isinstance(h.formatter, JsonFormatter) for h in log.handlers)
-    log.handlers.clear()
-    monkeypatch.delenv("CODE_REVIEW_LOG_FORMAT")
-    configure_logging()
-    assert not any(isinstance(h.formatter, JsonFormatter) for h in log.handlers)
+    saved_handlers = log.handlers[:]
+    try:
+        log.handlers.clear()
+        configure_logging()
+        assert any(isinstance(h.formatter, JsonFormatter) for h in log.handlers)
+        log.handlers.clear()
+        monkeypatch.delenv("CODE_REVIEW_LOG_FORMAT")
+        configure_logging()
+        assert not any(isinstance(h.formatter, JsonFormatter) for h in log.handlers)
+    finally:
+        log.handlers.clear()
+        log.handlers.extend(saved_handlers)
 
 
 # --- Bitbucket no-labels warning ------------------------------------------

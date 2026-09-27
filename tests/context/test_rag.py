@@ -109,6 +109,55 @@ def test_embed_texts_returns_vectors_in_order(mock_embedding):
     assert result == [[0.1, 0.2], [0.3, 0.4]]
 
 
+def _llm_config(provider: str, api_key: str | None):
+    from code_review.config import LLMConfig
+
+    return LLMConfig(provider=provider, api_key=api_key)
+
+
+@patch("code_review.context.rag.get_llm_config")
+@patch("litellm.embedding")
+def test_embed_texts_forwards_api_key_for_matching_provider(mock_embedding, mock_llm):
+    """Primary LLM key is forwarded only when the embedding provider matches."""
+    mock_embedding.return_value = _make_embedding_response([[0.1]])
+    mock_llm.return_value = _llm_config("openai", "sk-primary")
+
+    # Bare model name → litellm resolves to OpenAI → matches provider.
+    embed_texts(["x"], "text-embedding-3-small")
+    assert mock_embedding.call_args.kwargs["api_key"] == "sk-primary"
+
+    # Explicit provider prefix that matches also gets the key.
+    mock_llm.return_value = _llm_config("gemini", "gem-key")
+    embed_texts(["x"], "gemini/text-embedding-004")
+    assert mock_embedding.call_args.kwargs["api_key"] == "gem-key"
+
+
+@patch("code_review.context.rag.get_llm_config")
+@patch("litellm.embedding")
+def test_embed_texts_omits_api_key_for_other_provider(mock_embedding, mock_llm):
+    """A Gemini key must never be sent to the OpenAI embeddings endpoint (and
+    an explicit api_key must not shadow the embedding provider's env creds)."""
+    mock_embedding.return_value = _make_embedding_response([[0.1]])
+    mock_llm.return_value = _llm_config("gemini", "gem-key")
+
+    embed_texts(["x"], "text-embedding-3-small")  # bare → openai ≠ gemini
+    assert "api_key" not in mock_embedding.call_args.kwargs
+
+    embed_texts(["x"], "openai/text-embedding-3-small")
+    assert "api_key" not in mock_embedding.call_args.kwargs
+
+
+@patch("code_review.context.rag.get_llm_config")
+@patch("litellm.embedding")
+def test_embed_texts_no_key_means_no_kwarg(mock_embedding, mock_llm):
+    """Matching provider but unset key → api_key omitted entirely."""
+    mock_embedding.return_value = _make_embedding_response([[0.1]])
+    mock_llm.return_value = _llm_config("openai", None)
+
+    embed_texts(["x"], "text-embedding-3-small")
+    assert "api_key" not in mock_embedding.call_args.kwargs
+
+
 @patch("litellm.embedding")
 def test_embed_texts_empty_input(mock_embedding):
     result = embed_texts([], "text-embedding-3-small")

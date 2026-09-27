@@ -1,6 +1,8 @@
 """Shared HTTP retry/back-off policy in HttpXProvider._request."""
 
+import os
 import re
+import time
 from unittest.mock import patch
 
 import httpx
@@ -22,6 +24,51 @@ POST_URL = re.compile(r"^http://gitea\.test/api/v1/repos/o/r/issues/1/comments$"
 
 def _provider() -> GiteaProvider:
     return GiteaProvider(base_url="http://gitea.test", token="x")
+
+
+def test_parse_retry_after_naive_http_date_is_utc():
+    """A naive HTTP-date (no explicit offset) must be read as GMT/UTC.
+
+    Under a non-UTC local TZ the previous ``datetime.now(retry_at.tzinfo)``
+    (local time for naive dates) would shift the delay by the UTC offset or
+    clamp it to 0.
+    """
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+
+    from code_review.providers.http_retry import parse_retry_after
+
+    retry_at = datetime.now(timezone.utc) + timedelta(seconds=20)
+    # Render without a zone name so parsedate_to_datetime returns naive.
+    naive_date = format_datetime(retry_at.replace(tzinfo=None), usegmt=False)
+
+    old_tz = os.environ.get("TZ")
+    os.environ["TZ"] = "America/Los_Angeles"
+    time.tzset()
+    try:
+        delay = parse_retry_after(naive_date)
+    finally:
+        if old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old_tz
+        time.tzset()
+
+    assert delay is not None
+    assert 0 < delay <= 20.5
+
+
+def test_parse_retry_after_aware_http_date():
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+
+    from code_review.providers.http_retry import parse_retry_after
+
+    retry_at = datetime.now(timezone.utc) + timedelta(seconds=20)
+    aware_date = format_datetime(retry_at, usegmt=True)
+    delay = parse_retry_after(aware_date)
+    assert delay is not None
+    assert 0 < delay <= 20.5
 
 
 @pytest.mark.respx(assert_all_mocked=True, assert_all_called=False)

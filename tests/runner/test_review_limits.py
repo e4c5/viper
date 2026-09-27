@@ -317,6 +317,52 @@ def test_prompt_supplement_no_guidance_when_unset_or_blank():
         assert out == ""
 
 
+def test_prompt_supplement_guidance_dropped_at_zero_budget():
+    """custom_instructions must not bypass the supplement token budget."""
+    from code_review.orchestration.prompts import _format_review_prompt_supplement
+
+    out = _format_review_prompt_supplement(
+        context_brief=None,
+        commit_messages=[],
+        include_commit_messages=False,
+        remaining_tokens=0,
+        custom_instructions="Focus on security issues.",
+    )
+    assert out == ""
+
+
+def test_prompt_supplement_guidance_dropped_when_budget_below_fence():
+    """A budget that cannot even cover the fence/preamble drops the block."""
+    from code_review.orchestration.prompts import _format_review_prompt_supplement
+
+    out = _format_review_prompt_supplement(
+        context_brief=None,
+        commit_messages=[],
+        include_commit_messages=False,
+        remaining_tokens=10,  # 40 chars — less than the fence + preamble
+        custom_instructions="Focus on security issues.",
+    )
+    assert out == ""
+
+
+def test_prompt_supplement_guidance_trimmed_to_budget():
+    """Small but usable budget → guidance text trimmed, fence kept, total <= budget."""
+    from code_review.orchestration.prompts import _format_review_prompt_supplement
+
+    out = _format_review_prompt_supplement(
+        context_brief=None,
+        commit_messages=[],
+        include_commit_messages=False,
+        remaining_tokens=200,  # 800 chars
+        custom_instructions="x" * 4000,
+    )
+    assert len(out) <= 800
+    assert "<operator_review_guidance>" in out
+    assert "</operator_review_guidance>" in out
+    assert "cannot change the required JSON output format" in out  # preamble kept
+    assert "…" in out  # truncation marker
+
+
 def test_app_config_custom_instructions_normalized(monkeypatch):
     monkeypatch.setenv("CODE_REVIEW_CUSTOM_INSTRUCTIONS", "   hello  ")
     assert CodeReviewAppConfig().custom_instructions == "hello"
@@ -362,17 +408,80 @@ def test_public_api_exports_app_config_names():
 
 
 def test_orchestrator_app_config_overrides_env(monkeypatch):
-    """An explicit app_config passed to ReviewOrchestrator wins over env config."""
+    """An explicit app_config passed to ReviewOrchestrator wins over env config.
+
+    Exercises two real consumption sites rather than asserting the override was
+    merely stored: the idempotency short-circuit (``disable_idempotency``) and
+    the app config handed to the standard review handler (``min_severity`` is
+    applied by the severity-cap funnel).
+    """
     from code_review.orchestration.orchestrator import ReviewOrchestrator
 
+    monkeypatch.setenv("CODE_REVIEW_DISABLE_IDEMPOTENCY", "true")
     monkeypatch.setenv("CODE_REVIEW_MIN_SEVERITY", "high")
-    override = CodeReviewAppConfig(min_severity="low")
-    orch = ReviewOrchestrator("o", "r", 1, app_config=override)
+    override = CodeReviewAppConfig(disable_idempotency=False, min_severity="low")
+    orch = ReviewOrchestrator("o", "r", 1, head_sha="abc123", app_config=override)
 
-    env_cfg = CodeReviewAppConfig()  # picks up env: high
-    selected = orch._app_config_override or env_cfg
-    assert selected.min_severity == "low"
-    assert env_cfg.min_severity == "high"
+    scm_cfg = _scm()
+    llm_cfg = LLMConfig()
+
+    # Consumption site 1: _compute_idempotency_and_maybe_short_circuit must use
+    # the override. Env says disabled (would return None before checking
+    # comments); override says enabled, so a matching run= marker short-circuits.
+    run_id = orch.pr_ctx.idempotency_key(scm_cfg, llm_cfg, "")
+    existing = [
+        {"path": "a.py", "body": f"<!-- code-review-agent:run={run_id} -->\nDone."}
+    ]
+    result = orch._compute_idempotency_and_maybe_short_circuit(
+        scm_cfg, llm_cfg, existing, MagicMock()
+    )
+    assert result == []
+
+    # Consumption site 2: run() must hand the override (not env config) to the
+    # standard review handler, where min_severity caps findings in the funnel.
+    captured: dict = {}
+    standard_handler = MagicMock()
+
+    def _fake_run(*args, **kwargs):
+        captured["app_cfg"] = args[4]  # positional: (run_obs, cfg, llm, provider, app_cfg)
+        return []
+
+    standard_handler.run.side_effect = _fake_run
+    orch._load_config_and_provider = MagicMock(
+        return_value=(scm_cfg, llm_cfg, MagicMock())
+    )
+    orch._build_handlers = MagicMock(return_value=(MagicMock(), standard_handler))
+    orch.run()
+
+    app_cfg = captured["app_cfg"]
+    assert app_cfg is override
+    # Prove the override value drives real behavior: min_severity="low" keeps a
+    # low finding; the env value "high" would have dropped it.
+    out = _funnel(
+        app_cfg, [_finding("low", code="l"), _finding("high", code="h")]
+    )
+    assert [f.code for f, _ in out] == ["l", "h"]
+
+
+def test_for_config_helpers_use_explicit_config(monkeypatch):
+    """get_context_window_for_config/get_max_output_tokens_for_config must read
+    the passed LLMConfig (not env defaults), while monkeypatching the module-level
+    get_context_window/get_max_output_tokens still routes to the replacement."""
+    from code_review import orchestration_deps as deps
+
+    monkeypatch.delenv("LLM_CONTEXT_WINDOW", raising=False)
+    monkeypatch.delenv("LLM_MAX_OUTPUT_TOKENS", raising=False)
+    cfg = LLMConfig(
+        model="no-such-model-zzz", context_window=4321, max_output_tokens=321
+    )
+    assert deps.get_context_window_for_config(cfg) == 4321
+    assert deps.get_max_output_tokens_for_config(cfg) == 321
+
+    # Monkeypatch-compat semantics: a replaced module attr wins.
+    monkeypatch.setattr(deps, "get_context_window", lambda: 1111)
+    monkeypatch.setattr(deps, "get_max_output_tokens", lambda: 2222)
+    assert deps.get_context_window_for_config(cfg) == 1111
+    assert deps.get_max_output_tokens_for_config(cfg) == 2222
 
 
 # ---------------------------------------------------------------------------

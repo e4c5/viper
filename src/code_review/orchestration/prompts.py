@@ -120,17 +120,29 @@ _OPERATOR_GUIDANCE_PREAMBLE = (
 )
 
 
-def _build_custom_instructions_block(custom_instructions: str | None) -> str:
-    """Fenced operator-guidance block for the review prompt (empty when unset)."""
+def _build_custom_instructions_block(
+    custom_instructions: str | None, max_chars: int | None = None
+) -> str:
+    """Fenced operator-guidance block for the review prompt (empty when unset).
+
+    The block is charged against *max_chars* like every other supplement block:
+    the guidance text is truncated so the whole fenced block fits, and the block
+    is dropped when the budget cannot even cover the fence and preamble.
+    """
     text = (custom_instructions or "").strip()
     if not text:
         return ""
-    return (
-        "<operator_review_guidance>\n"
-        f"{_OPERATOR_GUIDANCE_PREAMBLE}\n\n"
-        f"{text}\n"
-        "</operator_review_guidance>"
+    wrapper_head = (
+        "<operator_review_guidance>\n" f"{_OPERATOR_GUIDANCE_PREAMBLE}\n\n"
     )
+    wrapper_tail = "\n</operator_review_guidance>"
+    if max_chars is not None:
+        remaining = max_chars - len(wrapper_head) - len(wrapper_tail)
+        if remaining <= 1:
+            return ""
+        if len(text) > remaining:
+            text = text[: remaining - 1].rstrip() + "…"
+    return f"{wrapper_head}{text}{wrapper_tail}"
 
 
 def _format_review_prompt_supplement(
@@ -144,9 +156,8 @@ def _format_review_prompt_supplement(
 ) -> str:
     """Extra user-message blocks: commit summaries and distilled external context."""
     max_chars = _supplement_char_budget(remaining_tokens)
-    guidance_block = _build_custom_instructions_block(custom_instructions)
     if max_chars == 0:
-        return guidance_block
+        return ""
 
     parts: list[str] = []
     used_chars = 0
@@ -169,6 +180,13 @@ def _format_review_prompt_supplement(
         )
         if context_block:
             parts.append(context_block)
+            used_chars += separator_chars + len(context_block)
+    # Operator guidance is charged against the same budget — it must never
+    # bypass the reserved prompt token limit.
+    guidance_block = _build_custom_instructions_block(
+        custom_instructions,
+        max_chars=_remaining_chars(max_chars, used_chars + (2 if parts else 0)),
+    )
     if guidance_block:
         parts.append(guidance_block)
     return "\n\n".join(parts) if parts else ""
