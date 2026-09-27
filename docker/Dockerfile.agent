@@ -31,6 +31,13 @@ COPY src ./src/
 
 RUN pip install --no-cache-dir --no-deps -e . \
     && chown -R appuser:appuser /app
+
+# pip is build-time only; remove it (and ensurepip's bundled pip wheel) so its
+# vendored msgpack/setuptools copies are not flagged by image scans.
+RUN rm -rf /usr/local/lib/python3.12/site-packages/pip \
+    /usr/local/lib/python3.12/site-packages/pip-*.dist-info \
+    /usr/local/lib/python3.12/ensurepip \
+    /usr/local/bin/pip*
 USER appuser
 
 # No long-running process; Jenkins (or other CI) invokes: code-review
