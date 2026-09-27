@@ -25,21 +25,24 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra dev --extra context
 
+      # Invoke tools from the synced venv directly: `uv run` may rebuild the
+      # editable project (executing build scripts) on each step — flagged as
+      # githubactions:S8541. `.venv/bin/*` is faster and provably runs no setup.
       - name: Lint (ruff)
-        run: uv run --frozen ruff check src tests
+        run: .venv/bin/ruff check src tests
 
       - name: Type check (mypy)
-        run: uv run --frozen mypy
+        run: .venv/bin/mypy
 
       - name: Run tests
         env:
           PYTHONWARNINGS: ignore
-        run: uv run --frozen pytest --ignore=tests/e2e --maxfail=1 --disable-warnings -q --cov --cov-report=term-missing:skip-covered
+        run: .venv/bin/pytest --ignore=tests/e2e --maxfail=1 --disable-warnings -q --cov --cov-report=term-missing:skip-covered
 
       - name: Run parser eval corpus
         env:
           PYTHONWARNINGS: ignore
-        run: uv run --frozen python -m code_review.evals.cli --execution parser
+        run: .venv/bin/python -m code_review.evals.cli --execution parser
 
   image-scan:
     runs-on: ubuntu-latest

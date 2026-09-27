@@ -7,3 +7,5 @@ pydantic>=2.0
 pydantic-settings>=2.0
 typer>=0.12
 litellm>=1.83.7
+# Transitive pin (via litellm/ADK): <1.2.1 is vulnerable (GHSA-6v7p-g79w-8964).
+msgpack>=1.2.1

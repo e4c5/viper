@@ -16,7 +16,7 @@ COPY requirements/runtime.txt ./requirements/runtime.txt
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir --upgrade "pip>=26.0" \
+    && python -m pip install --no-cache-dir --upgrade "pip>=26.0" "setuptools>=83.0.0" \
     && pip install --no-cache-dir -r requirements/runtime.txt \
     && adduser --disabled-password --gecos "" --uid 1000 appuser
 
