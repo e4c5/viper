@@ -1,6 +1,7 @@
 """GitLab API provider (merge requests = MR, project id = owner/repo URL-encoded)."""
 
 import logging
+import time
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -155,6 +156,18 @@ class GitLabProvider(HttpXProvider):
 
     _httpx_module = http_shortcuts.httpx
 
+    # Short TTL for the MR-discussions memo: resolving N comments must not
+    # issue N full discussion-list GETs, but a stale list must not live long.
+    _MR_DISCUSSIONS_CACHE_TTL_SECONDS = 30.0
+
+    def __init__(self, base_url: str, token: str, timeout: float = 30.0):
+        super().__init__(base_url, token, timeout)
+        # (owner, repo, pr_number) -> (monotonic timestamp, discussions list)
+        self._mr_discussions_cache: dict[
+            tuple[str, str, int], tuple[float, list[dict[str, Any]]]
+        ] = {}
+        self._bot_identity_cache: BotAttributionIdentity | None = None
+
     def _auth_header(self) -> dict[str, str]:
         return {"PRIVATE-TOKEN": self._token}
 
@@ -162,22 +175,40 @@ class GitLabProvider(HttpXProvider):
         proj = _project_id(owner, repo)
         return f"{self._base_url}/projects/{proj}/" + "/".join(parts)
 
-    def _get_mr_discussions_paginated(
+    def _fetch_mr_discussions(
         self, owner: str, repo: str, pr_number: int
     ) -> list[dict[str, Any]]:
-        """List all MR discussions (GitLab paginates; small pages omit later threads)."""
+        """Fetch all MR discussions (paginated). Raises on API failure."""
         base_path = self._path(owner, repo, "merge_requests", str(pr_number), "discussions")
         combined: list[dict[str, Any]] = []
+        page_iter = self._paginate_list(base_path, mode="page", page_size=100, max_pages=500)
+        for data in page_iter:
+            if not isinstance(data, list):
+                break
+            if not data:
+                break
+            for item in data:
+                if isinstance(item, dict):
+                    combined.append(item)
+        return combined
+
+    def _get_mr_discussions_paginated(
+        self, owner: str, repo: str, pr_number: int, *, strict: bool = False
+    ) -> list[dict[str, Any]]:
+        """List all MR discussions, memoized ~30s per (owner, repo, pr_number).
+
+        GitLab paginates discussions; small pages omit later threads. Failures are
+        logged and return ``[]`` — unless *strict* is true, in which case the
+        exception propagates so callers (e.g. comment resolution) can distinguish
+        "no such discussion" from a transient API failure.
+        """
+        key = (owner, repo, pr_number)
+        now = time.monotonic()
+        entry = self._mr_discussions_cache.get(key)
+        if entry is not None and (now - entry[0]) < self._MR_DISCUSSIONS_CACHE_TTL_SECONDS:
+            return entry[1]
         try:
-            page_iter = self._paginate_list(base_path, mode="page", page_size=100, max_pages=500)
-            for data in page_iter:
-                if not isinstance(data, list):
-                    break
-                if not data:
-                    break
-                for item in data:
-                    if isinstance(item, dict):
-                        combined.append(item)
+            combined = self._fetch_mr_discussions(owner, repo, pr_number)
         except Exception as e:
             logger.warning(
                 "GitLab MR discussions fetch failed owner=%s repo=%s pr_number=%s: %s",
@@ -186,7 +217,36 @@ class GitLabProvider(HttpXProvider):
                 pr_number,
                 e,
             )
+            if strict:
+                raise
+            return []
+        self._mr_discussions_cache[key] = (now, combined)
         return combined
+
+    def _invalidate_mr_discussions_cache(
+        self, owner: str, repo: str, pr_number: int
+    ) -> None:
+        self._mr_discussions_cache.pop((owner, repo, pr_number), None)
+
+    def _update_cached_discussion_resolved(
+        self, owner: str, repo: str, pr_number: int, discussion_id: str, resolved: bool
+    ) -> None:
+        """Fold a successful resolved/unresolved PUT into the memoized list.
+
+        Flipping ``resolved`` does not change list contents, but readers such as
+        the quality gate consult the flag — keep the cache consistent in place.
+        """
+        entry = self._mr_discussions_cache.get((owner, repo, pr_number))
+        if entry is None:
+            return
+        for disc in entry[1]:
+            if not isinstance(disc, dict) or str(disc.get("id") or "") != discussion_id:
+                continue
+            disc["resolved"] = resolved
+            for n in disc.get("notes") or []:
+                if isinstance(n, dict) and n.get("resolvable"):
+                    n["resolved"] = resolved
+            break
 
     def _get_mr_reviews_paginated(
         self, owner: str, repo: str, pr_number: int
@@ -392,15 +452,18 @@ class GitLabProvider(HttpXProvider):
         """Post inline comments as MR discussions with position (requires diff_refs from MR)."""
         if not comments:
             return
-        diff_refs = self._get_mr_diff_refs(owner, repo, pr_number)
-        if not diff_refs:
-            # Fallback: post as MR-level note (no line position)
-            for c in comments:
-                self._post(
-                    self._path(owner, repo, "merge_requests", str(pr_number), "notes"),
-                    {"body": self._render_body(c, with_path_prefix=True)},
-                )
-            return
+        try:
+            diff_refs = self._get_mr_diff_refs(owner, repo, pr_number)
+            if not diff_refs:
+                # Fallback: post as MR-level note (no line position)
+                for c in comments:
+                    self._post(
+                        self._path(owner, repo, "merge_requests", str(pr_number), "notes"),
+                        {"body": self._render_body(c, with_path_prefix=True)},
+                    )
+                return
+        finally:
+            self._invalidate_mr_discussions_cache(owner, repo, pr_number)
         base_sha = diff_refs.get("base_sha") or ""
         start_sha = diff_refs.get("start_sha") or base_sha
         head_sha_val = head_sha or diff_refs.get("head_sha") or ""
@@ -500,14 +563,147 @@ class GitLabProvider(HttpXProvider):
                 out.append(item)
         return out
 
-    def resolve_comment(self, owner: str, repo: str, comment_id: str) -> None:
-        """
-        Resolve a discussion thread.
+    def _gitlab_discussion_for_note_id(
+        self, owner: str, repo: str, pr_number: int, note_id: str
+    ) -> dict[str, Any] | None:
+        """Return the discussion dict containing the note, or None if genuinely absent.
 
-        Not implemented; capabilities() returns resolvable_comments=False so callers
-        do not attempt this.
+        API failures propagate (strict fetch) so a transient error is not mistaken
+        for "not found" — callers such as ``resolve_stale`` catch per-comment and
+        surface the failure instead of silently leaving the comment unresolved.
         """
-        pass
+        want = (note_id or "").strip()
+        if not want:
+            return None
+        data = self._get_mr_discussions_paginated(owner, repo, pr_number, strict=True)
+        for disc in data:
+            if not isinstance(disc, dict):
+                continue
+            if _gitlab_notes_contain_id(disc.get("notes") or [], want):
+                return disc
+        return None
+
+    def _gitlab_bot_identity(self, owner: str, repo: str, pr_number: int) -> BotAttributionIdentity:
+        """Memoized bot identity for this provider instance (token is fixed)."""
+        if self._bot_identity_cache is None:
+            self._bot_identity_cache = self.get_bot_attribution_identity(
+                owner, repo, pr_number
+            )
+        return self._bot_identity_cache
+
+    def _gitlab_note_authored_by_bot(
+        self, note: dict[str, Any], bot_login: str, bot_id: str
+    ) -> bool:
+        author = note.get("author") if isinstance(note.get("author"), dict) else {}
+        uname = str(author.get("username") or author.get("name") or "").strip().lower()
+        uid = str(author.get("id") or "").strip()
+        return bool((bot_login and uname == bot_login) or (bot_id and uid and uid == bot_id))
+
+    def _gitlab_discussion_entirely_bot_authored(
+        self, disc: dict[str, Any], owner: str, repo: str, pr_number: int
+    ) -> bool:
+        """True when every note in the discussion was authored by the bot identity."""
+        identity = self._gitlab_bot_identity(owner, repo, pr_number)
+        bot_login = (identity.login or "").strip().lower()
+        bot_id = (identity.id_str or "").strip()
+        if not bot_login and not bot_id:
+            logger.warning(
+                "GitLab bot identity unknown owner=%s repo=%s pr=%s; will not resolve "
+                "discussions whose authorship cannot be verified",
+                owner,
+                repo,
+                pr_number,
+            )
+            return False
+        notes = [n for n in (disc.get("notes") or []) if isinstance(n, dict)]
+        return all(self._gitlab_note_authored_by_bot(n, bot_login, bot_id) for n in notes)
+
+    def _gitlab_set_comment_resolved(
+        self, owner: str, repo: str, comment_id: str, pr_number: int | None, resolved: bool
+    ) -> None:
+        """Resolve/unresolve the MR discussion containing note ``comment_id``.
+
+        Notes that are not flagged ``resolvable`` in the discussion payload (e.g.
+        plain MR comments) are skipped, matching the GitLab API which rejects
+        resolving non-resolvable discussions.
+        """
+        if pr_number is None:
+            logger.warning(
+                "GitLab resolve_comment needs pr_number owner=%s repo=%s comment_id=%s",
+                owner,
+                repo,
+                comment_id,
+            )
+            return
+        disc = self._gitlab_discussion_for_note_id(owner, repo, pr_number, comment_id)
+        if disc is None:
+            logger.warning(
+                "GitLab no discussion for note id=%s owner=%s repo=%s pr=%s",
+                comment_id,
+                owner,
+                repo,
+                pr_number,
+            )
+            return
+        want = str(comment_id).strip()
+        note = next(
+            (
+                n
+                for n in (disc.get("notes") or [])
+                if isinstance(n, dict) and str(n.get("id") or "") == want
+            ),
+            None,
+        )
+        if note is not None and note.get("resolvable") is not True:
+            logger.debug(
+                "GitLab note id=%s is not resolvable; skipping", comment_id
+            )
+            return
+        discussion_id = str(disc.get("id") or "")
+        if not discussion_id:
+            return
+        # GitLab resolves at discussion granularity: toggling `resolved` applies
+        # to every note in the thread. Only auto-resolve discussions that are
+        # entirely bot-authored — a thread containing human replies must be left
+        # for humans to resolve.
+        if not self._gitlab_discussion_entirely_bot_authored(
+            disc, owner, repo, pr_number
+        ):
+            logger.info(
+                "GitLab discussion %s contains notes by other users; skipping "
+                "%s owner=%s repo=%s pr=%s note id=%s",
+                discussion_id,
+                "resolve" if resolved else "unresolve",
+                owner,
+                repo,
+                pr_number,
+                comment_id,
+            )
+            return
+        path = self._path(
+            owner,
+            repo,
+            "merge_requests",
+            str(pr_number),
+            "discussions",
+            discussion_id,
+        )
+        self._put(path, {"resolved": resolved})
+        self._update_cached_discussion_resolved(
+            owner, repo, pr_number, discussion_id, resolved
+        )
+
+    def resolve_comment(
+        self, owner: str, repo: str, comment_id: str, *, pr_number: int | None = None
+    ) -> None:
+        """Resolve the MR discussion containing note ``comment_id``."""
+        self._gitlab_set_comment_resolved(owner, repo, comment_id, pr_number, True)
+
+    def unresolve_comment(
+        self, owner: str, repo: str, comment_id: str, *, pr_number: int | None = None
+    ) -> None:
+        """Reopen the MR discussion containing note ``comment_id``."""
+        self._gitlab_set_comment_resolved(owner, repo, comment_id, pr_number, False)
 
     def resolve_review_thread(
         self,
@@ -537,13 +733,19 @@ class GitLabProvider(HttpXProvider):
             discussion_id,
         )
         self._put(path, {"resolved": True})
+        self._update_cached_discussion_resolved(
+            owner, repo, pr_number, discussion_id, True
+        )
 
     def post_pr_summary_comment(self, owner: str, repo: str, pr_number: int, body: str) -> None:
         """Post MR-level note (no position)."""
-        self._post(
-            self._path(owner, repo, "merge_requests", str(pr_number), "notes"),
-            {"body": body},
-        )
+        try:
+            self._post(
+                self._path(owner, repo, "merge_requests", str(pr_number), "notes"),
+                {"body": body},
+            )
+        finally:
+            self._invalidate_mr_discussions_cache(owner, repo, pr_number)
 
     def get_bot_blocking_state(self, owner: str, repo: str, pr_number: int) -> BotBlockingState:
         """Use MR reviews API when available; ``requested_changes`` → blocking."""
@@ -613,7 +815,10 @@ class GitLabProvider(HttpXProvider):
             log_label=f"GitLab unapprove owner={owner} repo={repo} pr={pr_number}",
         )
         note = gitlab_note_with_submit_review_requested_changes(body)
-        self._post(f"{base}/notes", {"body": note})
+        try:
+            self._post(f"{base}/notes", {"body": note})
+        finally:
+            self._invalidate_mr_discussions_cache(owner, repo, pr_number)
 
     def get_pr_commit_messages(self, owner: str, repo: str, pr_number: int) -> list[str]:
         """List MR commits (GitLab: GET .../merge_requests/:iid/commits), paginated."""
@@ -744,17 +949,20 @@ class GitLabProvider(HttpXProvider):
         path = self._path(
             owner, repo, "merge_requests", str(pr_number), "discussions", disc_id, "notes"
         )
-        self._post(path, {"body": body})
+        try:
+            self._post(path, {"body": body})
+        finally:
+            self._invalidate_mr_discussions_cache(owner, repo, pr_number)
 
     def capabilities(self) -> ProviderCapabilities:
         """
         Return provider capability flags for GitLab.
 
-        GitLab supports suggestion blocks. resolve_comment is not implemented, so
-        resolvable_comments=False to avoid silent failures.
+        GitLab supports suggestion blocks and resolving the discussion that
+        contains a note via resolve_comment/unresolve_comment.
         """
         return ProviderCapabilities(
-            resolvable_comments=False,
+            resolvable_comments=True,
             supports_suggestions=True,
             supports_multiline_suggestions=True,
             supports_review_decisions=True,

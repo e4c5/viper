@@ -38,17 +38,49 @@ def test_configure_logging_default_when_env_unset():
 
 
 def test_configure_logging_updates_existing_handler_levels():
-    """Reconfiguring logging updates existing handler levels."""
+    """Reconfiguring logging updates existing (managed) handler levels."""
     log = logging.getLogger("code_review")
+    saved_handlers = log.handlers[:]
+    try:
+        log.handlers.clear()
+        with patch.dict(os.environ, {LOG_LEVEL_ENV: "WARNING"}, clear=False):
+            configure_logging()
+        with patch.dict(os.environ, {LOG_LEVEL_ENV: "DEBUG"}, clear=False):
+            configure_logging()
 
-    with patch.dict(os.environ, {LOG_LEVEL_ENV: "WARNING"}, clear=False):
-        configure_logging()
-    with patch.dict(os.environ, {LOG_LEVEL_ENV: "DEBUG"}, clear=False):
-        configure_logging()
+        assert log.level == logging.DEBUG
+        managed = [
+            h for h in log.handlers if getattr(h, "_code_review_managed", False)
+        ]
+        assert managed
+        assert all(handler.level == logging.DEBUG for handler in managed)
+    finally:
+        log.handlers.clear()
+        log.handlers.extend(saved_handlers)
 
-    assert log.level == logging.DEBUG
-    assert log.handlers
-    assert all(handler.level == logging.DEBUG for handler in log.handlers)
+
+def test_configure_logging_preserves_foreign_handler_formatter():
+    """Handlers not installed by configure_logging keep their formatter and level."""
+    log = logging.getLogger("code_review")
+    saved_handlers = log.handlers[:]
+    custom_formatter = logging.Formatter("CUSTOM %(message)s")
+    foreign = logging.StreamHandler(io.StringIO())
+    foreign.setFormatter(custom_formatter)
+    foreign.setLevel(logging.CRITICAL)
+    try:
+        log.handlers.clear()
+        configure_logging(level="INFO")  # installs a managed handler
+        log.addHandler(foreign)
+        configure_logging(level="DEBUG")  # must not clobber the foreign handler
+        assert foreign.formatter is custom_formatter
+        assert foreign.level == logging.CRITICAL
+        managed = [
+            h for h in log.handlers if getattr(h, "_code_review_managed", False)
+        ]
+        assert managed and all(h.level == logging.DEBUG for h in managed)
+    finally:
+        log.handlers.clear()
+        log.handlers.extend(saved_handlers)
 
 
 def test_emit_package_log_does_not_mirror_disabled_level_to_root():

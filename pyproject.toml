@@ -25,16 +25,35 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "typer>=0.12",
-    "litellm>=1.83.7",
+    # Security floor: cryptography <50.0.0 is vulnerable (CVE-2026-69247).
+    "cryptography>=50.0.0",
 ]
 
 [project.optional-dependencies]
+litellm = [
+    # Optional multi-provider LLM support (OpenAI, Anthropic, Ollama,
+    # OpenRouter, DeepSeek). Required when LLM_PROVIDER is not gemini/vertex.
+    "litellm>=1.83.7",
+    # Transitive floor: msgpack <1.2.1 is vulnerable (GHSA-6v7p-g79w-8964).
+    "msgpack>=1.2.1",
+    # Transitive floor: aiohttp <3.14.3 is vulnerable (CVE-2026-69244,
+    # CVE-2026-59881).
+    "aiohttp>=3.14.3",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=4.0",
     "ruff>=0.6",
     "respx>=0.21",
+    # Tests exercise LiteLlm-backed providers.
+    "litellm>=1.83.7",
+    # Same transitive security floors as the litellm extra — dev installs
+    # litellm directly, bypassing that extra's constraints.
+    "msgpack>=1.2.1",
+    "aiohttp>=3.14.3",
+    "mypy>=1.10",
+    "types-PyYAML>=6.0",
 ]
 observability = [
     "prometheus-client>=0.19",
@@ -96,3 +115,17 @@ select = ["E", "F", "I", "B", "C4", "UP"]
 # LLM instruction strings are intentionally long single lines.
 [tool.ruff.lint.per-file-ignores]
 "src/code_review/agent/agent.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+files = [
+    "src/code_review/__init__.py",
+    "src/code_review/config.py",
+    "src/code_review/schemas/",
+    "src/code_review/providers/url_policy.py",
+    "src/code_review/providers/http_retry.py",
+    "src/code_review/providers/base.py",
+]
+ignore_missing_imports = true
+check_untyped_defs = true
+plugins = ["pydantic.mypy"]

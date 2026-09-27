@@ -72,7 +72,9 @@ class _ProviderWithCapabilities(ProviderInterface):
     def get_pr_info(self, owner, repo, pr_number):
         return None
 
-    def resolve_comment(self, owner: str, repo: str, comment_id: str) -> None:
+    def resolve_comment(
+        self, owner: str, repo: str, comment_id: str, *, pr_number: int | None = None
+    ) -> None:
         self._resolved_ids.append(comment_id)
 
 

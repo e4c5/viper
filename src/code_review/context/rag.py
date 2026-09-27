@@ -5,8 +5,6 @@ from __future__ import annotations
 import logging
 import re
 
-import litellm
-
 from code_review.config import get_llm_config
 from code_review.context.distiller import _litellm_model_name
 from code_review.llm_telemetry import log_llm_usage, usage_from_litellm_response
@@ -39,6 +37,51 @@ def _heuristic_query_from_diff(snippet: str) -> str:
     return f"Code changes in: {hint}" if hint else "pull request code changes"
 
 
+def _llm_api_key(llm: object) -> str | None:
+    """Return the configured provider API key as a plain string, or None."""
+    key = getattr(llm, "api_key", None)
+    if key is None:
+        return None
+    raw = key.get_secret_value() if hasattr(key, "get_secret_value") else str(key)
+    return raw.strip() or None
+
+
+# Known litellm embedding provider prefixes (``provider/model`` form). Prefixes
+# not in this map are treated as part of a bare model name (e.g. HuggingFace
+# ids like ``BAAI/bge-m3``), which litellm resolves to OpenAI embeddings.
+_EMBEDDING_PROVIDER_ALIASES: dict[str, str] = {
+    "openai": "openai",
+    "azure": "azure",
+    "gemini": "gemini",
+    "vertex": "vertex",
+    "vertex_ai": "vertex",
+    "anthropic": "anthropic",
+    "ollama": "ollama",
+    "openrouter": "openrouter",
+    "deepseek": "deepseek",
+    "bedrock": "bedrock",
+    "cohere": "cohere",
+    "huggingface": "huggingface",
+    "mistral": "mistral",
+    "voyage": "voyage",
+}
+
+
+def _embedding_provider_matches_llm(model: str, llm_provider: str) -> bool:
+    """Return True when the embedding model targets the configured LLM provider.
+
+    ``provider/model`` prefixes are honored; bare model names (e.g.
+    ``text-embedding-3-small``) default to OpenAI embeddings in litellm.
+    """
+    raw_provider = (llm_provider or "").strip().lower()
+    provider = _EMBEDDING_PROVIDER_ALIASES.get(raw_provider, raw_provider)
+    prefix, sep, _ = (model or "").partition("/")
+    emb_provider = _EMBEDDING_PROVIDER_ALIASES.get(prefix.strip().lower())
+    if not sep or emb_provider is None:
+        return provider == "openai"
+    return emb_provider == provider
+
+
 def build_semantic_query_from_diff(diff_text: str, max_diff_chars: int = 14_000) -> str:
     """Lightweight LLM pass: intent + entities for similarity search."""
     snippet = (diff_text or "")[:max_diff_chars]
@@ -54,8 +97,11 @@ def build_semantic_query_from_diff(diff_text: str, max_diff_chars: int = 14_000)
     user = f"Unified diff (truncated):\n\n{snippet}"
     _temperature = get_effective_temperature(llm.temperature)
     try:
+        import litellm
+
         resp = litellm.completion(
             model=model,
+            api_key=_llm_api_key(llm),
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -115,7 +161,18 @@ def embed_texts(texts: list[str], model: str) -> list[list[float]]:
     if not texts:
         return []
     try:
-        resp = litellm.embedding(model=model, input=texts)
+        import litellm
+
+        # Only forward the primary LLM key when the embedding model targets the
+        # same provider — otherwise litellm must resolve the embedding provider's
+        # own env credentials (and we must not leak the key to another service).
+        llm = get_llm_config()
+        kwargs: dict = {}
+        if _embedding_provider_matches_llm(model, llm.provider):
+            api_key = _llm_api_key(llm)
+            if api_key:
+                kwargs["api_key"] = api_key
+        resp = litellm.embedding(model=model, input=texts, **kwargs)
     except Exception as e:
         logger.warning("Embedding call failed (%s): %s", model, e)
         raise

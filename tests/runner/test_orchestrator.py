@@ -618,7 +618,7 @@ def test_run_agent_and_collect_findings_parses_sequential_workflow_responses(
     ]
     runner = SimpleNamespace(_uses_sequential_batch_review=True)
 
-    findings = run_agent_and_collect_findings(
+    outcome = run_agent_and_collect_findings(
         PRContext("o", "r", 1, "sha1"),
         MagicMock(),
         "review standards",
@@ -628,7 +628,8 @@ def test_run_agent_and_collect_findings_parses_sequential_workflow_responses(
         review_visible_lines=None,
     )
 
-    assert [(f.path, f.line, f.message) for f in findings] == [
+    assert outcome.unreviewed_paths == ()
+    assert [(f.path, f.line, f.message) for f in outcome.findings] == [
         ("a.py", 1, "m1"),
         ("b.py", 2, "m2"),
     ]
@@ -1542,7 +1543,7 @@ def test_run_isolated_batches_with_retry_gives_up_after_max_retries_of_splitting
         ),
         caplog.at_level("WARNING"),
     ):
-        findings = execution_mod._run_isolated_batches_with_retry(
+        findings, unreviewed = execution_mod._run_isolated_batches_with_retry(
             pr_ctx=object(),
             provider=object(),
             review_standards="",
@@ -1553,6 +1554,7 @@ def test_run_isolated_batches_with_retry_gives_up_after_max_retries_of_splitting
         )
 
     assert findings == []
+    assert any("foo.py" in b.paths for b in unreviewed)
     # The loop must terminate (it would hang/loop far longer than this without the fix)
     # and must have given up rather than resplitting forever.
     assert call_count < 50
@@ -1657,6 +1659,92 @@ def test_post_inline_preserves_single_line_patch_when_platform_does_not_support_
 
     assert len(captured_comments) == 1
     assert captured_comments[0].suggested_patch == "    user_id = request.user_id"
+
+
+# --- run= idempotency marker in inline comments (incomplete coverage) ---
+
+
+def _poster_and_captures():
+    from code_review.models import PRContext
+    from code_review.orchestration.posting import CommentPoster
+    from code_review.providers.base import ProviderCapabilities
+
+    provider = MagicMock()
+    provider.capabilities.return_value = ProviderCapabilities(
+        supports_suggestions=False,
+    )
+    captured: list = []
+    provider.post_review_comments.side_effect = (
+        lambda _o, _r, _p, comments, **_kw: captured.extend(comments)
+    )
+    poster = CommentPoster(provider=provider, pr_ctx=PRContext("o", "r", 1, head_sha="abc"))
+    return poster, provider, captured
+
+
+def _mk_finding(code: str):
+    from code_review.schemas.findings import FindingV1
+
+    return FindingV1(
+        path="src/foo.py", line=10, severity="medium", code=code, message="Fix."
+    )
+
+
+def test_post_inline_omits_run_marker_when_include_run_marker_false():
+    """Incomplete coverage: inline comments keep fingerprint but no run= so a
+    same-SHA re-run is not skipped by the idempotency check."""
+    poster, _provider, captured = _poster_and_captures()
+    poster.post_inline(
+        "",
+        [(_mk_finding("a"), "fp-a"), (_mk_finding("b"), "fp-b")],
+        cfg=MagicMock(provider="github"),
+        llm_cfg=MagicMock(),
+        include_run_marker=False,
+    )
+    assert len(captured) == 2
+    for c in captured:
+        assert "fingerprint=" in c.body
+        assert "run=" not in c.body
+
+
+def test_post_inline_stamps_run_marker_when_complete():
+    """Complete coverage: the run= marker is present on the final comment."""
+    poster, _provider, captured = _poster_and_captures()
+    poster.post_inline(
+        "",
+        [(_mk_finding("a"), "fp-a"), (_mk_finding("b"), "fp-b")],
+        cfg=MagicMock(provider="github"),
+        llm_cfg=MagicMock(),
+    )
+    assert len(captured) == 2
+    assert "run=" in captured[-1].body
+    # Earlier comments carry fingerprint markers only; the run= stamp is
+    # all-or-nothing so partial posts can never leave it behind.
+    assert "fingerprint=" in captured[0].body
+    assert "run=" not in captured[0].body
+
+
+def test_post_inline_omits_run_marker_when_a_post_fails():
+    """If an earlier post fails, the final comment must not carry run=."""
+    poster, provider, captured = _poster_and_captures()
+    calls = {"n": 0}
+
+    def _fail_first(_o, _r, _p, comments, **_kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("post failed")
+        captured.extend(comments)
+
+    provider.post_review_comments.side_effect = _fail_first
+    count = poster.post_inline(
+        "",
+        [(_mk_finding("a"), "fp-a"), (_mk_finding("b"), "fp-b")],
+        cfg=MagicMock(provider="github"),
+        llm_cfg=MagicMock(),
+    )
+    assert count == 1
+    assert len(captured) == 1
+    assert "fingerprint=" in captured[0].body
+    assert "run=" not in captured[0].body
 
 
 def test_maybe_generate_and_post_summary_skips_overwrite_when_description_updated():

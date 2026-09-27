@@ -12,8 +12,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SCM_CONFIG: "SCMConfig | None" = None
 _LLM_CONFIG: "LLMConfig | None" = None
-_SUMMARY_LLM_CONFIG: "TaskLLMConfig | None" = None
-_VERIFICATION_LLM_CONFIG: "TaskLLMConfig | None" = None
+_SUMMARY_LLM_CONFIG: "SummaryLLMConfig | None" = None
+_VERIFICATION_LLM_CONFIG: "VerificationLLMConfig | None" = None
 _CONTEXT_AWARE_CONFIG: "ContextAwareReviewConfig | None" = None
 _CODE_REVIEW_APP_CONFIG: "CodeReviewAppConfig | None" = None
 logger = logging.getLogger(__name__)
@@ -39,7 +39,10 @@ class SCMConfig(BaseSettings):
     event: str = Field(default="", description="Webhook event: opened/synchronize/reopened")
     skip_label: str = Field(
         default="skip-review",
-        description="If PR has this label, skip review (empty to disable)",
+        description=(
+            "Comma-separated PR labels that skip review (case-insensitive; "
+            "empty disables label-based skipping)"
+        ),
     )
     skip_title_pattern: str = Field(
         default="[skip-review]",
@@ -67,6 +70,14 @@ class SCMConfig(BaseSettings):
         description=(
             "Optional comma-separated allowlist of SCM hosts (host[:port]). When set, "
             "SCM_URL must use one of these hosts."
+        ),
+    )
+    block_private_hosts: bool = Field(
+        default=False,
+        description=(
+            "When true, SCM_URL must not resolve to loopback, RFC1918/private, "
+            "CGNAT, link-local, or reserved addresses. Off by default because "
+            "self-hosted SCMs typically live on private networks."
         ),
     )
     bot_identity: str = Field(
@@ -107,6 +118,13 @@ class SCMConfig(BaseSettings):
         """Strip so whitespace-only env values do not look like a configured slug."""
         return (v or "").strip()
 
+    def skip_labels(self) -> list[str]:
+        """Return the configured skip labels (stripped, non-empty, order preserved)."""
+        raw = self.skip_label
+        if not isinstance(raw, str):
+            return []
+        return [label.strip() for label in raw.split(",") if label.strip()]
+
     @model_validator(mode="after")
     def _apply_bot_identity_fallback(self) -> "SCMConfig":
         if not self.bot_identity and self.bitbucket_server_user_slug:
@@ -120,9 +138,9 @@ class LLMConfig(BaseSettings):
     # See note above: we do not auto-load .env; only real env vars are used.
     model_config = SettingsConfigDict(env_prefix="LLM_", extra="ignore")
 
-    provider: Literal["gemini", "openai", "anthropic", "ollama", "vertex", "openrouter", "deepseek"] = (
-        "gemini"
-    )
+    provider: Literal[
+        "gemini", "openai", "anthropic", "ollama", "vertex", "openrouter", "deepseek"
+    ] = "gemini"
     api_key: SecretStr | None = Field(
         default=None,
         description=(
@@ -138,19 +156,27 @@ class LLMConfig(BaseSettings):
     max_output_tokens: int = Field(default=4096, description="Max output tokens")
     temperature: float = Field(default=0.0, description="0 or very low for deterministic review")
     timeout_seconds: float = Field(
-        default=60.0,
+        default=300.0,
         description=(
-            "Per-request timeout for LLM API calls. "
-            "NOTE: currently configuration-only; see IMPROVEMENT_PLAN "
-            "§2.4/§5.5 before relying on it."
+            "Idle timeout in seconds between LLM events during a run. If no "
+            "event arrives within this window the run aborts as a transient "
+            "LLMTimeoutError and the batch is retried."
         ),
     )
     max_retries: int = Field(
         default=3,
         description=(
-            "Max retries on transient LLM failures. "
-            "NOTE: currently configuration-only; see IMPROVEMENT_PLAN "
-            "§2.4/§5.5 before relying on it."
+            "Max retries per batch on transient LLM errors (rate limits, "
+            "timeouts, HTTP 429/5xx) with exponential backoff."
+        ),
+    )
+    diff_budget_ratio: float = Field(
+        default=0.5,
+        gt=0,
+        le=1,
+        description=(
+            "Fraction of the model context window reserved for diff content; "
+            "the rest is reserved for the prompt and response."
         ),
     )
 
@@ -323,7 +349,11 @@ class ContextAwareReviewConfig(BaseSettings):
 class CodeReviewAppConfig(BaseSettings):
     """Runner-level options not tied to SCM/LLM prefixes."""
 
-    model_config = SettingsConfigDict(extra="ignore", case_sensitive=False)
+    # populate_by_name lets callers (CLI, webhook service) construct a config
+    # with field names instead of the CODE_REVIEW_* env aliases.
+    model_config = SettingsConfigDict(
+        extra="ignore", case_sensitive=False, populate_by_name=True
+    )
 
     include_commit_messages_in_prompt: bool = Field(
         default=True,
@@ -378,6 +408,31 @@ class CodeReviewAppConfig(BaseSettings):
             "same PR head/config can be reviewed again."
         ),
     )
+    min_severity: Literal["low", "medium", "high"] | None = Field(
+        default=None,
+        validation_alias="CODE_REVIEW_MIN_SEVERITY",
+        description=(
+            "Drop findings below this severity before posting "
+            "(nit < low < medium < high; unset keeps everything)."
+        ),
+    )
+    max_findings: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias="CODE_REVIEW_MAX_FINDINGS",
+        description=(
+            "Post at most this many findings per run after severity filtering; "
+            "kept findings are ordered by severity then confidence."
+        ),
+    )
+    custom_instructions: str | None = Field(
+        default=None,
+        validation_alias="CODE_REVIEW_CUSTOM_INSTRUCTIONS",
+        description=(
+            "Operator-supplied review guidance injected into the reviewer prompt "
+            "(stripped, capped at 4000 chars; cannot change the JSON output format)."
+        ),
+    )
     reply_dismissal_enabled: bool = Field(
         default=True,
         validation_alias="CODE_REVIEW_REPLY_DISMISSAL_ENABLED",
@@ -388,6 +443,22 @@ class CodeReviewAppConfig(BaseSettings):
             "post a thread reply when the provider supports it."
         ),
     )
+
+    @field_validator("custom_instructions", mode="before")
+    @classmethod
+    def _normalize_custom_instructions(cls, v: object) -> str | None:
+        """Strip blank values to None and cap the block at 4000 characters."""
+        if v is None:
+            return None
+        raw = str(v).strip()
+        if not raw:
+            return None
+        if len(raw) > 4000:
+            logger.warning(
+                "CODE_REVIEW_CUSTOM_INSTRUCTIONS exceeds 4000 chars; truncating"
+            )
+            raw = raw[:4000]
+        return raw
 
 
 def get_scm_config() -> SCMConfig:
@@ -455,7 +526,7 @@ def _scm_startup_snapshot() -> dict[str, object]:
         }
     snapshot: dict[str, object] = {
         "provider": scm.provider,
-        "skip_label_enabled": bool(scm.skip_label),
+        "skip_label_enabled": bool(scm.skip_labels()),
         "skip_title_pattern_enabled": bool(scm.skip_title_pattern),
         "review_decision_enabled": scm.review_decision_enabled,
     }

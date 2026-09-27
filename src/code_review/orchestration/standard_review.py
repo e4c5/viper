@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import functools
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from code_review import orchestration_deps as runner_mod
@@ -19,6 +20,7 @@ from code_review.providers.base import FileInfo, PRInfo, ProviderInterface
 from code_review.quality.gate import QualityGate
 from code_review.refinement.pipeline import FindingRefinementPipeline
 from code_review.schemas.findings import FindingV1
+from code_review.tokens import count_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +89,8 @@ class StandardReviewHandler:
     @staticmethod
     def detect_languages_for_files(paths: list[str]):
         """Run language detection on paths and return (detected, review_standards)."""
-        detected = runner_mod.detect_from_paths(paths)
-        review_standards = runner_mod.get_review_standards(detected.language, detected.framework)
+        detected, contexts = runner_mod.detect_review_contexts(paths)
+        review_standards = runner_mod.get_review_standards_multi(contexts)
         return (detected, review_standards)
 
     def make_fingerprint_fn(self, provider):
@@ -125,18 +127,42 @@ class StandardReviewHandler:
         llm_cfg,
         existing: list,
         full_diff: str = "",
+        unreviewed_paths: tuple[str, ...] = (),
+        keep_fingerprints: set[str] | frozenset[str] = frozenset(),
     ) -> int:
         """
         Auto-resolve stale comments (if supported), then post inline comments.
         Returns successful_post_count.
         """
         poster = CommentPoster(provider, self.pr_ctx)
-        poster.resolve_stale(existing, to_post, self.dry_run)
+        poster.resolve_stale(
+            existing,
+            to_post,
+            self.dry_run,
+            keep_fingerprints=keep_fingerprints,
+            skip_paths=unreviewed_paths,
+        )
+        if unreviewed_paths:
+            logger.warning(
+                "Review coverage incomplete: %d file(s) were not reviewed: %s",
+                len(unreviewed_paths),
+                ", ".join(unreviewed_paths),
+            )
         if self.dry_run:
             return 0
         gate_outcome = QualityGate(provider, self.owner, self.repo, self.pr_number, cfg).evaluate(
             to_post
         )
+        if unreviewed_paths and gate_outcome is not None:
+            # Never approve a partial review: force needs-work so a re-run is required.
+            gate_outcome = replace(
+                gate_outcome,
+                decision="REQUEST_CHANGES",
+                submission_reason=(
+                    f"Review coverage incomplete: {len(unreviewed_paths)} file(s) "
+                    "were not reviewed; re-run required."
+                ),
+            )
         if gate_outcome is not None:
             runner_mod._log_quality_gate_review_outcome("Full-review", gate_outcome)
         else:
@@ -157,6 +183,20 @@ class StandardReviewHandler:
                 cfg,
                 llm_cfg,
                 full_diff=full_diff,
+                # Incomplete coverage must not stamp the run= marker on inline
+                # comments either: a same-SHA re-run would otherwise be skipped
+                # by the idempotency check even though the summary said "re-run".
+                include_run_marker=not unreviewed_paths,
+            )
+        if unreviewed_paths and self.head_sha:
+            shown = list(unreviewed_paths)[:20]
+            listed = ", ".join(f"`{path}`" for path in shown)
+            if len(unreviewed_paths) > len(shown):
+                listed += f", and {len(unreviewed_paths) - len(shown)} more"
+            poster.post_pr_summary(
+                "**Viper**: review coverage was incomplete — "
+                f"{len(unreviewed_paths)} file(s) were not reviewed: {listed}. "
+                "This review is incomplete and must be re-run."
             )
         if (
             gate_outcome is not None
@@ -164,7 +204,9 @@ class StandardReviewHandler:
             and provider.capabilities().omit_fingerprint_marker_in_body
         ):
             planned = len(to_post)
-            include_marker = planned == 0 or count == planned
+            # Incomplete coverage must not stamp the run= marker: a re-run on the
+            # same SHA would otherwise be treated as already reviewed.
+            include_marker = (planned == 0 or count == planned) and not unreviewed_paths
             poster.post_omit_marker_summary(
                 cfg,
                 llm_cfg,
@@ -173,6 +215,7 @@ class StandardReviewHandler:
                 successful_inline_posts=count,
                 gate_outcome=gate_outcome,
                 include_run_marker=include_marker,
+                unreviewed_count=len(unreviewed_paths),
             )
         runner_mod._maybe_submit_review_decision(
             provider,
@@ -390,6 +433,7 @@ class StandardReviewHandler:
         all_findings: list[FindingV1]
         context_brief_attached: bool
         prompt_suffix: str
+        unreviewed_paths: tuple[str, ...] = ()
         early_exit_result: list[FindingV1] | None = None
 
     def _execute_review_agent(
@@ -408,6 +452,14 @@ class StandardReviewHandler:
             if agent_llm_config is not None
             else runner_mod.get_context_window()
         )
+        effective_llm_cfg = (
+            agent_llm_config
+            if agent_llm_config is not None
+            else runner_mod.get_llm_config()
+        )
+        diff_budget_ratio = getattr(effective_llm_cfg, "diff_budget_ratio", 0.5)
+        if not isinstance(diff_budget_ratio, int | float) or not 0 < diff_budget_ratio <= 1:
+            diff_budget_ratio = 0.5
         batch_budget = build_review_batch_budget(
             context_window_tokens=context_window,
             max_output_tokens=(
@@ -415,7 +467,7 @@ class StandardReviewHandler:
                 if agent_llm_config is not None
                 else runner_mod.get_max_output_tokens()
             ),
-            diff_budget_ratio=runner_mod.DIFF_TOKEN_BUDGET_RATIO,
+            diff_budget_ratio=diff_budget_ratio,
         )
         diff_budget = batch_budget.effective_diff_budget_tokens
         remaining_prompt_tokens = batch_budget.prompt_budget_tokens
@@ -426,8 +478,15 @@ class StandardReviewHandler:
         )
         self.log_context_aware_prompt_inputs(refs, context_brief)
 
+        token_counter = functools.partial(
+            count_tokens, model=getattr(effective_llm_cfg, "model", None)
+        )
         batches = execution_mod.build_review_batches_for_scope(
-            env.files, env.paths, env.full_diff, diff_budget
+            env.files,
+            env.paths,
+            env.full_diff,
+            diff_budget,
+            token_counter=token_counter,
         )
         context_brief_attached = bool(context_brief and _CONTEXT_TAG in prompt_suffix)
         execution_mod.log_review_batch_plan(batches, env.paths, env.incremental_base_sha)
@@ -458,7 +517,7 @@ class StandardReviewHandler:
             review_visible_lines=review_visible_lines,
             llm_config=agent_llm_config,
         )
-        all_findings = execution_mod.run_agent_and_collect_findings(
+        outcome = execution_mod.run_agent_and_collect_findings(
             self.pr_ctx,
             provider,
             review_standards,
@@ -470,7 +529,12 @@ class StandardReviewHandler:
             review_visible_lines=review_visible_lines,
             llm_config=agent_llm_config,
         )
-        return self._ReviewExecution(all_findings, context_brief_attached, prompt_suffix)
+        return self._ReviewExecution(
+            outcome.findings,
+            context_brief_attached,
+            prompt_suffix,
+            unreviewed_paths=outcome.unreviewed_paths,
+        )
 
     def _refine_findings_funnel(
         self,
@@ -479,8 +543,14 @@ class StandardReviewHandler:
         env: _ReviewEnv,
         comment_mgr: CommentManager,
         all_findings: list[FindingV1],
-    ) -> list[tuple[FindingV1, bool]]:
-        """Filter by scope, deduplicate, and verify findings."""
+    ) -> tuple[list[tuple[FindingV1, str]], set[str]]:
+        """Filter by scope, deduplicate, verify, then apply operator caps.
+
+        Returns ``(to_post, pre_cap_fingerprints)`` where ``pre_cap_fingerprints``
+        contains the fingerprints of all findings that survived dedup and
+        verification *before* ``min_severity``/``max_findings`` caps — used to
+        protect their existing comments from stale-resolution.
+        """
         llm_returned_count = len(all_findings)
         review_visible_lines = bool(getattr(app_cfg, "review_visible_lines", False))
 
@@ -507,14 +577,50 @@ class StandardReviewHandler:
             logger.warning("Verification agent step failed; proceeding without it: %s", exc)
 
         after_verification_count = len(to_post)
+        pre_cap_fingerprints = {fp for _, fp in to_post if fp}
+
+        # Operator caps: minimum severity, then a max-findings cap ordered by
+        # severity desc, confidence desc, then original order.
+        min_severity = getattr(app_cfg, "min_severity", None)
+        severity_rank = {"nit": 0, "low": 1, "medium": 2, "high": 3}
+        if isinstance(min_severity, str) and min_severity in ("low", "medium", "high"):
+            threshold = severity_rank[min_severity]
+            to_post = [
+                item
+                for item in to_post
+                if severity_rank.get(item[0].severity, 0) >= threshold
+            ]
+            dropped = after_verification_count - len(to_post)
+            if dropped:
+                logger.info(
+                    "Funnel: dropped %d finding(s) below min_severity=%s",
+                    dropped,
+                    min_severity,
+                )
+
+        max_findings = getattr(app_cfg, "max_findings", None)
+        if isinstance(max_findings, int) and max_findings >= 1 and len(to_post) > max_findings:
+            confidence_rank = {"low": 1, "medium": 2, "high": 3}
+            ranked = sorted(
+                enumerate(to_post),
+                key=lambda t: (
+                    -severity_rank.get(t[1][0].severity, 0),
+                    -confidence_rank.get(getattr(t[1][0], "confidence", None) or "low", 0),
+                    t[0],
+                ),
+            )[:max_findings]
+            to_post = [item for _, item in ranked]
+            logger.info("Funnel: truncated to %d finding(s) by max_findings", max_findings)
+
         logger.info(
-            "Funnel: LLM=%d → Scoped=%d → Unique=%d → Verified=%d",
+            "Funnel: LLM=%d → Scoped=%d → Unique=%d → Verified=%d → Posted=%d",
             llm_returned_count,
             after_scope_count,
             after_unique_count,
             after_verification_count,
+            len(to_post),
         )
-        return to_post
+        return to_post, pre_cap_fingerprints
 
     def _maybe_generate_and_post_summary(
         self,
@@ -701,7 +807,7 @@ class StandardReviewHandler:
         if execution.early_exit_result is not None:
             return execution.early_exit_result
 
-        to_post = self._refine_findings_funnel(
+        to_post, pre_cap_fingerprints = self._refine_findings_funnel(
             provider, app_cfg, env, comment_mgr, execution.all_findings
         )
 
@@ -714,6 +820,8 @@ class StandardReviewHandler:
             llm_cfg,
             comment_mgr.existing_comments,
             full_diff=env.full_diff,
+            unreviewed_paths=execution.unreviewed_paths,
+            keep_fingerprints=pre_cap_fingerprints,
         )
 
         self._maybe_generate_and_post_summary(provider, env, to_post)

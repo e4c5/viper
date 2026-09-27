@@ -2,22 +2,26 @@
 # Build: docker build -t code-review-agent -f docker/Dockerfile.agent .
 # Run:  docker run --rm -e SCM_* -e LLM_* code-review-agent --owner O --repo R --pr N --head-sha SHA
 
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:804ddf3251a60bbf9c92e73b7566c40428d54d0e79d3428194edf40da6521286
 
 WORKDIR /app
 
 # Install third-party deps first so source changes do not invalidate them.
+# runtime.lock.txt is generated from uv.lock; regenerate with:
+#   uv export --frozen --format requirements-txt --no-dev --extra litellm \
+#       --no-emit-project -o requirements/runtime.lock.txt
 COPY pyproject.toml ./
-COPY requirements/runtime.txt ./requirements/runtime.txt
+COPY requirements/runtime.lock.txt ./requirements/runtime.lock.txt
 
 # Upgrade OS packages to pick up security patches (dpkg, glibc, libsqlite3, etc.),
 # then upgrade pip and install runtime dependencies. Combining into one layer
-# minimises image size and ensures apt lists are not cached.
+# minimises image size and ensures apt lists are not cached. --only-binary and
+# hash-locked requirements keep pip from executing setup scripts (S8541/S8544).
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir --upgrade "pip>=26.0" \
-    && pip install --no-cache-dir -r requirements/runtime.txt \
+    && python -m pip install --no-cache-dir --only-binary :all: --upgrade "pip==26.2.1" "setuptools==84.0.0" \
+    && pip install --no-cache-dir --only-binary :all: --require-hashes -r requirements/runtime.lock.txt \
     && adduser --disabled-password --gecos "" --uid 1000 appuser
 
 # Copy source code after dependency installation so application-only changes
@@ -27,6 +31,13 @@ COPY src ./src/
 
 RUN pip install --no-cache-dir --no-deps -e . \
     && chown -R appuser:appuser /app
+
+# pip is build-time only; remove it (and ensurepip's bundled pip wheel) so its
+# vendored msgpack/setuptools copies are not flagged by image scans.
+RUN rm -rf /usr/local/lib/python3.12/site-packages/pip \
+    /usr/local/lib/python3.12/site-packages/pip-*.dist-info \
+    /usr/local/lib/python3.12/ensurepip \
+    /usr/local/bin/pip*
 USER appuser
 
 # No long-running process; Jenkins (or other CI) invokes: code-review

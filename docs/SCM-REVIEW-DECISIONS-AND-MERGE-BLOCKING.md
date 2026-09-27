@@ -54,6 +54,8 @@ When the triggering event is a **reply on a thread**, decision-only still reload
 
 Implemented for **GitHub**, **GitLab**, **Bitbucket Cloud**, and **Bitbucket Server / DC**. For **Bitbucket**, threading and exclusion apply to **inline pull request comments** (parent / reply links in the REST model). The quality gate uses **`comment:{root_comment_id}`** for those items so the excluded id matches what the gate counts. **Gitea** does not implement this path yet (`skipped_no_capability`); recalculation still uses full SCM-derived counts.
 
+**Stale-comment auto-resolution.** On a full review, the runner resolves bot comments whose finding fingerprint is no longer produced (a stale signal that would otherwise keep the gate blocking). On **GitLab** this resolves the whole MR discussion containing the note — only discussions whose notes are flagged `resolvable` are touched, and unreviewed paths and findings dropped by operator caps (`CODE_REVIEW_MIN_SEVERITY` / `CODE_REVIEW_MAX_FINDINGS`) are never auto-resolved.
+
 **Requirement:** the webhook / event must supply the **comment** id of the new reply (or any comment in the thread, depending on your mapping)—not e.g. a **Bitbucket PR task** id. If the id does not resolve to a comment thread with at least two messages, the dismissal step is skipped (`skipped_insufficient_thread`) while decision-only recalculation still runs.
 
 ### 1.5 Recalculation when comments are deleted or threads change

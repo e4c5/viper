@@ -17,18 +17,6 @@ from code_review.config import (
     get_verification_llm_config,
 )
 
-# Env var name per provider (used when LLM_API_KEY is set; Ollama has no key).
-_PROVIDER_API_KEY_ENV: dict[str, str] = {
-    "gemini": "GOOGLE_API_KEY",
-    "vertex": "GOOGLE_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
-}
-
-_INJECTED_PROVIDER_API_ENV: str | None = None
-_PREVIOUS_PROVIDER_API_VALUE: str | None = None
 _MODEL_METADATA_FILENAME = "model_metadata.json"
 _MODEL_ALIASES: dict[tuple[str, str], str] = {
     ("gemini", "gemini-3.1"): "gemini-3-flash-preview",
@@ -190,19 +178,6 @@ def get_model_token_costs(
     )
 
 
-def _clear_injected_provider_api_env() -> None:
-    """Undo provider-key env var injection performed by this module."""
-    global _INJECTED_PROVIDER_API_ENV, _PREVIOUS_PROVIDER_API_VALUE
-    if _INJECTED_PROVIDER_API_ENV is None:
-        return
-    if _PREVIOUS_PROVIDER_API_VALUE is None:
-        os.environ.pop(_INJECTED_PROVIDER_API_ENV, None)
-    else:
-        os.environ[_INJECTED_PROVIDER_API_ENV] = _PREVIOUS_PROVIDER_API_VALUE
-    _INJECTED_PROVIDER_API_ENV = None
-    _PREVIOUS_PROVIDER_API_VALUE = None
-
-
 def _secret_value(secret: SecretStr | str | None) -> str:
     if secret is None:
         return ""
@@ -237,22 +212,6 @@ def _task_config(primary: Any, task: Any) -> Any:
     )
 
 
-def _apply_provider_api_key(provider: str, api_key_value: Any) -> None:
-    """Expose one configured provider key while restoring previously injected state."""
-    global _INJECTED_PROVIDER_API_ENV, _PREVIOUS_PROVIDER_API_VALUE
-
-    env_var = _PROVIDER_API_KEY_ENV.get(provider)
-    api_key = _secret_value(api_key_value)
-    if _INJECTED_PROVIDER_API_ENV and (_INJECTED_PROVIDER_API_ENV != env_var or not api_key):
-        _clear_injected_provider_api_env()
-    if not env_var or not api_key:
-        return
-    if _INJECTED_PROVIDER_API_ENV != env_var:
-        _PREVIOUS_PROVIDER_API_VALUE = os.environ.get(env_var)
-    os.environ[env_var] = api_key
-    _INJECTED_PROVIDER_API_ENV = env_var
-
-
 def _litellm_model_name(provider: str, model: str) -> str:
     prefixes = {
         "openai": "openai",
@@ -267,17 +226,24 @@ def _litellm_model_name(provider: str, model: str) -> str:
 
 def _get_configured_model_from_config(config: Any) -> Any:
     """
-    Return the configured LLM instance for ADK from a config-like object.
+    Return the configured LLM for ADK from a config-like object.
 
-    When an API key is set, it is applied to the provider-specific env var so
-    ADK/LiteLLM see it. Gemini/Vertex return model strings for ADK's native
-    registry; other providers use ADK LiteLLM when available.
+    Credentials are supplied per call — never via os.environ. For LiteLLM-backed
+    providers the key goes into ``LiteLlm(model=..., api_key=...)`` and is
+    forwarded to litellm's completion call. For native Gemini, a ``Gemini``
+    instance is built with ``client_kwargs={"api_key": ...}`` so the underlying
+    google-genai Client is created with that key; without a key the plain model
+    string is returned and ADK falls back to env/ADC as before. Vertex is ADC
+    only and always returns the model string.
     """
-    _apply_provider_api_key(config.provider, config.api_key)
-
     resolved_model = _MODEL_ALIASES.get((config.provider, config.model), config.model)
+    api_key = _secret_value(getattr(config, "api_key", None))
 
     if config.provider in {"gemini", "vertex"}:
+        if config.provider == "gemini" and api_key:
+            from google.adk.models.google_llm import Gemini
+
+            return Gemini(model=resolved_model, client_kwargs={"api_key": api_key})
         return resolved_model
     litellm_model = _litellm_model_name(config.provider, resolved_model)
 
@@ -288,14 +254,18 @@ def _get_configured_model_from_config(config: Any) -> Any:
     extra_litellm_kwargs: dict = (
         {"reasoning_effort": "high"} if config.provider == "deepseek" else {}
     )
+    if api_key:
+        extra_litellm_kwargs["api_key"] = api_key
 
     try:
         from google.adk.models.lite_llm import LiteLlm
+    except ImportError as exc:
+        raise ImportError(
+            f"LLM_PROVIDER={config.provider} requires the litellm extra: "
+            "pip install 'code-review-agent[litellm]'"
+        ) from exc
 
-        return LiteLlm(model=litellm_model, **extra_litellm_kwargs)
-    except ImportError:
-        # Fallback if ADK LiteLLM not available
-        return config.model
+    return LiteLlm(model=litellm_model, **extra_litellm_kwargs)
 
 
 def get_configured_model() -> Any:

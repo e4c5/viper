@@ -829,3 +829,19 @@ def test_resolve_review_thread_github(mock_gql):
         GitHubProvider._RESOLVE_REVIEW_THREAD_GQL,
         {"threadId": "PRRT_kwDOABC"},
     )
+
+
+def test_github_client_constructs_github_with_retry_config():
+    """GitHubApiClient must pass a GithubRetry that never replays POST/PATCH."""
+    from github import GithubRetry
+
+    from code_review.github_client import GitHubApiClient
+
+    with patch("code_review.github_client.Github") as mock_github:
+        GitHubApiClient("https://api.github.com", "tok")
+    _, kwargs = mock_github.call_args
+    retry = kwargs["retry"]
+    assert isinstance(retry, GithubRetry)
+    allowed = {m.upper() for m in retry.allowed_methods}
+    assert "POST" not in allowed and "PATCH" not in allowed
+    assert {"GET", "HEAD", "PUT", "DELETE"} <= allowed

@@ -122,10 +122,10 @@ def test_missing_batch_response_indexes_ignores_non_batch_authors():
     assert missing_batch_response_indexes(responses, 3) == [0, 2]
 
 
-def test_missing_batch_response_indexes_trusts_only_non_batch_authors():
+def test_missing_batch_response_indexes_returns_all_when_no_recognised_author():
     responses = [("<unknown>", '{"findings":[]}')]
 
-    assert missing_batch_response_indexes(responses, 3) == []
+    assert missing_batch_response_indexes(responses, 3) == [0, 1, 2]
 
 
 def test_missing_batch_response_indexes_returns_all_when_no_responses():

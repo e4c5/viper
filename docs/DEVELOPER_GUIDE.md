@@ -13,9 +13,10 @@ This guide explains the implementation of the AI-driven code review agent: archi
 5. [Key Modules](#5-key-modules)
 6. [Configuration and Environment](#6-configuration-and-environment)
 7. [Extension Points](#7-extension-points)
-8. [Testing](#8-testing)
-9. [References](#9-references)
-10. [Development Testing](#10-development-testing)
+8. [Sessions and Resumability](#8-sessions-and-resumability)
+9. [Testing](#9-testing)
+10. [References](#10-references)
+11. [Development Testing](#11-development-testing)
 
 ---
 
@@ -369,7 +370,7 @@ When the PR diff is large, the runner splits work by file (file-by-file mode). S
 LLM_DIFF_BUDGET_RATIO=1.0 code-review --owner <owner> --repo <repo> --pr <n> [--head-sha <sha>]
 ```
 
-Compare with and without this env var; if you get findings only with `LLM_DIFF_BUDGET_RATIO=1.0`, the issue is file-by-file behaviour. You can leave it at `1.0` for that run or increase `LLM_CONTEXT_WINDOW` so that 25% of it is larger than your typical diff.
+Compare with and without this env var; if you get findings only with `LLM_DIFF_BUDGET_RATIO=1.0`, the issue is file-by-file behaviour. You can leave it at `1.0` for that run or increase `LLM_CONTEXT_WINDOW` so that 50% of it is larger than your typical diff.
 
 ### 6.4 Observability
 
@@ -414,7 +415,21 @@ Compare with and without this env var; if you get findings only with `LLM_DIFF_B
 
 ---
 
-## 8. Testing
+## 8. Sessions and Resumability
+
+Each review run creates a fresh `InMemorySessionService` (one ADK session per
+run) — nothing is persisted between runs. If a run crashes mid-review, recovery
+is simply re-running: fingerprint markers in posted comments plus the
+idempotency run marker (`run_key` in the PR head comment) make re-runs safe —
+already-posted findings are deduplicated and an identical completed run
+short-circuits entirely.
+
+A persistent session store is not needed today because runs are bounded
+(batch-scoped, minutes, not hours). It would become worth adding if Stage C
+tools introduce long-running agentic runs that must resume mid-conversation
+rather than restart.
+
+## 9. Testing
 
 ### 8.1 Test Layout
 

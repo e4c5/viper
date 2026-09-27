@@ -305,15 +305,10 @@ def _folder_roots_from_paths(paths: list[str]) -> set[str]:
     return roots
 
 
-def detect_from_paths_per_folder_root(paths: list[str]) -> dict[str, DetectedContext]:
-    """
-    Monorepo mode: run detection per folder root (nearest package.json, go.mod, pom.xml, etc.).
-    Paths are grouped by the longest matching folder root. The key "" represents only orphan
-    paths (files not under any detected config root) and is omitted from the returned dict
-    when there are no orphans. Returns dict mapping folder_root -> DetectedContext.
-    """
-    if not paths:
-        return {}
+def _group_paths_by_folder_root(paths: list[str]) -> dict[str, list[str]]:
+    """Group normalized paths under their nearest detected folder root.
+
+    The "" key collects orphan paths (no config-root ancestor)."""
     path_list = [_normalize_path(p) for p in paths]
     roots = _folder_roots_from_paths(path_list)
     roots.add("")  # repo root always exists as fallback
@@ -332,5 +327,41 @@ def detect_from_paths_per_folder_root(paths: list[str]) -> dict[str, DetectedCon
                 break
         if not assigned:
             groups[""].append(p)
+    return {root: group for root, group in groups.items() if group}
 
-    return {root: detect_from_paths(group) for root, group in groups.items() if group}
+
+def detect_from_paths_per_folder_root(paths: list[str]) -> dict[str, DetectedContext]:
+    """
+    Monorepo mode: run detection per folder root (nearest package.json, go.mod, pom.xml, etc.).
+    Paths are grouped by the longest matching folder root. The key "" represents only orphan
+    paths (files not under any detected config root) and is omitted from the returned dict
+    when there are no orphans. Returns dict mapping folder_root -> DetectedContext.
+    """
+    if not paths:
+        return {}
+    groups = _group_paths_by_folder_root(paths)
+    return {root: detect_from_paths(group) for root, group in groups.items()}
+
+
+def detect_review_contexts(paths: list[str]) -> tuple[DetectedContext, list[DetectedContext]]:
+    """Return (primary context, all per-root contexts ordered by file count desc).
+
+    Single-root repos return one context identical to ``detect_from_paths``.
+    Multi-root (monorepo) paths return the union: the first element is the
+    detection of the largest root group; the list contains every distinct
+    (language, framework) detection so callers can combine prompt fragments.
+    """
+    if not paths:
+        ctx = detect_from_paths(paths)
+        return ctx, [ctx]
+    groups = _group_paths_by_folder_root(paths)
+    ordered = sorted(groups.items(), key=lambda kv: len(kv[1]), reverse=True)
+    contexts = [detect_from_paths(group) for _root, group in ordered]
+    distinct: list[DetectedContext] = []
+    seen: set[tuple[str, str | None]] = set()
+    for ctx in contexts:
+        key = (ctx.language, ctx.framework)
+        if key not in seen:
+            seen.add(key)
+            distinct.append(ctx)
+    return distinct[0], distinct

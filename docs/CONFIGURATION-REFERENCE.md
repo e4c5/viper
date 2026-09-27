@@ -53,13 +53,14 @@ Loaded via `SCMConfig` (`env_prefix="SCM_"`). Field names map to env vars in **U
 | `SCM_HEAD_SHA` | `""` | Head commit SHA (needed to post comments). |
 | `SCM_BASE_SHA` | `""` | Optional review base SHA. When set with `SCM_HEAD_SHA`, Viper reviews only the incremental `SCM_BASE_SHA..SCM_HEAD_SHA` changes; if unset, it reviews the full PR diff. |
 | `SCM_EVENT` | `""` | Webhook event (e.g. `opened`). |
-| `SCM_SKIP_LABEL` | `skip-review` | If PR has this label, skip review (empty disables). |
-| `SCM_SKIP_TITLE_PATTERN` | `[skip-review]` | If title contains this substring, skip review (empty disables). |
+| `SCM_SKIP_LABEL` | `skip-review` | Comma-separated list of PR labels that skip review. Matching is case-insensitive; `"skip-review, wip"` skips when any listed label is present. Empty disables label-based skipping. |
+| `SCM_SKIP_TITLE_PATTERN` | `[skip-review]` | If the PR title contains this substring (case-insensitive), skip review. Empty disables. |
 | `SCM_REVIEW_DECISION_ENABLED` | `false` | Auto-submit PR review decision (provider-supported). |
 | `SCM_REVIEW_DECISION_HIGH_THRESHOLD` | `1` | Request changes when open high-severity count ≥ this. |
 | `SCM_REVIEW_DECISION_MEDIUM_THRESHOLD` | `3` | Request changes when open medium-severity count ≥ this. |
 | `SCM_BOT_IDENTITY` | `""` | The bot account's login/slug, used to attribute idempotency checks, process review decisions, and filter bot comments from quality-gate counts. Required for Bitbucket Server/DC. For GitHub App integrations, this is automatically injected by the runner layer. |
-| `SCM_ALLOWED_HOSTS` | — | Optional comma-separated allowlist of SCM hosts; `SCM_URL` must match. |
+| `SCM_ALLOWED_HOSTS` | — | Optional comma-separated allowlist of SCM hosts (`host[:port]`). When set, `SCM_URL`'s host must match an entry: an entry without a port matches any port, and an entry starting with `.` matches subdomains (e.g. `.example.com` allows `git.example.com`). Enforced at provider construction before any request. |
+| `SCM_BLOCK_PRIVATE_HOSTS` | `false` | When `true`, `SCM_URL` must not resolve to loopback, RFC1918/private, CGNAT (100.64/10), link-local, unique-local (fc00::/7), unspecified, reserved, or multicast addresses. Metadata endpoints (`169.254.169.254`, `metadata.google.internal`, `fd00:ec2::254`, link-local) are always rejected regardless of this setting. Off by default because self-hosted SCMs typically live on private networks. |
 
 **Review decisions vs merge blocking:** Only some providers implement automatic submission; whether `APPROVE` / `REQUEST_CHANGES` actually prevents merging depends on branch protection or merge checks on the SCM. See [SCM review decisions and merge blocking](SCM-REVIEW-DECISIONS-AND-MERGE-BLOCKING.md).
 
@@ -73,14 +74,14 @@ Loaded via `LLMConfig` (`env_prefix="LLM_"`).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_PROVIDER` | `gemini` | `gemini` \| `openai` \| `anthropic` \| `ollama` \| `vertex` \| `openrouter` \| `deepseek` |
+| `LLM_PROVIDER` | `gemini` | `gemini` \| `openai` \| `anthropic` \| `ollama` \| `vertex` \| `openrouter` \| `deepseek`. Non-Google providers require the `litellm` extra (`pip install 'code-review-agent[litellm]'`). |
 | `LLM_MODEL` | `gemini-2.5-flash` | Model identifier for the provider. |
-| `LLM_API_KEY` | — | Single universal API key. Applied to the provider-specific runtime env var used by ADK / LiteLLM. |
+| `LLM_API_KEY` | — | Single universal API key. Passed per call to the provider client (never written to `os.environ`). |
 | `LLM_CONTEXT_WINDOW` | `128000` | Context window in tokens (used for chunking / budgets). |
 | `LLM_MAX_OUTPUT_TOKENS` | `4096` | Max output tokens for generation. |
 | `LLM_TEMPERATURE` | `0.0` | Sampling temperature. |
-| `LLM_TIMEOUT_SECONDS` | `60.0` | **Configuration-only** for now; not wired through ADK in all paths. |
-| `LLM_MAX_RETRIES` | `3` | **Configuration-only** for now. |
+| `LLM_TIMEOUT_SECONDS` | `300.0` | Idle timeout between LLM events during a run; exceeding it aborts the run as a transient timeout and the batch is retried. |
+| `LLM_MAX_RETRIES` | `3` | Max retries per batch on transient LLM errors (rate limits, timeouts, HTTP 429/5xx) with exponential backoff. |
 
 **Ollama:** No API key required. `OLLAMA_API_BASE` (default `http://localhost:11434`) is the usual convention for LiteLLM/Ollama; see `docs/DEVELOPER_GUIDE.md`.
 
@@ -121,7 +122,7 @@ weak findings.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_DIFF_BUDGET_RATIO` | `0.5` | Fraction of `LLM_CONTEXT_WINDOW` reserved for the unified diff; above this the runner switches to file-by-file review. |
+| `LLM_DIFF_BUDGET_RATIO` | `0.5` | Fraction of `LLM_CONTEXT_WINDOW` reserved for diff content (range `(0, 1]`); the rest is reserved for the prompt and response. Above this the runner switches to file-by-file review. |
 
 ---
 
@@ -130,13 +131,18 @@ weak findings.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CODE_REVIEW_LOG_LEVEL` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (case-insensitive). |
+| `CODE_REVIEW_LOG_FORMAT` | `text` | `text` or `json`. `json` emits one JSON object per line (`ts`, `level`, `logger`, `message`, `trace_id`, `exc_info`, plus JSON-serialisable extra fields). |
+| `CODE_REVIEW_SCM_FETCH_CONCURRENCY` | `4` | Max parallel read-only SCM file-content fetches (fingerprint anchoring). `0`/`1` disables; values are clamped to a maximum of `16`; providers whose clients are not thread-safe (GitHub/PyGithub) stay sequential. |
 | `CODE_REVIEW_INCLUDE_COMMIT_MESSAGES_IN_PROMPT` | `true` | Include a PR commit-message block in the review prompt. |
 | `CODE_REVIEW_REVIEW_VISIBLE_LINES` | `false` | Review-scope line guardrail. Default `false` restricts findings to changed (`+`) lines only. Set `true` to allow findings on all diff-visible new-file lines (including context lines). |
 | `CODE_REVIEW_REVIEW_DECISION_ONLY` | `false` | When `true` / `1`, skip the LLM and inline posting; only recompute the quality gate and submit a PR review decision (requires `SCM_REVIEW_DECISION_ENABLED` for submission). Same effect as CLI `--review-decision-only`. |
 | `CODE_REVIEW_REVIEW_DECISION_ONLY_SKIP_IF_BOT_NOT_BLOCKING` | `false` | **Review-decision-only:** if `CODE_REVIEW_EVENT_COMMENT_ID` is set, skip the run when the SCM provider reports the token user is **not** in a blocking review state (`NOT_BLOCKING`). Empty event context always recomputes. Providers without `supports_bot_blocking_state_query` never skip on this path. |
 | `CODE_REVIEW_REPLY_DISMISSAL_ENABLED` | `true` | **Review-decision-only:** when `CODE_REVIEW_EVENT_COMMENT_ID` is set, run the reply-dismissal flow on the review thread (GitHub, GitLab, Bitbucket Cloud, and Bitbucket Server / DC when `supports_review_thread_dismissal_context`). The runner may skip the LLM when the provider already indicates the concern is addressed (for example an applied/orphaned Bitbucket suggestion). Otherwise, if the model returns `agreed`, that thread is excluded from quality-gate counts for this run and, when the provider supports `supports_review_thread_resolution`, the thread is also resolved in the SCM. If `disagreed`, the runner posts a thread reply when the provider supports `supports_review_thread_reply` (unless `--dry-run`). Set to `false` to disable. **Gitea** does not implement thread context yet (`skipped_no_capability`). |
 | `CODE_REVIEW_PRINT_RAW_RESPONSE` | *(unset)* | `1` / `true` / `TRUE` to log the raw LLM final response (debug). |
-| `CODE_REVIEW_SIGNING_KEY` | *(unset)* | If set, HMAC-signs fingerprint markers in posted comments (see §8). |
+| `CODE_REVIEW_SIGNING_KEY` | *(unset)* | If set, HMAC-signs fingerprint markers in posted comments and rejects unsigned/invalid markers during dedup (see §8). |
+| `CODE_REVIEW_MIN_SEVERITY` | *(unset)* | Drop findings below this severity before posting (`low`, `medium`, or `high`; `nit` is below `low`). Same effect as CLI `--min-severity`. Applied after dedup/verification, before posting. |
+| `CODE_REVIEW_MAX_FINDINGS` | *(unset)* | Post at most this many findings per run (≥ 1); kept findings are ordered by severity desc, then confidence desc, then original order. |
+| `CODE_REVIEW_CUSTOM_INSTRUCTIONS` | *(unset)* | Operator-supplied review guidance injected into the review prompt as a fenced "Operator review guidance" block (stripped, capped at 4000 chars). It cannot change the required JSON output format or instruct approval. |
 
 ### 5.1 Review-decision webhook context (`CODE_REVIEW_EVENT_*`)
 
@@ -219,7 +225,7 @@ When Prometheus is enabled, **`code_review_reply_dismissal_total`** counts reply
 
 | Variable | Description |
 |----------|-------------|
-| `CODE_REVIEW_SIGNING_KEY` | Optional secret used to HMAC-sign hidden marker payloads in comment bodies. If unset, markers may remain unsigned for backward compatibility. |
+| `CODE_REVIEW_SIGNING_KEY` | Optional secret used to HMAC-sign hidden marker payloads in comment bodies. When set, markers without a valid `sig` are ignored during dedup — note that previously posted *unsigned* markers then become invisible to dedup and their findings may be re-posted once. If unset, markers may remain unsigned for backward compatibility. |
 
 ---
 

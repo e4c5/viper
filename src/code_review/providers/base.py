@@ -112,9 +112,15 @@ class ProviderCapabilities(BaseModel):
       first downloading the full PR diff (important for lightweight comment pipelines).
     - supports_review_thread_reply: provider can post a reply on an existing review comment.
     - supports_review_thread_resolution: provider can mark a review thread/discussion resolved.
+    - supports_pr_labels: provider exposes PR labels; when False, SCM_SKIP_LABEL
+      cannot apply and only SCM_SKIP_TITLE_PATTERN is honoured (Bitbucket Cloud).
+    - supports_concurrent_fetches: provider client is safe for concurrent GETs
+      from a ThreadPoolExecutor (False for PyGithub's shared session).
     """
 
     resolvable_comments: bool = False
+    supports_pr_labels: bool = True
+    supports_concurrent_fetches: bool = True
     supports_suggestions: bool = False
     supports_multiline_suggestions: bool = False
     markup_hides_html_comment: bool = True
@@ -574,11 +580,19 @@ class ProviderInterface(ABC):
             self.get_existing_review_comments(owner, repo, pr_number)
         )
 
-    def resolve_comment(self, owner: str, repo: str, comment_id: str) -> None:  # noqa: B027
-        """Mark a comment as resolved. Default no-op if provider lacks support."""
+    def resolve_comment(  # noqa: B027
+        self, owner: str, repo: str, comment_id: str, *, pr_number: int | None = None
+    ) -> None:
+        """Mark a comment as resolved. Default no-op if provider lacks support.
+
+        ``pr_number`` is needed by providers whose resolve endpoint is scoped to
+        the PR/MR (e.g. GitLab discussions); providers that don't need it ignore it.
+        """
         pass
 
-    def unresolve_comment(self, owner: str, repo: str, comment_id: str) -> None:  # noqa: B027
+    def unresolve_comment(  # noqa: B027
+        self, owner: str, repo: str, comment_id: str, *, pr_number: int | None = None
+    ) -> None:
         """Mark a comment as unresolved. Optional; default no-op."""
         pass
 

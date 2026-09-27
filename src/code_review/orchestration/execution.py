@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import logging
+import random
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 from google.genai import types
 
@@ -17,6 +21,26 @@ from code_review.logging_config import emit_package_log
 from code_review.models import PRContext
 
 logger = logging.getLogger(__name__)
+
+# Module-level so tests can patch it; retry sleeps must never really sleep in tests.
+_sleep = time.sleep
+
+
+@dataclass(frozen=True)
+class BatchReviewOutcome:
+    """Findings plus the paths of prepared batches that went unreviewed."""
+
+    findings: list[runner_mod.FindingV1] = field(default_factory=list)
+    unreviewed_paths: tuple[str, ...] = ()
+
+    @property
+    def coverage_complete(self) -> bool:
+        return not self.unreviewed_paths
+
+
+def _unreviewed_paths(batches: list[ReviewBatch]) -> tuple[str, ...]:
+    """De-duplicated, ordered union of .paths across abandoned batches."""
+    return tuple(dict.fromkeys(path for batch in batches for path in batch.paths))
 
 
 def run_agent_and_collect_response(
@@ -82,10 +106,10 @@ def run_agent_and_collect_findings(
     prompt_suffix: str = "",
     review_visible_lines: bool | None = None,
     llm_config: LLMConfig | None = None,
-) -> list[runner_mod.FindingV1]:
+) -> BatchReviewOutcome:
     """Run batch review and parse responses into findings."""
     if not batches:
-        return []
+        return BatchReviewOutcome([])
     return _run_sequential_batch_review_mode(
         pr_ctx,
         provider,
@@ -114,8 +138,8 @@ def _run_sequential_batch_review_mode(
     prompt_suffix: str = "",
     review_visible_lines: bool | None = None,
     llm_config: LLMConfig | None = None,
-) -> list[runner_mod.FindingV1]:
-    """Run the SequentialAgent batch workflow and preserve successful batches on rate limit."""
+) -> BatchReviewOutcome:
+    """Run the SequentialAgent batch workflow, preserving completed batches on transient errors."""
     _attach_batch_user_messages(
         runner,
         pr_ctx=pr_ctx,
@@ -131,18 +155,25 @@ def _run_sequential_batch_review_mode(
         session_id,
         batch_count,
     )
+    effective_llm_config = llm_config or runner_mod.get_llm_config()
     try:
-        responses = runner_mod._run_agent_and_collect_responses(runner, session_id, content)
+        responses = runner_mod._run_agent_and_collect_responses(
+            runner,
+            session_id,
+            content,
+            idle_timeout_seconds=effective_llm_config.timeout_seconds,
+        )
     except runner_mod.PartialResponseCollectionError as exc:
-        if isinstance(exc.cause, runner_mod.RateLimitError):
+        if runner_mod.is_transient_llm_error(exc.cause):
             response_indexes = {
                 idx
                 for author, _ in exc.responses
                 if (idx := batch_index_from_author(author)) is not None
             }
             logger.warning(
-                "Batch review hit rate limit after %d/%d completed batch response(s); "
-                "continuing remaining batches individually: %s",
+                "Batch review hit transient LLM error (%s) after %d/%d completed batch "
+                "response(s); continuing remaining batches individually: %s",
+                type(exc.cause).__name__,
                 len(response_indexes),
                 batch_count,
                 exc.cause,
@@ -156,38 +187,39 @@ def _run_sequential_batch_review_mode(
                 for i, b in enumerate(batches)
                 if i not in completed_successfully and i not in failed_set
             ]
+            unreviewed: list[ReviewBatch] = []
             if failed_batches:
                 logger.warning(
                     "Recovering %d completed batch(es) that returned malformed findings "
-                    "before the rate limit.",
+                    "before the transient LLM error.",
                     len(failed_batches),
                 )
-                findings.extend(
-                    _run_isolated_batches_with_retry(
-                        pr_ctx,
-                        provider,
-                        review_standards,
-                        failed_batches,
-                        context_brief_attached=context_brief_attached,
-                        prompt_suffix=prompt_suffix,
-                        review_visible_lines=review_visible_lines,
-                        llm_config=llm_config,
-                        initial_retry_attempt=1,
-                    )
-                )
-            findings.extend(
-                _run_isolated_batches_with_retry(
+                retry_findings, retry_unreviewed = _run_isolated_batches_with_retry(
                     pr_ctx,
                     provider,
                     review_standards,
-                    remaining_batches,
+                    failed_batches,
                     context_brief_attached=context_brief_attached,
                     prompt_suffix=prompt_suffix,
                     review_visible_lines=review_visible_lines,
                     llm_config=llm_config,
+                    initial_retry_attempt=1,
                 )
+                findings.extend(retry_findings)
+                unreviewed.extend(retry_unreviewed)
+            retry_findings, retry_unreviewed = _run_isolated_batches_with_retry(
+                pr_ctx,
+                provider,
+                review_standards,
+                remaining_batches,
+                context_brief_attached=context_brief_attached,
+                prompt_suffix=prompt_suffix,
+                review_visible_lines=review_visible_lines,
+                llm_config=llm_config,
             )
-            return findings
+            findings.extend(retry_findings)
+            unreviewed.extend(retry_unreviewed)
+            return BatchReviewOutcome(findings, _unreviewed_paths(unreviewed))
         raise exc.cause from exc
     logger.info(
         "[batch] SequentialAgent runner returned: session=%s responses=%d",
@@ -201,6 +233,7 @@ def _run_sequential_batch_review_mode(
         for idx in missing_batch_response_indexes(responses, batch_count)
         if idx not in failed_indexes
     )
+    unreviewed: list[ReviewBatch] = []
     if failed_indexes:
         logger.warning(
             "Recovering %d batch(es) that failed JSON parsing or did not return a "
@@ -208,20 +241,19 @@ def _run_sequential_batch_review_mode(
             len(failed_indexes),
         )
         failed_batches = [batches[i] for i in failed_indexes if i < len(batches)]
-        findings.extend(
-            _run_isolated_batches_with_retry(
-                pr_ctx,
-                provider,
-                review_standards,
-                failed_batches,
-                context_brief_attached=context_brief_attached,
-                prompt_suffix=prompt_suffix,
-                review_visible_lines=review_visible_lines,
-                llm_config=llm_config,
-                initial_retry_attempt=1,
-            )
+        retry_findings, unreviewed = _run_isolated_batches_with_retry(
+            pr_ctx,
+            provider,
+            review_standards,
+            failed_batches,
+            context_brief_attached=context_brief_attached,
+            prompt_suffix=prompt_suffix,
+            review_visible_lines=review_visible_lines,
+            llm_config=llm_config,
+            initial_retry_attempt=1,
         )
-    return findings
+        findings.extend(retry_findings)
+    return BatchReviewOutcome(findings, _unreviewed_paths(unreviewed))
 
 
 def build_batch_review_content(
@@ -354,7 +386,7 @@ def missing_batch_response_indexes(responses: list[tuple[str, str]], batch_count
         if (idx := batch_index_from_author(author)) is not None
     }
     if not seen:
-        return []
+        return list(range(batch_count))
     return [idx for idx in range(batch_count) if idx not in seen]
 
 
@@ -369,7 +401,11 @@ def _make_retry_batch(batch_index: int, segments: tuple[ReviewSegment, ...]) -> 
 
 
 def _split_batch_for_retry(
-    batch: ReviewBatch, *, attempt: int, max_retries: int
+    batch: ReviewBatch,
+    *,
+    attempt: int,
+    max_retries: int,
+    token_counter: Callable[[str], int] = estimate_tokens,
 ) -> list[tuple[ReviewBatch, int]]:
     """Return smaller retry batches when a batch's response is malformed.
 
@@ -408,6 +444,7 @@ def _split_batch_for_retry(
         segment.path,
         segment.diff_text,
         segment_budget_tokens=smaller_budget,
+        token_counter=token_counter,
     )
     if len(smaller_segments) <= 1:
         return [(batch, retry_attempt)]
@@ -428,8 +465,9 @@ def _run_retry_batch(
     review_visible_lines: bool | None,
     llm_config: LLMConfig | None,
     attempt: int,
-) -> tuple[list[runner_mod.FindingV1], bool, bool]:
-    """Run one retry batch and return findings, malformed-output, and rate-limit flags."""
+    idle_timeout_seconds: float | None = None,
+) -> tuple[list[runner_mod.FindingV1], bool, Exception | None]:
+    """Run one retry batch and return findings, malformed-output flag, transient error."""
     session_id, _session_service, runner = create_agent_and_runner(
         pr_ctx,
         provider,
@@ -448,16 +486,21 @@ def _run_retry_batch(
     )
     content = build_batch_review_content(pr_ctx=pr_ctx, batch_count=1, retry_attempt=attempt)
     try:
-        responses = runner_mod._run_agent_and_collect_responses(runner, session_id, content)
+        responses = runner_mod._run_agent_and_collect_responses(
+            runner,
+            session_id,
+            content,
+            idle_timeout_seconds=idle_timeout_seconds,
+        )
     except runner_mod.PartialResponseCollectionError as exc:
-        if isinstance(exc.cause, runner_mod.RateLimitError):
-            return [], False, True
+        if runner_mod.is_transient_llm_error(exc.cause):
+            return [], False, exc.cause
         raise exc.cause from exc
 
     findings, failed_indexes = findings_from_batch_responses(responses)
     missing_indexes = missing_batch_response_indexes(responses, 1)
     failed_indexes.extend(index for index in missing_indexes if index not in failed_indexes)
-    return findings, bool(failed_indexes or not responses), False
+    return findings, bool(failed_indexes or not responses), None
 
 
 def _run_isolated_batches_with_retry(
@@ -472,15 +515,25 @@ def _run_isolated_batches_with_retry(
     llm_config: LLMConfig | None = None,
     initial_retry_attempt: int = 0,
     max_retries: int = 2,
-) -> list[runner_mod.FindingV1]:
-    """Run specified batches individually with adaptive retries and scope shrinking."""
+) -> tuple[list[runner_mod.FindingV1], list[ReviewBatch]]:
+    """Run specified batches individually with adaptive retries and scope shrinking.
+
+    Returns (findings, batches abandoned after retry exhaustion). Transient LLM
+    errors are retried up to ``LLMConfig.max_retries`` times per batch with
+    backoff, tracked separately from the malformed-output attempt counter.
+    """
+    effective_llm_config = llm_config or runner_mod.get_llm_config()
+    max_transient_retries = max(0, int(getattr(effective_llm_config, "max_retries", 3)))
+    idle_timeout_seconds = getattr(effective_llm_config, "timeout_seconds", None)
     all_findings: list[runner_mod.FindingV1] = []
-    pending: list[tuple[ReviewBatch, int]] = [
-        (batch, initial_retry_attempt) for batch in batches_to_run
+    unreviewed: list[ReviewBatch] = []
+    # (batch, malformed_attempt, transient_attempt)
+    pending: list[tuple[ReviewBatch, int, int]] = [
+        (batch, initial_retry_attempt, 0) for batch in batches_to_run
     ]
     while pending:
-        batch, attempt = pending.pop(0)
-        findings, malformed, rate_limited = _run_retry_batch(
+        batch, attempt, transient_attempt = pending.pop(0)
+        findings, malformed, transient_exc = _run_retry_batch(
             pr_ctx,
             provider,
             review_standards,
@@ -490,18 +543,28 @@ def _run_isolated_batches_with_retry(
             review_visible_lines=review_visible_lines,
             llm_config=llm_config,
             attempt=attempt,
+            idle_timeout_seconds=idle_timeout_seconds,
         )
-        if rate_limited:
+        if transient_exc is not None:
             runner_mod.logger.warning(
-                "Rate-limited on batch paths=%s (attempt %d/%d).",
+                "Transient LLM error (%s) on batch paths=%s (transient attempt %d/%d).",
+                type(transient_exc).__name__,
                 ", ".join(batch.paths),
-                attempt + 1,
-                max_retries + 1,
+                transient_attempt + 1,
+                max_transient_retries + 1,
             )
-            if attempt < max_retries:
-                pending.insert(0, (batch, attempt + 1))
+            if transient_attempt < max_transient_retries:
+                delay = runner_mod.retry_after_seconds(transient_exc)
+                if delay is None:
+                    delay = min(60.0, 2.0 ** transient_attempt) + random.uniform(0, 1)
+                _sleep(min(120.0, delay))
+                pending.insert(0, (batch, attempt, transient_attempt + 1))
             else:
-                runner_mod.logger.warning("Skipping batch after max retries due to rate limits.")
+                runner_mod.logger.warning(
+                    "Skipping batch after max transient LLM retries (%s).",
+                    type(transient_exc).__name__,
+                )
+                unreviewed.append(batch)
             continue
         if not malformed:
             all_findings.extend(findings)
@@ -522,19 +585,27 @@ def _run_isolated_batches_with_retry(
                 len(batch.segments),
                 len(smaller_batches),
             )
-            pending = smaller_batches + pending
+            pending = [
+                (smaller_batch, smaller_attempt, 0)
+                for smaller_batch, smaller_attempt in smaller_batches
+            ] + pending
             continue
         if attempt < max_retries:
-            pending.insert(0, (batch, attempt + 1))
+            pending.insert(0, (batch, attempt + 1, transient_attempt))
             continue
         runner_mod.logger.warning(
             "Skipping batch after max retries due to malformed findings output."
         )
-    return all_findings
+        unreviewed.append(batch)
+    return all_findings, unreviewed
 
 
 def build_review_batches_for_scope(
-    files: list[object], paths: list[str], full_diff: str, diff_budget: int
+    files: list[object],
+    paths: list[str],
+    full_diff: str,
+    diff_budget: int,
+    token_counter: Callable[[str], int] = estimate_tokens,
 ) -> list[ReviewBatch]:
     """Slice the scoped diff by file and pack the resulting segments into ordered batches."""
     scoped_diff_by_path = {
@@ -544,7 +615,7 @@ def build_review_batches_for_scope(
     if effective_diff_budget <= 0:
         effective_diff_budget = max(
             (
-                estimate_tokens(diff_text)
+                token_counter(diff_text)
                 for diff_text in scoped_diff_by_path.values()
                 if diff_text.strip()
             ),
@@ -560,6 +631,7 @@ def build_review_batches_for_scope(
         files,
         scoped_diff_by_path,
         diff_budget_tokens=effective_diff_budget,
+        token_counter=token_counter,
     )
 
 

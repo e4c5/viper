@@ -8,7 +8,7 @@ from code_review import orchestration_deps as runner_mod
 from code_review.config import CodeReviewAppConfig, LLMConfig, SCMConfig
 from code_review.models import PRContext
 from code_review.orchestration.context_enricher import ContextEnricher
-from code_review.orchestration.filter import ReviewFilter
+from code_review.orchestration.filter import ReviewFilter, configured_skip_labels
 from code_review.orchestration.idempotency import _idempotency_key_seen_in_comments
 from code_review.orchestration.reply_dismissal import ReplyDismissalHandler
 from code_review.orchestration.review_decision import ReviewDecisionHandler
@@ -18,10 +18,10 @@ from code_review.orchestration.runner_utils import (
     _run_reply_dismissal_llm,
 )
 from code_review.orchestration.standard_review import StandardReviewHandler
+from code_review.providers.url_policy import validate_scm_base_url
 from code_review.schemas.findings import FindingV1
 from code_review.schemas.review_decision_event import (
     ReviewDecisionConfig,
-    ReviewDecisionEventContext,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,7 @@ class ReviewOrchestrator:
         self._scm_config_override = scm_config
         self._llm_config_override = llm_config
         self._app_config_override = app_config
+        self._labels_capability_warned = False
 
     @property
     def owner(self) -> str:
@@ -93,6 +94,11 @@ class ReviewOrchestrator:
         token_val = (
             cfg.token.get_secret_value() if hasattr(cfg.token, "get_secret_value") else cfg.token
         )
+        validate_scm_base_url(
+            cfg.url,
+            allowed_hosts=getattr(cfg, "allowed_hosts", None),
+            block_private=bool(getattr(cfg, "block_private_hosts", False)),
+        )
         provider = runner_mod.get_provider(
             cfg.provider,
             cfg.url,
@@ -108,8 +114,21 @@ class ReviewOrchestrator:
         run_observability: ReviewRunObservability,
     ) -> list[FindingV1] | None:
         """Emit observability and return [] if skip config matches, else None."""
-        if not cfg.skip_label and not cfg.skip_title_pattern:
+        if not configured_skip_labels(cfg) and not cfg.skip_title_pattern:
             return None
+        if configured_skip_labels(cfg) and not self._labels_capability_warned:
+            try:
+                supports_labels = provider.capabilities().supports_pr_labels
+            except Exception:
+                supports_labels = True
+            if not supports_labels:
+                self._labels_capability_warned = True
+                notice = (
+                    "WARNING: SCM_SKIP_LABEL is set but this SCM provider has no "
+                    "PR labels; only SCM_SKIP_TITLE_PATTERN applies."
+                )
+                logger.warning(notice)
+                print(notice)
         pr_info = provider.get_pr_info(self.owner, self.repo, self.pr_number)
         skip_reason = ReviewFilter().should_skip(pr_info, cfg)
         if skip_reason is None:
@@ -126,7 +145,8 @@ class ReviewOrchestrator:
         incremental_base_sha: str = "",
     ) -> list[FindingV1] | None:
         """Short-circuit when this PR/range/config was already reviewed."""
-        if runner_mod.get_code_review_app_config().disable_idempotency:
+        app_cfg = self._app_config_override or runner_mod.get_code_review_app_config()
+        if getattr(app_cfg, "disable_idempotency", False):
             return None
         if not self.head_sha:
             return None

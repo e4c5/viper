@@ -59,6 +59,143 @@ class PartialResponseCollectionError(Exception):
     cause: Exception
 
 
+class LLMTimeoutError(Exception):
+    """Raised when no LLM event arrives within the configured idle timeout."""
+
+
+# ---------------------------------------------------------------------------
+# Transient LLM error recognition / Retry-After extraction
+# ---------------------------------------------------------------------------
+
+_TRANSIENT_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+_LITELLM_TRANSIENT_NAMES = (
+    "RateLimitError",
+    "Timeout",
+    "ServiceUnavailableError",
+    "InternalServerError",
+    "APIConnectionError",
+)
+_MAX_CAUSE_CHAIN_DEPTH = 10
+
+
+def _litellm_transient_types() -> tuple[type, ...]:
+    """Return litellm's transient exception types, or () when litellm is absent."""
+    try:
+        import litellm
+    except ImportError:
+        return ()
+    return tuple(
+        exc_type
+        for name in _LITELLM_TRANSIENT_NAMES
+        if isinstance(exc_type := getattr(litellm, name, None), type)
+    )
+
+
+def _iter_cause_chain(exc: BaseException):
+    """Yield exc and each __cause__/__context__ link, bounded and cycle-safe."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    depth = 0
+    while current is not None and id(current) not in seen and depth < _MAX_CAUSE_CHAIN_DEPTH:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+        depth += 1
+
+
+def _status_code_of(exc: BaseException) -> int | None:
+    """Return an int HTTP-style status from .status_code or .code, if present."""
+    for attr in ("status_code", "code"):
+        raw = getattr(exc, attr, None)
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def is_transient_llm_error(exc: BaseException) -> bool:
+    """Return True for retryable LLM failures (rate limits, timeouts, 5xx).
+
+    Walks the __cause__/__context__ chain so wrapped errors are recognised.
+    """
+    litellm_types = _litellm_transient_types()
+    for current in _iter_cause_chain(exc):
+        if isinstance(current, (RateLimitError, LLMTimeoutError)):
+            return True
+        if litellm_types and isinstance(current, litellm_types):
+            return True
+        status = _status_code_of(current)
+        if status is not None and status in _TRANSIENT_HTTP_STATUSES:
+            return True
+    return False
+
+
+def _parse_retry_delay_value(value: object) -> float | None:
+    """Parse a retry delay given as seconds (number or \"12s\" string)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return max(0.0, float(value))
+    if isinstance(value, str):
+        text = value.strip().removesuffix("s").strip()
+        try:
+            return max(0.0, float(text))
+        except ValueError:
+            return None
+    return None
+
+
+def _retry_after_from_headers(exc: BaseException) -> float | None:
+    """Read a numeric (or HTTP-date) Retry-After header off exc.response.headers."""
+    from code_review.providers.http_retry import parse_retry_after
+
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if not headers:
+        return None
+    raw = None
+    getter = getattr(headers, "get", None)
+    if getter is not None:
+        raw = getter("retry-after") or getter("Retry-After")
+    if not raw:
+        return None
+    return parse_retry_after(raw)
+
+
+def _retry_after_from_details(exc: BaseException) -> float | None:
+    """Dig a google-genai style retryDelay (e.g. \"12s\") out of exc.details."""
+    details = getattr(exc, "details", None)
+    if not details:
+        return None
+    items = details if isinstance(details, (list, tuple)) else [details]
+    for item in items:
+        if isinstance(item, dict) and "retryDelay" in item:
+            delay = _parse_retry_delay_value(item["retryDelay"])
+            if delay is not None:
+                return delay
+    if isinstance(details, dict) and "retryDelay" in details:
+        return _parse_retry_delay_value(details["retryDelay"])
+    return None
+
+
+def retry_after_seconds(exc: BaseException) -> float | None:
+    """Return a server-supplied retry delay in seconds, or None.
+
+    Checks a Retry-After response header first, then google-genai style
+    ``details`` entries carrying ``retryDelay``. Walks the cause chain.
+    """
+    for current in _iter_cause_chain(exc):
+        delay = _retry_after_from_headers(current)
+        if delay is not None:
+            return delay
+        delay = _retry_after_from_details(current)
+        if delay is not None:
+            return delay
+    return None
+
+
 # ---------------------------------------------------------------------------
 # ADK templating bypass
 # ---------------------------------------------------------------------------
@@ -185,7 +322,11 @@ def _should_wrap_partial_response_error(exc: Exception, event_count: int) -> boo
     # PydanticValidationError: ADK's output_schema validation failed on a truncated
     # response (MAX_TOKENS). The event was never yielded, so event_count may be 0.
     # Wrap it so callers see PartialResponseCollectionError instead of a bare crash.
-    return isinstance(exc, (RateLimitError, PydanticValidationError)) or event_count > 0
+    return (
+        is_transient_llm_error(exc)
+        or isinstance(exc, PydanticValidationError)
+        or event_count > 0
+    )
 
 
 def _raise_collection_error(
@@ -206,7 +347,11 @@ def _raise_collection_error(
 
 
 async def _collect_final_response_texts_async(
-    runner, session_id: str, content: types.Content
+    runner,
+    session_id: str,
+    content: types.Content,
+    *,
+    idle_timeout_seconds: float | None = None,
 ) -> list[tuple[str, str]]:
     """Run agent once and collect text-bearing final responses per participating agent."""
     asyncio.get_running_loop().set_exception_handler(_suppress_ssl_teardown_errors)
@@ -220,11 +365,33 @@ async def _collect_final_response_texts_async(
     responses: list[tuple[str, str]] = []
     event_count = 0
     try:
-        async for event in runner.run_async(
+        agen = runner.run_async(
             user_id=USER_ID,
             session_id=session_id,
             new_message=content,
-        ):
+        )
+        while True:
+            try:
+                if (
+                    isinstance(idle_timeout_seconds, (int, float))
+                    and idle_timeout_seconds > 0
+                ):
+                    event = await asyncio.wait_for(
+                        agen.__anext__(), timeout=idle_timeout_seconds
+                    )
+                else:
+                    event = await agen.__anext__()
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                try:
+                    await agen.aclose()
+                except Exception:
+                    pass
+                raise LLMTimeoutError(
+                    f"No LLM event within {idle_timeout_seconds}s "
+                    f"(idle timeout); aborting run after {event_count} event(s)."
+                ) from None
             event_count += 1
             _log_batch_event(event_count, event)
             _append_final_response_text(event, responses)
@@ -241,10 +408,18 @@ async def _collect_final_response_texts_async(
 
 
 def _run_agent_and_collect_responses(
-    runner, session_id: str, content: types.Content
+    runner,
+    session_id: str,
+    content: types.Content,
+    *,
+    idle_timeout_seconds: float | None = None,
 ) -> list[tuple[str, str]]:
     """Run agent once and return text-bearing final responses from all participating agents."""
-    return asyncio.run(_collect_final_response_texts_async(runner, session_id, content))
+    return asyncio.run(
+        _collect_final_response_texts_async(
+            runner, session_id, content, idle_timeout_seconds=idle_timeout_seconds
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

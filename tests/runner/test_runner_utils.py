@@ -79,7 +79,7 @@ async def test_collect_final_response_texts_async_wraps_post_event_runtime_error
 
 @pytest.mark.asyncio
 async def test_collect_final_response_texts_async_wraps_validation_error_before_any_events():
-    """pydantic.ValidationError (ADK output_schema on truncated response) is wrapped even with 0 events."""
+    """pydantic.ValidationError (ADK output_schema) is wrapped even with 0 events."""
     from code_review.schemas.findings import FindingsBatchV1
 
     try:

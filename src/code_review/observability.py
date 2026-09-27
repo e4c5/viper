@@ -66,7 +66,10 @@ def _init_prometheus() -> bool:
         _prometheus_duration_histogram = Histogram(
             "code_review_run_duration_seconds",
             "Run duration in seconds",
-            buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+            buckets=(
+                1.0, 5.0, 10.0, 30.0, 60.0, 120.0,
+                300.0, 600.0, 900.0, 1200.0, 1800.0, 3600.0,
+            ),
             registry=_prometheus_registry,
         )
         _prometheus_findings_counter = Counter(
