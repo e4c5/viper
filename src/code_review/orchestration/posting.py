@@ -156,16 +156,21 @@ class CommentPoster:
     # ------------------------------------------------------------------
 
     def post_started_review_comment(self, pr_info) -> bool:
-        """Post a started-review note when PR has no description.
+        """Post a 'review in progress' note on the PR.
 
-        The description is filled later by the LLM.
+        Posted on every PR so a run is visible before findings land. When the
+        PR has no description the note also promises the LLM will fill it.
         """
         if not pr_info:
             return False
         description = (getattr(pr_info, "description", "") or "").strip()
         if description:
-            return False
-        notes = "Viper is reviewing this pull request and will update the description shortly."
+            notes = (
+                "Viper is reviewing this pull request — "
+                "findings and a summary will be posted shortly."
+            )
+        else:
+            notes = "Viper is reviewing this pull request and will update the description shortly."
         try:
             self.provider.post_pr_summary_comment(
                 self.pr_ctx.owner, self.pr_ctx.repo, self.pr_ctx.pr_number, notes

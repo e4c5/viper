@@ -400,6 +400,14 @@ class CodeReviewAppConfig(BaseSettings):
             "Used by CI workflows that already posted the notice before invoking the reviewer."
         ),
     )
+    started_review_notice_enabled: bool = Field(
+        default=True,
+        validation_alias="CODE_REVIEW_STARTED_REVIEW_NOTICE_ENABLED",
+        description=(
+            "Post a 'review in progress' comment on the PR when a review starts. "
+            "Set to false to disable the notice entirely."
+        ),
+    )
     disable_idempotency: bool = Field(
         default=False,
         validation_alias="CODE_REVIEW_DISABLE_IDEMPOTENCY",

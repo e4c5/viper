@@ -1124,8 +1124,8 @@ def test_maybe_post_started_review_comment_does_not_update_description():
     assert "AGENTS.md" not in body  # file list must not appear
 
 
-def test_maybe_post_started_review_comment_skips_when_description_present():
-    """When PR already has a non-trivial description, no started-review comment is posted."""
+def test_maybe_post_started_review_comment_posts_when_description_present():
+    """PRs with a description still get a 'review in progress' comment."""
     provider = MagicMock()
     pr_info = MagicMock(
         title="T",
@@ -1134,12 +1134,15 @@ def test_maybe_post_started_review_comment_skips_when_description_present():
 
     _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info)
 
-    provider.post_pr_summary_comment.assert_not_called()
+    provider.post_pr_summary_comment.assert_called_once()
+    body = provider.post_pr_summary_comment.call_args[0][3]
+    assert "Viper" in body
+    assert "description" not in body  # no promise to rewrite an existing description
     provider.update_pr_description.assert_not_called()
 
 
-def test_maybe_post_started_review_comment_skips_when_description_is_short_but_intentional():
-    """Short non-empty descriptions should not trigger the started-review comment."""
+def test_maybe_post_started_review_comment_posts_when_description_is_short():
+    """Short non-empty descriptions still get the review-in-progress comment."""
     provider = MagicMock()
     pr_info = MagicMock(
         title="T",
@@ -1148,8 +1151,8 @@ def test_maybe_post_started_review_comment_skips_when_description_is_short_but_i
 
     _maybe_post_started_review_comment(provider, PRContext("o", "r", 1), pr_info)
 
+    provider.post_pr_summary_comment.assert_called_once()
     provider.update_pr_description.assert_not_called()
-    provider.post_pr_summary_comment.assert_not_called()
 
 
 def test_split_summary_for_pr_description_splits_at_walkthrough():

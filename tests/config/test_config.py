@@ -472,6 +472,22 @@ def test_code_review_app_started_review_comment_posted_from_env():
         assert cfg.started_review_comment_posted is True
 
 
+def test_code_review_app_started_review_notice_enabled_by_default():
+    with patch.dict(os.environ, {}, clear=True):
+        cfg = CodeReviewAppConfig()
+        assert cfg.started_review_notice_enabled is True
+
+
+def test_code_review_app_started_review_notice_enabled_from_env():
+    with patch.dict(
+        os.environ,
+        {"CODE_REVIEW_STARTED_REVIEW_NOTICE_ENABLED": "false"},
+        clear=True,
+    ):
+        cfg = CodeReviewAppConfig()
+        assert cfg.started_review_notice_enabled is False
+
+
 def test_code_review_app_reply_dismissal_enabled_by_default():
     with patch.dict(os.environ, {}, clear=True):
         cfg = CodeReviewAppConfig()
