@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 
 from google.genai import types
@@ -24,6 +24,46 @@ logger = logging.getLogger(__name__)
 
 # Module-level so tests can patch it; retry sleeps must never really sleep in tests.
 _sleep = time.sleep
+
+# Providers whose LiteLLM adapter maps reasoning_effort="none" to thinking disabled.
+# Retrying a MAX_TOKENS-truncated batch with thinking off is only attempted here.
+_PROVIDERS_WITH_REASONING_TOGGLE = frozenset({"deepseek"})
+
+
+def _reasoning_disabled_config(llm_config: LLMConfig | None) -> LLMConfig | None:
+    """Return a copy of the LLM config with reasoning disabled, or None if not applicable.
+
+    Reasoning models can spend the entire output allowance thinking and stop on
+    finish_reason=MAX_TOKENS before emitting any JSON. Shrinking the batch does not
+    reliably help because thinking expands to fill whatever budget is left, so a
+    truncated batch is retried with thinking off instead.
+    """
+    cfg = llm_config or runner_mod.get_llm_config()
+    if getattr(cfg, "provider", None) not in _PROVIDERS_WITH_REASONING_TOGGLE:
+        return None
+    if getattr(cfg, "reasoning_effort", None) == "none":
+        return None
+    if not hasattr(cfg, "model_copy"):
+        return None
+    return cfg.model_copy(update={"reasoning_effort": "none"})
+
+
+def _truncated_batches(
+    batches: list[ReviewBatch], truncated_authors: set[str]
+) -> list[ReviewBatch]:
+    """Map workflow authors that stopped on MAX_TOKENS back to their prepared batches."""
+    indexes = {
+        idx
+        for author in truncated_authors
+        if (idx := batch_index_from_author(author)) is not None
+    }
+    truncated = [b for b in batches if b.batch_index in indexes]
+    for batch in truncated:
+        logger.warning(
+            "Batch paths=%s stopped on the output token limit (finish_reason=MAX_TOKENS).",
+            ", ".join(batch.paths),
+        )
+    return truncated
 
 
 @dataclass(frozen=True)
@@ -156,12 +196,14 @@ def _run_sequential_batch_review_mode(
         batch_count,
     )
     effective_llm_config = llm_config or runner_mod.get_llm_config()
+    truncated_authors: set[str] = set()
     try:
         responses = runner_mod._run_agent_and_collect_responses(
             runner,
             session_id,
             content,
             idle_timeout_seconds=effective_llm_config.timeout_seconds,
+            truncated_authors=truncated_authors,
         )
     except runner_mod.PartialResponseCollectionError as exc:
         if runner_mod.is_transient_llm_error(exc.cause):
@@ -204,6 +246,7 @@ def _run_sequential_batch_review_mode(
                     review_visible_lines=review_visible_lines,
                     llm_config=llm_config,
                     initial_retry_attempt=1,
+                    truncated_batches=_truncated_batches(batches, truncated_authors),
                 )
                 findings.extend(retry_findings)
                 unreviewed.extend(retry_unreviewed)
@@ -251,6 +294,7 @@ def _run_sequential_batch_review_mode(
             review_visible_lines=review_visible_lines,
             llm_config=llm_config,
             initial_retry_attempt=1,
+            truncated_batches=_truncated_batches(batches, truncated_authors),
         )
         findings.extend(retry_findings)
     return BatchReviewOutcome(findings, _unreviewed_paths(unreviewed))
@@ -466,8 +510,15 @@ def _run_retry_batch(
     llm_config: LLMConfig | None,
     attempt: int,
     idle_timeout_seconds: float | None = None,
-) -> tuple[list[runner_mod.FindingV1], bool, Exception | None]:
-    """Run one retry batch and return findings, malformed-output flag, transient error."""
+    disable_reasoning: bool = False,
+) -> tuple[list[runner_mod.FindingV1], bool, Exception | None, bool]:
+    """Run one retry batch.
+
+    Returns findings, malformed-output flag, transient error, and whether the
+    response stopped on the output token limit (finish_reason=MAX_TOKENS).
+    """
+    if disable_reasoning:
+        llm_config = _reasoning_disabled_config(llm_config) or llm_config
     session_id, _session_service, runner = create_agent_and_runner(
         pr_ctx,
         provider,
@@ -485,22 +536,24 @@ def _run_retry_batch(
         retry_attempt=attempt,
     )
     content = build_batch_review_content(pr_ctx=pr_ctx, batch_count=1, retry_attempt=attempt)
+    truncated_authors: set[str] = set()
     try:
         responses = runner_mod._run_agent_and_collect_responses(
             runner,
             session_id,
             content,
             idle_timeout_seconds=idle_timeout_seconds,
+            truncated_authors=truncated_authors,
         )
     except runner_mod.PartialResponseCollectionError as exc:
         if runner_mod.is_transient_llm_error(exc.cause):
-            return [], False, exc.cause
+            return [], False, exc.cause, bool(truncated_authors)
         raise exc.cause from exc
 
     findings, failed_indexes = findings_from_batch_responses(responses)
     missing_indexes = missing_batch_response_indexes(responses, 1)
     failed_indexes.extend(index for index in missing_indexes if index not in failed_indexes)
-    return findings, bool(failed_indexes or not responses), None
+    return findings, bool(failed_indexes or not responses), None, bool(truncated_authors)
 
 
 def _run_isolated_batches_with_retry(
@@ -515,25 +568,38 @@ def _run_isolated_batches_with_retry(
     llm_config: LLMConfig | None = None,
     initial_retry_attempt: int = 0,
     max_retries: int = 2,
+    truncated_batches: Collection[ReviewBatch] = (),
 ) -> tuple[list[runner_mod.FindingV1], list[ReviewBatch]]:
     """Run specified batches individually with adaptive retries and scope shrinking.
 
     Returns (findings, batches abandoned after retry exhaustion). Transient LLM
     errors are retried up to ``LLMConfig.max_retries`` times per batch with
     backoff, tracked separately from the malformed-output attempt counter.
+
+    A batch whose response stopped on the output token limit (including any in
+    ``truncated_batches``) is retried with reasoning disabled when the provider
+    supports it, and its split children inherit that. Switching reasoning off
+    happens at most once per batch and does not consume a malformed-output attempt.
     """
     effective_llm_config = llm_config or runner_mod.get_llm_config()
     max_transient_retries = max(0, int(getattr(effective_llm_config, "max_retries", 3)))
     idle_timeout_seconds = getattr(effective_llm_config, "timeout_seconds", None)
     all_findings: list[runner_mod.FindingV1] = []
     unreviewed: list[ReviewBatch] = []
-    # (batch, malformed_attempt, transient_attempt)
-    pending: list[tuple[ReviewBatch, int, int]] = [
-        (batch, initial_retry_attempt, 0) for batch in batches_to_run
+    can_disable_reasoning = _reasoning_disabled_config(llm_config) is not None
+    # (batch, malformed_attempt, transient_attempt, reasoning_disabled)
+    pending: list[tuple[ReviewBatch, int, int, bool]] = [
+        (
+            batch,
+            initial_retry_attempt,
+            0,
+            can_disable_reasoning and any(batch is t for t in truncated_batches),
+        )
+        for batch in batches_to_run
     ]
     while pending:
-        batch, attempt, transient_attempt = pending.pop(0)
-        findings, malformed, transient_exc = _run_retry_batch(
+        batch, attempt, transient_attempt, reasoning_disabled = pending.pop(0)
+        findings, malformed, transient_exc, truncated = _run_retry_batch(
             pr_ctx,
             provider,
             review_standards,
@@ -544,6 +610,7 @@ def _run_isolated_batches_with_retry(
             llm_config=llm_config,
             attempt=attempt,
             idle_timeout_seconds=idle_timeout_seconds,
+            disable_reasoning=reasoning_disabled,
         )
         if transient_exc is not None:
             runner_mod.logger.warning(
@@ -558,7 +625,7 @@ def _run_isolated_batches_with_retry(
                 if delay is None:
                     delay = min(60.0, 2.0 ** transient_attempt) + random.uniform(0, 1)
                 _sleep(min(120.0, delay))
-                pending.insert(0, (batch, attempt, transient_attempt + 1))
+                pending.insert(0, (batch, attempt, transient_attempt + 1, reasoning_disabled))
             else:
                 runner_mod.logger.warning(
                     "Skipping batch after max transient LLM retries (%s).",
@@ -572,11 +639,21 @@ def _run_isolated_batches_with_retry(
 
         runner_mod.logger.warning(
             "JSON parse failed or no batch response was collected for batch paths=%s "
-            "(attempt %d/%d).",
+            "(attempt %d/%d, finish_reason=%s, reasoning_disabled=%s).",
             ", ".join(batch.paths),
             attempt + 1,
             max_retries + 1,
+            "MAX_TOKENS" if truncated else "other",
+            reasoning_disabled,
         )
+        if truncated and can_disable_reasoning and not reasoning_disabled:
+            runner_mod.logger.warning(
+                "Retrying batch paths=%s with reasoning disabled after it stopped on "
+                "the output token limit.",
+                ", ".join(batch.paths),
+            )
+            pending.insert(0, (batch, attempt, 0, True))
+            continue
         smaller_batches = _split_batch_for_retry(batch, attempt=attempt, max_retries=max_retries)
         if len(smaller_batches) > 1:
             runner_mod.logger.warning(
@@ -586,15 +663,19 @@ def _run_isolated_batches_with_retry(
                 len(smaller_batches),
             )
             pending = [
-                (smaller_batch, smaller_attempt, 0)
+                (smaller_batch, smaller_attempt, 0, reasoning_disabled)
                 for smaller_batch, smaller_attempt in smaller_batches
             ] + pending
             continue
         if attempt < max_retries:
-            pending.insert(0, (batch, attempt + 1, transient_attempt))
+            pending.insert(0, (batch, attempt + 1, transient_attempt, reasoning_disabled))
             continue
         runner_mod.logger.warning(
-            "Skipping batch after max retries due to malformed findings output."
+            "Skipping batch after max retries due to malformed findings output "
+            "(paths=%s, last finish_reason=%s, reasoning_disabled=%s).",
+            ", ".join(batch.paths),
+            "MAX_TOKENS" if truncated else "other",
+            reasoning_disabled,
         )
         unreviewed.append(batch)
     return all_findings, unreviewed

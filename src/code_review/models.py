@@ -209,6 +209,11 @@ def _task_config(primary: Any, task: Any) -> Any:
         provider=provider,
         model=_get_task_value(primary, task, "model"),
         api_key=api_key,
+        reasoning_effort=(
+            getattr(primary, "reasoning_effort", None)
+            if provider == primary.provider
+            else None
+        ),
     )
 
 
@@ -247,12 +252,19 @@ def _get_configured_model_from_config(config: Any) -> Any:
         return resolved_model
     litellm_model = _litellm_model_name(config.provider, resolved_model)
 
-    # DeepSeek's reasoning models spend a variable, sometimes very large, share of
-    # the output token budget on chain-of-thought before emitting the final JSON
-    # answer; capping reasoning effort leaves reliable headroom for the answer
-    # itself instead of truncating mid-thought.
+    # LLM_REASONING_EFFORT wins when set. Otherwise DeepSeek keeps thinking enabled
+    # explicitly. LiteLLM maps DeepSeek's reasoning_effort to on/off only ("none"
+    # disables thinking, anything else enables it), so this is not a budget: on
+    # large batches thinking can consume the whole output allowance before any
+    # JSON is emitted (finish_reason=MAX_TOKENS). The batch retry path switches
+    # such batches to "none" — see orchestration/execution.py.
+    reasoning_effort = getattr(config, "reasoning_effort", None)
+    if not isinstance(reasoning_effort, str):
+        reasoning_effort = None
+    if reasoning_effort is None and config.provider == "deepseek":
+        reasoning_effort = "high"
     extra_litellm_kwargs: dict = (
-        {"reasoning_effort": "high"} if config.provider == "deepseek" else {}
+        {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
     )
     if api_key:
         extra_litellm_kwargs["api_key"] = api_key
