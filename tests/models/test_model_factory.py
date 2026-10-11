@@ -133,15 +133,48 @@ def test_get_configured_model_deepseek_passes_api_key_per_instance(mock_get_conf
 
 
 @patch("code_review.models.get_llm_config")
-def test_get_configured_model_deepseek_caps_reasoning_effort(mock_get_config):
-    """DeepSeek's reasoning can consume the whole output budget before emitting
-    JSON; capping reasoning_effort leaves reliable headroom for the answer."""
+def test_get_configured_model_deepseek_defaults_reasoning_effort_high(mock_get_config):
+    """Unset LLM_REASONING_EFFORT keeps DeepSeek thinking explicitly enabled."""
     mock_get_config.return_value = MagicMock(
         provider="deepseek", model="deepseek-v4-pro", api_key=None
     )
     result = get_configured_model()
     if hasattr(result, "_additional_args"):
         assert result._additional_args.get("reasoning_effort") == "high"
+
+
+@pytest.mark.parametrize("provider", ["deepseek", "openrouter"])
+@patch("code_review.models.get_llm_config")
+def test_get_configured_model_honours_configured_reasoning_effort(mock_get_config, provider):
+    mock_get_config.return_value = MagicMock(
+        provider=provider, model="m", api_key=None, reasoning_effort="none"
+    )
+    result = get_configured_model()
+    if hasattr(result, "_additional_args"):
+        assert result._additional_args.get("reasoning_effort") == "none"
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("", None), ("  ", None), (" NONE ", "none")])
+def test_llm_config_normalizes_reasoning_effort(raw, expected):
+    from code_review.config import LLMConfig
+
+    assert LLMConfig(reasoning_effort=raw).reasoning_effort == expected
+
+
+@patch("code_review.models.get_summary_llm_config")
+@patch("code_review.models.get_llm_config")
+def test_summary_model_inherits_reasoning_effort_for_same_provider(
+    mock_get_config, mock_get_summary
+):
+    mock_get_config.return_value = MagicMock(
+        provider="deepseek", model="deepseek-v4-pro", api_key=None, reasoning_effort="none"
+    )
+    mock_get_summary.return_value = MagicMock(provider=None, model=None, api_key=None)
+    from code_review.models import get_configured_summary_model
+
+    result = get_configured_summary_model()
+    if hasattr(result, "_additional_args"):
+        assert result._additional_args.get("reasoning_effort") == "none"
 
 
 @patch("code_review.models.get_llm_config")

@@ -317,6 +317,17 @@ def _append_final_response_text(event, responses: list[tuple[str, str]]) -> None
     responses.append((author, "\n".join(texts)))
 
 
+def is_max_tokens_finish(event) -> bool:
+    """Return True when an event/response stopped on the output token limit."""
+    reason = getattr(event, "finish_reason", None)
+    if reason is None:
+        return False
+    name = getattr(reason, "name", None)
+    if not isinstance(name, str):
+        name = str(reason)
+    return name.upper().endswith("MAX_TOKENS")
+
+
 def _should_wrap_partial_response_error(exc: Exception, event_count: int) -> bool:
     """Return True when the caller should preserve partial responses with the error."""
     # PydanticValidationError: ADK's output_schema validation failed on a truncated
@@ -352,8 +363,13 @@ async def _collect_final_response_texts_async(
     content: types.Content,
     *,
     idle_timeout_seconds: float | None = None,
+    truncated_authors: set[str] | None = None,
 ) -> list[tuple[str, str]]:
-    """Run agent once and collect text-bearing final responses per participating agent."""
+    """Run agent once and collect text-bearing final responses per participating agent.
+
+    When ``truncated_authors`` is given, the author of every event that stopped on
+    the output token limit (finish_reason=MAX_TOKENS) is added to it.
+    """
     asyncio.get_running_loop().set_exception_handler(_suppress_ssl_teardown_errors)
 
     logger.debug(
@@ -394,6 +410,8 @@ async def _collect_final_response_texts_async(
                 ) from None
             event_count += 1
             _log_batch_event(event_count, event)
+            if truncated_authors is not None and is_max_tokens_finish(event):
+                truncated_authors.add(getattr(event, "author", "<unknown>"))
             _append_final_response_text(event, responses)
     except Exception as exc:
         _raise_collection_error(exc, responses=responses, event_count=event_count)
@@ -413,11 +431,16 @@ def _run_agent_and_collect_responses(
     content: types.Content,
     *,
     idle_timeout_seconds: float | None = None,
+    truncated_authors: set[str] | None = None,
 ) -> list[tuple[str, str]]:
     """Run agent once and return text-bearing final responses from all participating agents."""
     return asyncio.run(
         _collect_final_response_texts_async(
-            runner, session_id, content, idle_timeout_seconds=idle_timeout_seconds
+            runner,
+            session_id,
+            content,
+            idle_timeout_seconds=idle_timeout_seconds,
+            truncated_authors=truncated_authors,
         )
     )
 

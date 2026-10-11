@@ -82,6 +82,7 @@ Loaded via `LLMConfig` (`env_prefix="LLM_"`).
 | `LLM_TEMPERATURE` | `0.0` | Sampling temperature. |
 | `LLM_TIMEOUT_SECONDS` | `300.0` | Idle timeout between LLM events during a run; exceeding it aborts the run as a transient timeout and the batch is retried. |
 | `LLM_MAX_RETRIES` | `3` | Max retries per batch on transient LLM errors (rate limits, timeouts, HTTP 429/5xx) with exponential backoff. |
+| `LLM_REASONING_EFFORT` | unset | `none`, `minimal`, `low`, `medium` or `high`, passed to LiteLLM-backed providers. Unset keeps the provider default (DeepSeek: thinking enabled). For DeepSeek LiteLLM only maps this to thinking on/off — `none` disables thinking, any other value enables it. Independently, a DeepSeek batch that stops on `finish_reason=MAX_TOKENS` is retried once with thinking disabled. |
 
 **Ollama:** No API key required. `OLLAMA_API_BASE` (default `http://localhost:11434`) is the usual convention for LiteLLM/Ollama; see `docs/DEVELOPER_GUIDE.md`.
 

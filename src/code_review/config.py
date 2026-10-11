@@ -170,6 +170,15 @@ class LLMConfig(BaseSettings):
             "timeouts, HTTP 429/5xx) with exponential backoff."
         ),
     )
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] | None = Field(
+        default=None,
+        description=(
+            "Reasoning effort passed to LiteLLM-backed providers. Unset keeps the "
+            "provider default (DeepSeek: thinking enabled). 'none' disables "
+            "thinking; note LiteLLM maps every other DeepSeek value to "
+            "thinking enabled, with no budget."
+        ),
+    )
     diff_budget_ratio: float = Field(
         default=0.5,
         gt=0,
@@ -179,6 +188,15 @@ class LLMConfig(BaseSettings):
             "the rest is reserved for the prompt and response."
         ),
     )
+
+    @field_validator("reasoning_effort", mode="before")
+    @classmethod
+    def _normalize_reasoning_effort(cls, v: str | None) -> str | None:
+        """Treat blank values as unset and accept any casing."""
+        if v is None:
+            return None
+        normalized = str(v).strip().lower()
+        return normalized or None
 
     @field_validator("api_key", mode="before")
     @classmethod
