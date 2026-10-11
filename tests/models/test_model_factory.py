@@ -139,8 +139,7 @@ def test_get_configured_model_deepseek_defaults_reasoning_effort_high(mock_get_c
         provider="deepseek", model="deepseek-v4-pro", api_key=None
     )
     result = get_configured_model()
-    if hasattr(result, "_additional_args"):
-        assert result._additional_args.get("reasoning_effort") == "high"
+    assert result._additional_args.get("reasoning_effort") == "high"
 
 
 @pytest.mark.parametrize("provider", ["deepseek", "openrouter"])
@@ -150,8 +149,7 @@ def test_get_configured_model_honours_configured_reasoning_effort(mock_get_confi
         provider=provider, model="m", api_key=None, reasoning_effort="none"
     )
     result = get_configured_model()
-    if hasattr(result, "_additional_args"):
-        assert result._additional_args.get("reasoning_effort") == "none"
+    assert result._additional_args.get("reasoning_effort") == "none"
 
 
 @pytest.mark.parametrize(("raw", "expected"), [("", None), ("  ", None), (" NONE ", "none")])
@@ -173,8 +171,7 @@ def test_summary_model_inherits_reasoning_effort_for_same_provider(
     from code_review.models import get_configured_summary_model
 
     result = get_configured_summary_model()
-    if hasattr(result, "_additional_args"):
-        assert result._additional_args.get("reasoning_effort") == "none"
+    assert result._additional_args.get("reasoning_effort") == "none"
 
 
 @patch("code_review.models.get_llm_config")
@@ -183,8 +180,7 @@ def test_get_configured_model_non_deepseek_omits_reasoning_effort(mock_get_confi
         provider="openrouter", model="gpt-4.1-mini", api_key=None
     )
     result = get_configured_model()
-    if hasattr(result, "_additional_args"):
-        assert "reasoning_effort" not in result._additional_args
+    assert "reasoning_effort" not in result._additional_args
 
 
 @patch("code_review.models.get_llm_config")

@@ -202,11 +202,12 @@ def test_still_truncated_with_reasoning_off_falls_back_to_split_and_terminates(p
             initial_retry_attempt=1,
         )
     assert {p for b in unreviewed for p in b.paths} == {"a.py", "b.py"}
-    efforts = _efforts(plumbing)
-    # Reasoning is switched off once, and the split children inherit it.
-    assert efforts[0] is None
-    assert all(e == "none" for e in efforts[1:])
-    assert collect.call_count < 10
+    run_paths = [tuple(p for b in c.args[3] for p in b.paths) for c in plumbing.call_args_list]
+    # 1) original, 2) same unsplit batch with thinking off, 3+4) split halves that
+    # inherit thinking off, then both are skipped (attempt budget exhausted).
+    assert run_paths == [("a.py", "b.py"), ("a.py", "b.py"), ("a.py",), ("b.py",)]
+    assert _efforts(plumbing) == [None, "none", "none", "none"]
+    assert collect.call_count == 4
 
 
 def test_non_toggle_provider_keeps_existing_split_behaviour(plumbing):
@@ -280,3 +281,48 @@ def test_sequential_truncation_hands_batch_to_reasoning_off_retry(plumbing):
     # The single isolated retry ran batch 0 with thinking already off.
     assert _efforts(plumbing) == ["none"]
     assert plumbing.call_args_list[0].args[3] == [batches[0]]
+
+
+def test_collector_detects_max_tokens_on_real_adk_events():
+    """ADK Event subclasses LlmResponse, so a model's finish_reason reaches the
+    workflow event the collector sees. Guards the detection against ADK changes."""
+    from collections.abc import AsyncGenerator
+
+    from google.adk.agents import LlmAgent
+    from google.adk.models.base_llm import BaseLlm
+    from google.adk.models.llm_response import LlmResponse
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai import types
+
+    class _TruncatingLlm(BaseLlm):
+        model: str = "fake-truncating"
+
+        async def generate_content_async(
+            self, llm_request, stream=False
+        ) -> AsyncGenerator[LlmResponse, None]:
+            yield LlmResponse(
+                content=types.Content(role="model", parts=[types.Part(text='{"findings": [')]),
+                finish_reason=types.FinishReason.MAX_TOKENS,
+            )
+
+    runner = Runner(
+        agent=LlmAgent(name="batch_review_0", model=_TruncatingLlm(), instruction="x"),
+        app_name="t",
+        session_service=InMemorySessionService(),
+        auto_create_session=True,
+    )
+    truncated: set[str] = set()
+    responses = runner_utils._run_agent_and_collect_responses(
+        runner,
+        "session-1",
+        types.Content(role="user", parts=[types.Part(text="go")]),
+        truncated_authors=truncated,
+    )
+    assert responses == [("batch_review_0", '{"findings": [')]
+    assert truncated == {"batch_review_0"}
+
+
+def test_truncated_batches_matches_on_batch_index_not_position():
+    subset = [_make_batch("c.py", index=2), _make_batch("d.py", index=3)]
+    assert execution_mod._truncated_batches(subset, {"batch_review_3"}) == [subset[1]]

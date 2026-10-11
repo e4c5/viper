@@ -57,7 +57,7 @@ def _truncated_batches(
         for author in truncated_authors
         if (idx := batch_index_from_author(author)) is not None
     }
-    truncated = [b for i, b in enumerate(batches) if i in indexes]
+    truncated = [b for b in batches if b.batch_index in indexes]
     for batch in truncated:
         logger.warning(
             "Batch paths=%s stopped on the output token limit (finish_reason=MAX_TOKENS).",
