@@ -6,6 +6,8 @@ PyGithub>=2.5
 pydantic>=2.0
 pydantic-settings>=2.0
 typer>=0.12
-litellm>=1.83.7
+# Exact pin: matches the deployed image; LiteLLM ships several releases a week and
+# provider adapters (e.g. DeepSeek reasoning mapping) change behaviour. Upgrade deliberately.
+litellm==1.104.2
 # Transitive pin (via litellm/ADK): <1.2.1 is vulnerable (GHSA-6v7p-g79w-8964).
 msgpack>=1.2.1
