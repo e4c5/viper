@@ -3,9 +3,63 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 
 from code_review.config import get_llm_config, get_summary_llm_config, get_verification_llm_config
 from code_review.logging_config import emit_package_log
+
+# Everything else is a review agent, which ADK names per diff batch.
+_NON_REVIEW_TASKS = frozenset(
+    {"context_distillation", "reply_dismissal", "summary", "semantic_query", "verification"}
+)
+
+
+@dataclass
+class ReviewUsage:
+    """Token totals of the review-agent calls in one run, across all diff batches.
+
+    Support calls (verification, summary, ...) are excluded: they do not use the
+    model under comparison.
+    """
+
+    provider: str | None = None
+    model: str | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+    thoughts_tokens: int = 0
+
+
+_active_review_usage: ContextVar[ReviewUsage | None] = ContextVar(
+    "code_review_active_review_usage", default=None
+)
+
+
+@contextmanager
+def collect_review_usage(
+    provider: str | None = None, model: str | None = None
+) -> Iterator[ReviewUsage]:
+    """Total review-agent usage for the calls made inside this block.
+
+    *provider* and *model* also label the review agents' ``llm_usage`` log lines,
+    which otherwise name the process-wide model even for a per-run override.
+    """
+    usage = ReviewUsage(provider=provider, model=model)
+    token = _active_review_usage.set(usage)
+    try:
+        yield usage
+    finally:
+        _active_review_usage.reset(token)
+
+
+def _as_token_count(value: object) -> int:
+    try:
+        return int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return 0
 
 
 def _get_value(obj: object, *names: str) -> object:
@@ -77,6 +131,13 @@ def log_llm_usage(
     if total_tokens is None:
         total_tokens = _get_value(usage, "total_tokens")
 
+    collector = _active_review_usage.get()
+    if collector is not None and task not in _NON_REVIEW_TASKS:
+        collector.prompt_tokens += _as_token_count(prompt_tokens)
+        collector.completion_tokens += _as_token_count(completion_tokens)
+        collector.cached_tokens += _as_token_count(cached_tokens)
+        collector.thoughts_tokens += _as_token_count(thoughts_tokens)
+
     emit_package_log(
         logger,
         logging.INFO,
@@ -113,6 +174,10 @@ def log_adk_llm_usage(
 ) -> None:
     """Log usage from an ADK model response."""
     eff_provider, eff_model = effective_llm_identity(task)
+    collector = _active_review_usage.get()
+    if collector is not None and task not in _NON_REVIEW_TASKS:
+        eff_provider = collector.provider or eff_provider
+        eff_model = collector.model or eff_model
     resolved_provider = provider if provider is not None else eff_provider
     resolved_model = model if model is not None else eff_model
     log_llm_usage(

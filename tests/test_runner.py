@@ -264,6 +264,7 @@ def test_run_review_passes_explicit_config_objects_to_orchestrator():
         scm_config=scm_cfg,
         llm_config=llm_cfg,
         app_config=None,
+        idempotency_llm_config=None,
     )
     orchestrator.run.assert_called_once_with()
 

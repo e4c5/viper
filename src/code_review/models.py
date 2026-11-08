@@ -364,7 +364,11 @@ def get_max_output_tokens_for_config(config: LLMConfig) -> int:
 
 # Models that only support a fixed temperature (any other value raises UnsupportedParamsError).
 # For these models the parameter should be omitted entirely; their fixed value is their default.
-_FIXED_TEMPERATURE_PREFIXES: tuple[str, ...] = ("gpt-5", "claude-sonnet-5-5")
+_FIXED_TEMPERATURE_PREFIXES: tuple[str, ...] = (
+    "gpt-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+)
 
 
 def get_effective_temperature_for_model(

@@ -43,6 +43,7 @@ class ReviewOrchestrator:
         scm_config: SCMConfig | None = None,
         llm_config: LLMConfig | None = None,
         app_config: CodeReviewAppConfig | None = None,
+        idempotency_llm_config: LLMConfig | None = None,
     ):
         rd = review_decision or ReviewDecisionConfig()
         self.pr_ctx = PRContext(owner, repo, pr_number, head_sha)
@@ -56,6 +57,7 @@ class ReviewOrchestrator:
         self._scm_config_override = scm_config
         self._llm_config_override = llm_config
         self._app_config_override = app_config
+        self._idempotency_llm_config = idempotency_llm_config
         self._labels_capability_warned = False
 
     @property
@@ -153,7 +155,9 @@ class ReviewOrchestrator:
         incremental_base_sha = incremental_base_sha or self._incremental_base_sha(
             cfg, self.head_sha
         )
-        run_id = self.pr_ctx.idempotency_key(cfg, llm_cfg, incremental_base_sha)
+        run_id = self.pr_ctx.idempotency_key(
+            cfg, self._idempotency_llm_config or llm_cfg, incremental_base_sha
+        )
         if not _idempotency_key_seen_in_comments(existing_dicts, run_id):
             return None
         run_observability.finish(self.pr_ctx, [], [], [])
