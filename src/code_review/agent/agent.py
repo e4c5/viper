@@ -392,12 +392,13 @@ def _after_model_callback(
     callback_context: CallbackContext, llm_response: LlmResponse
 ) -> None:
     """Log normalized LLM usage and debug response text."""
-    if logger.isEnabledFor(logging.INFO):
-        log_adk_llm_usage(
-            logger,
-            task=callback_context.agent_name,
-            response=llm_response,
-        )
+    # Unconditional: this also feeds collect_review_usage, which must not depend
+    # on the log level.
+    log_adk_llm_usage(
+        logger,
+        task=callback_context.agent_name,
+        response=llm_response,
+    )
     if not logger.isEnabledFor(logging.DEBUG):
         return None
     parts = getattr(getattr(llm_response, "content", None), "parts", None) or ()

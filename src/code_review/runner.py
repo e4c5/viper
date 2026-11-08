@@ -34,6 +34,7 @@ def run_review(
     scm_config: SCMConfig | None = None,
     llm_config: LLMConfig | None = None,
     app_config: CodeReviewAppConfig | None = None,
+    idempotency_llm_config: LLMConfig | None = None,
 ) -> list[FindingV1]:
     """
     Run the code review agent (findings-only mode). Fetches existing comments,
@@ -51,6 +52,10 @@ def run_review(
     *scm_config*, *llm_config*, and *app_config* may be supplied programmatically to bypass
     process environment loading. When omitted, the existing environment-driven
     configuration path is preserved.
+
+    *idempotency_llm_config* computes the already-reviewed key from a different LLM
+    config than the one reviewing. A dry-run shadow passes the primary's config so
+    it skips exactly when the primary would.
     """
     import dataclasses
 
@@ -67,5 +72,6 @@ def run_review(
         scm_config=scm_config,
         llm_config=llm_config,
         app_config=app_config,
+        idempotency_llm_config=idempotency_llm_config,
     )
     return orchestrator.run()
