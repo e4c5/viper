@@ -266,6 +266,14 @@ def _get_configured_model_from_config(config: Any) -> Any:
     extra_litellm_kwargs: dict = (
         {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
     )
+    if (
+        config.provider == "anthropic"
+        and resolved_model == "claude-sonnet-5-5"
+        and reasoning_effort == "none"
+    ):
+        # LiteLLM omits `thinking` for "none", which leaves this model on adaptive
+        # thinking, and it rejects {"type": "disabled"}.
+        extra_litellm_kwargs = {"thinking": {"type": "between_tools"}}
     if api_key:
         extra_litellm_kwargs["api_key"] = api_key
     if config.provider == "anthropic":
@@ -273,7 +281,11 @@ def _get_configured_model_from_config(config: Any) -> Any:
         # can't be set on a content block here; LiteLLM's hook adds it. The system
         # prompt is the stable prefix shared by every diff batch in a review.
         extra_litellm_kwargs["cache_control_injection_points"] = [
-            {"location": "message", "role": "system"}
+            {
+                "location": "message",
+                "role": "system",
+                "control": {"type": "ephemeral", "ttl": "1h"},
+            }
         ]
 
     try:

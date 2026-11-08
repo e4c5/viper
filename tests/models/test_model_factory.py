@@ -592,7 +592,11 @@ def test_anthropic_models_mark_system_prompt_for_caching(mock_get_config):
     )
     model = get_configured_model()
     assert model._additional_args["cache_control_injection_points"] == [
-        {"location": "message", "role": "system"}
+        {
+            "location": "message",
+            "role": "system",
+            "control": {"type": "ephemeral", "ttl": "1h"},
+        }
     ]
 
 
@@ -618,3 +622,31 @@ def test_sonnet_5_5_metadata_caps_batch_window_and_output():
     assert metadata is not None
     assert metadata.context_window_tokens == 128000
     assert metadata.max_output_tokens_default == 32000
+
+
+@patch("code_review.models.get_llm_config")
+def test_sonnet_5_5_effort_none_sends_between_tools_thinking(mock_get_config):
+    pytest.importorskip("litellm")
+    mock_get_config.return_value = MagicMock(
+        provider="anthropic",
+        model="claude-sonnet-5-5",
+        api_key=None,
+        reasoning_effort="none",
+    )
+    model = get_configured_model()
+    assert model._additional_args["thinking"] == {"type": "between_tools"}
+    assert "reasoning_effort" not in model._additional_args
+
+
+@patch("code_review.models.get_llm_config")
+def test_sonnet_5_5_real_effort_is_passed_through(mock_get_config):
+    pytest.importorskip("litellm")
+    mock_get_config.return_value = MagicMock(
+        provider="anthropic",
+        model="claude-sonnet-5-5",
+        api_key=None,
+        reasoning_effort="medium",
+    )
+    model = get_configured_model()
+    assert model._additional_args["reasoning_effort"] == "medium"
+    assert "thinking" not in model._additional_args
