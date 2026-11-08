@@ -31,7 +31,7 @@ Only nodes with that label will run the pipeline.
 
 On every Jenkins **agent** (or controller, if builds run on the controller) that will run the pipeline:
 
-1. **Python 3.10 through 3.14** must be installed.
+1. **Python 3.11 through 3.14** must be installed.
 
 2. **Install the code-review-agent package.**  
    This is the Python project in this repo: it provides the `code-review` CLI (the same one that runs inside the Docker image). Installing it on the node lets the pipeline run that CLI directly instead of starting a container. You can install from source (Option A) or from a built wheel/PyPI (Option B).
@@ -96,7 +96,7 @@ On every Jenkins **agent** (or controller, if builds run on the controller) that
 | Item | With Docker | Without Docker |
 |------|-------------|----------------|
 | Agent execution | `docker run ... code-review-agent` (or podman) | `code-review --owner ...` on the node |
-| Prerequisites on node | Docker or Podman + agent image | Python 3.10–3.14 + installed `code-review` package |
+| Prerequisites on node | Docker or Podman + agent image | Python 3.11–3.14 + installed `code-review` package |
 | Jenkins config | (optional) `USE_INLINE_AGENT` for Podman issues | **Set `USE_INLINE_AGENT=true`** |
 | SCM / LLM | Often from Compose env | Set **`SCM_PROVIDER`**, **`SCM_URL`** (and LLM vars) in job or global env |
 
