@@ -272,7 +272,9 @@ def _get_configured_model_from_config(config: Any) -> Any:
         and reasoning_effort == "none"
     ):
         # LiteLLM omits `thinking` for "none", which leaves this model on adaptive
-        # thinking, and it rejects {"type": "disabled"}.
+        # thinking, and it rejects {"type": "disabled"}. "between_tools" is its
+        # thinking-off setting: no thinking before the first response, and these
+        # review agents have no tools.
         extra_litellm_kwargs = {"thinking": {"type": "between_tools"}}
     if api_key:
         extra_litellm_kwargs["api_key"] = api_key
