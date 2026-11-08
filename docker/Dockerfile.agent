@@ -20,7 +20,7 @@ COPY requirements/runtime.lock.txt ./requirements/runtime.lock.txt
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir --only-binary :all: --upgrade "pip==26.2.1" "setuptools==84.0.0" \
+    && python -m pip install --no-cache-dir --only-binary :all: --upgrade "pip==26.2.1" "setuptools==84.1.0" \
     && pip install --no-cache-dir --only-binary :all: --require-hashes -r requirements/runtime.lock.txt \
     && adduser --disabled-password --gecos "" --uid 1000 appuser
 

@@ -1,6 +1,6 @@
 # Keep this file in sync with [project.dependencies] + the `litellm` extra in
 # pyproject.toml (the runtime image must support every LLM provider).
-google-adk>=1.31.0
+google-adk>=2.12.0
 httpx>=0.28.0
 PyGithub>=2.5
 pydantic>=2.0
@@ -8,6 +8,8 @@ pydantic-settings>=2.0
 typer>=0.12
 # Exact pin: matches the deployed image; LiteLLM ships several releases a week and
 # provider adapters (e.g. DeepSeek reasoning mapping) change behaviour. Upgrade deliberately.
-litellm==1.104.2
+litellm==1.108.3
 # Transitive pin (via litellm/ADK): <1.2.1 is vulnerable (GHSA-6v7p-g79w-8964).
 msgpack>=1.2.1
+# Transitive pin (via litellm): <4.2.1 is vulnerable (CVE-2026-112940).
+filelock>=4.2.1

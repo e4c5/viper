@@ -579,3 +579,74 @@ def test_get_configured_model_two_keys_no_env_mutation(mock_get_config):
         assert os.environ.get("OPENAI_API_KEY") == "previous-openai"
     assert first._additional_args.get("api_key") == "sk-openrouter"
     assert second._additional_args.get("api_key") == "sk-openai"
+
+
+@patch("code_review.models.get_llm_config")
+def test_anthropic_models_mark_system_prompt_for_caching(mock_get_config):
+    pytest.importorskip("litellm")
+    mock_get_config.return_value = MagicMock(
+        provider="anthropic",
+        model="claude-sonnet-5-5",
+        api_key=None,
+        reasoning_effort=None,
+    )
+    model = get_configured_model()
+    assert model._additional_args["cache_control_injection_points"] == [
+        {
+            "location": "message",
+            "role": "system",
+            "control": {"type": "ephemeral", "ttl": "1h"},
+        }
+    ]
+
+
+@patch("code_review.models.get_llm_config")
+def test_non_anthropic_models_do_not_get_cache_markers(mock_get_config):
+    pytest.importorskip("litellm")
+    mock_get_config.return_value = MagicMock(
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        api_key=None,
+        reasoning_effort=None,
+    )
+    model = get_configured_model()
+    assert "cache_control_injection_points" not in model._additional_args
+
+
+def test_sonnet_5_5_omits_temperature():
+    assert get_effective_temperature_for_model("anthropic", "claude-sonnet-5-5", 0.0) is None
+
+
+def test_sonnet_5_5_metadata_caps_batch_window_and_output():
+    metadata = get_model_metadata("anthropic", "claude-sonnet-5-5")
+    assert metadata is not None
+    assert metadata.context_window_tokens == 128000
+    assert metadata.max_output_tokens_default == 32000
+
+
+@patch("code_review.models.get_llm_config")
+def test_sonnet_5_5_effort_none_sends_between_tools_thinking(mock_get_config):
+    pytest.importorskip("litellm")
+    mock_get_config.return_value = MagicMock(
+        provider="anthropic",
+        model="claude-sonnet-5-5",
+        api_key=None,
+        reasoning_effort="none",
+    )
+    model = get_configured_model()
+    assert model._additional_args["thinking"] == {"type": "between_tools"}
+    assert "reasoning_effort" not in model._additional_args
+
+
+@patch("code_review.models.get_llm_config")
+def test_sonnet_5_5_real_effort_is_passed_through(mock_get_config):
+    pytest.importorskip("litellm")
+    mock_get_config.return_value = MagicMock(
+        provider="anthropic",
+        model="claude-sonnet-5-5",
+        api_key=None,
+        reasoning_effort="medium",
+    )
+    model = get_configured_model()
+    assert model._additional_args["reasoning_effort"] == "medium"
+    assert "thinking" not in model._additional_args
