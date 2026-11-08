@@ -268,6 +268,13 @@ def _get_configured_model_from_config(config: Any) -> Any:
     )
     if api_key:
         extra_litellm_kwargs["api_key"] = api_key
+    if config.provider == "anthropic":
+        # ADK sends the instruction as a plain-string system message, so the marker
+        # can't be set on a content block here; LiteLLM's hook adds it. The system
+        # prompt is the stable prefix shared by every diff batch in a review.
+        extra_litellm_kwargs["cache_control_injection_points"] = [
+            {"location": "message", "role": "system"}
+        ]
 
     try:
         from google.adk.models.lite_llm import LiteLlm
@@ -343,7 +350,7 @@ def get_max_output_tokens_for_config(config: LLMConfig) -> int:
 
 # Models that only support a fixed temperature (any other value raises UnsupportedParamsError).
 # For these models the parameter should be omitted entirely; their fixed value is their default.
-_FIXED_TEMPERATURE_PREFIXES: tuple[str, ...] = ("gpt-5",)
+_FIXED_TEMPERATURE_PREFIXES: tuple[str, ...] = ("gpt-5", "claude-sonnet-5-5")
 
 
 def get_effective_temperature_for_model(

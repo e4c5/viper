@@ -38,7 +38,7 @@ dependencies = [
 litellm = [
     # Optional multi-provider LLM support (OpenAI, Anthropic, Ollama,
     # OpenRouter, DeepSeek). Required when LLM_PROVIDER is not gemini/vertex.
-    "litellm>=1.83.7",
+    "litellm==1.108.2",
     # Transitive floor: msgpack <1.2.1 is vulnerable (GHSA-6v7p-g79w-8964).
     "msgpack>=1.2.1",
     # Transitive floor: aiohttp <3.14.3 is vulnerable (CVE-2026-69244,
@@ -55,7 +55,7 @@ dev = [
     "ruff>=0.6",
     "respx>=0.21",
     # Tests exercise LiteLlm-backed providers.
-    "litellm>=1.83.7",
+    "litellm==1.108.2",
     # Same transitive security floors as the litellm extra — dev installs
     # litellm directly, bypassing that extra's constraints.
     "msgpack>=1.2.1",
