@@ -44,8 +44,6 @@ litellm = [
     # Transitive floor: aiohttp <3.14.3 is vulnerable (CVE-2026-69244,
     # CVE-2026-59881).
     "aiohttp>=3.14.3",
-    # Transitive floor: filelock <4.2.1 is vulnerable (CVE-2026-112940). 4.x needs Python 3.11+.
-    "filelock>=4.2.1; python_version >= '3.11'",
     # Transitive floor (via aiohttp): multidict <6.9.1 is vulnerable
     # (CVE-2026-104874).
     "multidict>=6.9.1",
@@ -62,8 +60,6 @@ dev = [
     # litellm directly, bypassing that extra's constraints.
     "msgpack>=1.2.1",
     "aiohttp>=3.14.3",
-    # Transitive floor: filelock <4.2.1 is vulnerable (CVE-2026-112940). 4.x needs Python 3.11+.
-    "filelock>=4.2.1; python_version >= '3.11'",
     "multidict>=6.9.1",
     "mypy>=1.10",
     "types-PyYAML>=6.0",
