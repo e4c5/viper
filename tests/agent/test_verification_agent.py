@@ -112,10 +112,28 @@ def test_verify_findings_empty_returns_input():
     assert verify_findings([], "diff") == []
 
 
-def test_verify_findings_all_high_passthrough(caplog):
-    findings = [_finding(confidence="high"), _finding(confidence=None)]
+def test_verify_findings_all_high_passthrough(monkeypatch):
+    def fail_batch(*args, **kwargs):
+        raise AssertionError("high-confidence findings must not be verified")
+
+    monkeypatch.setattr(va, "_verify_batch", fail_batch)
+    findings = [_finding(confidence="high"), _finding(confidence="high", code="x-2")]
     out = verify_findings(findings, "diff")
     assert out == findings
+
+
+def test_verify_findings_verifies_unset_confidence(monkeypatch):
+    """Batch reviews omit confidence, so an unset label must not skip verification."""
+    seen = []
+
+    def fake_batch(batch, diff_text, **kwargs):
+        seen.extend(f.code for _, f in batch)
+        return [], [], len(batch)
+
+    monkeypatch.setattr(va, "_verify_batch", fake_batch)
+    out = verify_findings([_finding(confidence=None, code="unset")], "diff")
+    assert seen == ["unset"]
+    assert out == []
 
 
 def test_verify_findings_merges_in_original_order(monkeypatch):
@@ -124,20 +142,21 @@ def test_verify_findings_merges_in_original_order(monkeypatch):
     f2 = _finding(confidence="medium", code="c2")
     f3 = _finding(confidence=None, code="c3")
 
-    def fake_batch(batch, diff_text):
-        # confirm only the second item in the batch
-        return [(batch[1][0], batch[1][1])], [], 1
+    def fake_batch(batch, diff_text, **kwargs):
+        # f0 (high) passes through; confirm only the second verified item (f2)
+        assert [f.code for _, f in batch] == ["c1", "c2", "c3"]
+        return [(batch[1][0], batch[1][1])], [], 2
 
     monkeypatch.setattr(va, "_verify_batch", fake_batch)
     out = verify_findings([f0, f1, f2, f3], "diff")
-    assert [f.code for f in out] == ["c0", "c2", "c3"]
+    assert [f.code for f in out] == ["c0", "c2"]
 
 
 def test_verify_findings_batches_over_max(monkeypatch):
     monkeypatch.setattr(va, "_MAX_FINDINGS_PER_BATCH", 2)
     calls = []
 
-    def fake_batch(batch, diff_text):
+    def fake_batch(batch, diff_text, **kwargs):
         calls.append(len(batch))
         return list(batch), [], 0
 
@@ -315,3 +334,80 @@ def test_create_verification_agent_prefers_verification_overrides():
         assert log_kwargs["model"] == "gpt-x"
         # max_output_tokens capped at 4096
         assert kwargs["generate_content_config"].max_output_tokens == 100
+
+
+def test_build_verification_prompt_includes_file_context_and_manifests():
+    content = "\n".join(f"row {n}" for n in range(1, 201))
+    batch = [(0, _finding(path="src/a.py", line=100))]
+    prompt = _build_verification_prompt(
+        batch,
+        _sample_diff(),
+        fetch=lambda path: content if path == "src/a.py" else None,
+        manifests="--- pyproject.toml ---\nrequires-python = \">=3.14\"",
+    )
+    assert prompt.index("Project manifests") < prompt.index("--- Finding 0 ---")
+    assert 'requires-python = ">=3.14"' in prompt
+    assert "file_context:" in prompt
+    assert "60: row 60" in prompt and "140: row 140" in prompt
+    assert "59: row 59" not in prompt and "141: row 141" not in prompt
+
+
+def test_build_verification_prompt_without_fetcher_has_no_file_context():
+    prompt = _build_verification_prompt([(0, _finding(path="src/a.py", line=2))], _sample_diff())
+    assert "file_context:" not in prompt
+    assert "Project manifests" not in prompt
+
+
+def test_verify_findings_fetches_each_file_once_and_tolerates_errors(monkeypatch):
+    calls = []
+    prompts = []
+
+    def fetch(path):
+        calls.append(path)
+        if path == "pyproject.toml":
+            return "[project]\nrequires-python = \">=3.14\""
+        if path == "src/a.py":
+            return "\n".join(f"row {n}" for n in range(1, 30))
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr(va, "_run_verification_agent", lambda prompt: prompts.append(prompt))
+    findings = [_finding(code="a", line=5), _finding(code="b", line=20)]
+    out = verify_findings(findings, _sample_diff(), file_fetcher=fetch)
+
+    assert out == findings  # agent returned None -> fail-open keeps both
+    assert sorted(set(calls)) == sorted(calls)  # no path fetched twice
+    assert set(va.PROJECT_MANIFESTS) <= set(calls)
+    assert "requires-python" in prompts[0]
+    assert "5: row 5" in prompts[0] and "20: row 20" in prompts[0]
+
+
+def test_file_context_strips_diff_prefix_only_when_path_as_given_fails():
+    files = {"src/a.py": "one\ntwo\nthree", "b/real.py": "real dir"}
+    fetched = []
+
+    def fetch(path):
+        fetched.append(path)
+        return files.get(path)
+
+    assert "2: two" in va._file_context(_finding(path="b/src/a.py", line=2), fetch)
+    assert fetched == ["b/src/a.py", "src/a.py"]
+
+    fetched.clear()
+    assert "1: real dir" in va._file_context(_finding(path="b/real.py", line=1), fetch)
+    assert fetched == ["b/real.py"]  # a real top-level b/ directory is not stripped
+
+    fetched.clear()
+    assert "1: one" in va._file_context(_finding(path="dst:///src/a.py", line=1), fetch)
+    assert fetched == ["src/a.py"]
+
+
+def test_file_context_caps_large_ranges():
+    content = "\n".join(f"row {n}" for n in range(1, 2001))
+    finding = FindingV1(
+        path="src/a.py", line=100, end_line=1900, severity="medium", code="x", message="m"
+    )
+    out = va._file_context(finding, lambda path: content)
+    last = va._FILE_CONTEXT_MAX_SPAN + 100 + va._FILE_CONTEXT_RADIUS
+    assert f"{last}: row {last}" in out
+    assert f"{last + 1}: row {last + 1}" not in out
+    assert "1900: row 1900" not in out
