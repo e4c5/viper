@@ -1,14 +1,14 @@
-"""Verification agent: second-opinion LLM pass for medium/low-confidence findings.
+"""Verification agent: second-opinion LLM pass over findings before they are posted.
 
-The main review agent stays conservative and labels uncertain findings with
-confidence="medium" or confidence="low".  Rather than silently dropping them in
-the refinement pipeline, this module runs a targeted verification call that
-presents each flagged finding alongside the relevant code snippet and asks the
-LLM to confirm or reject the concern.
+Every finding that is not labelled confidence="high" is sent for verification,
+including findings with no confidence label. Batch-mode reviews tell the model not
+to emit confidence, so an unset label is the normal case, not a sign of certainty.
+Only findings the reviewer itself marked high-confidence bypass the check.
 
-Only findings with confidence "medium" or "low" are sent for verification.
-High-confidence findings (and findings where confidence is None / unset) bypass
-verification entirely.
+Each finding is shown with the nearby diff lines and, when the caller supplies a
+file fetcher, a wider window of the file at the head commit plus the project's
+root manifests, so the verifier can see callers, definitions and the targeted
+language version that a few diff lines leave out.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from __future__ import annotations
 import json  # stdlib — no reason to defer
 import logging
 import uuid
+from collections.abc import Callable
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -31,6 +32,22 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _MAX_FINDINGS_PER_BATCH = 20  # avoid token blow-up on large PRs
+_FILE_CONTEXT_RADIUS = 40  # lines either side of the finding from the head-commit file
+_MAX_MANIFEST_LINES = 60
+_MAX_OUTPUT_TOKENS = 16384  # room for adaptive thinking before the verdict JSON
+
+# Root files that state the language version or runtime a project targets.
+PROJECT_MANIFESTS: tuple[str, ...] = (
+    "pyproject.toml",
+    "setup.cfg",
+    "package.json",
+    "tsconfig.json",
+    "go.mod",
+    "Cargo.toml",
+)
+
+# Returns a file's content at the reviewed head commit, or None when unavailable.
+FileFetcher = Callable[[str], str | None]
 
 
 class _VerificationVerdict(BaseModel):
@@ -69,8 +86,13 @@ For each finding you receive you will see:
 - message: the reviewer's concern
 - evidence: brief code quote supporting the concern (may be empty)
 - code_snippet: the relevant lines from the diff, with n: line-number annotations
+- file_context: (when available) a wider window of the whole file at the reviewed commit,
+  with line numbers, including code the diff does not show
+A "Project manifests" section may precede the findings: root files such as pyproject.toml
+or package.json, showing the language version and dependencies the project targets.
 
-Your task: decide whether each finding is a REAL problem visible in the code snippet.
+Your task: decide whether each finding is a REAL problem, using the snippet, the file
+context and the manifests.
 
 Output a JSON object {"verdicts": [...]} with one verdict per finding:
   - index: same integer as the input
@@ -80,8 +102,12 @@ Output a JSON object {"verdicts": [...]} with one verdict per finding:
 Rules:
 - "confirm" when the snippet supports or is consistent with the concern — not only when
   the snippet contains direct proof, but also when the concern is plausible given what is visible.
-- "reject" when the code_snippet actively contradicts the concern, or the concern relies on
-  context (e.g. an outer scope, a different file) that is entirely absent from the snippet.
+- "reject" when the snippet, the file context or the manifests contradict the concern: for
+  example the variable it calls undefined is defined in the file context, the case it says
+  is unhandled is handled a few lines away, or the "syntax error" is valid in the language
+  version the manifest declares.
+- "reject" when the concern depends on context (another file, a caller) that is entirely
+  absent and nothing visible makes it plausible.
 - Do NOT invent concerns beyond what the message describes.
 - Keep reason to one sentence.
 
@@ -148,7 +174,7 @@ def create_verification_agent():
     _temperature = get_effective_temperature_for_model(provider, model, 0.1)
     generate_content_config = types.GenerateContentConfig(
         **({"temperature": _temperature} if _temperature is not None else {}),
-        max_output_tokens=min(llm_cfg.max_output_tokens, 4096),
+        max_output_tokens=min(llm_cfg.max_output_tokens, _MAX_OUTPUT_TOKENS),
     )
     return Agent(
         model=get_configured_verification_model(),
@@ -249,21 +275,46 @@ def _extract_snippet_from_annotated(  # NOSONAR — linear scan; splitting adds 
 # Public API
 # ---------------------------------------------------------------------------
 
-_VERIFIABLE_CONFIDENCES: frozenset[str] = frozenset({"medium", "low"})
+def needs_verification(finding: FindingV1) -> bool:
+    """True unless the reviewer explicitly labelled the finding high-confidence."""
+    return finding.confidence != "high"
+
+
+def _cached_fetcher(fetch: FileFetcher | None) -> FileFetcher | None:
+    """Wrap ``fetch`` so each path is fetched at most once and failures become None."""
+    if fetch is None:
+        return None
+    cache: dict[str, str | None] = {}
+
+    def fetch_once(path: str) -> str | None:
+        if path not in cache:
+            try:
+                content = fetch(path)
+            except Exception as exc:  # noqa: BLE001 - context is best effort
+                logger.debug("Verification: could not fetch %s for context: %s", path, exc)
+                content = None
+            cache[path] = content if isinstance(content, str) and content else None
+        return cache[path]
+
+    return fetch_once
 
 
 def verify_findings(
     findings: list[FindingV1],
     diff_text: str,
+    file_fetcher: FileFetcher | None = None,
 ) -> list[FindingV1]:
-    """Run a second-opinion verification pass for medium/low-confidence findings.
+    """Run a second-opinion verification pass over findings not marked high-confidence.
 
-    High-confidence findings (and those without a confidence label) are returned
-    unchanged.  Medium/low-confidence findings are sent to the verification agent
-    in batches; only confirmed findings are kept.
+    Findings labelled ``confidence="high"`` are returned unchanged. All others,
+    including those with no confidence label, are sent to the verification agent
+    in batches; only confirmed (or fail-open) findings are kept.
 
-    Returns a new list preserving the original order of high-confidence findings
-    interleaved with confirmed lower-confidence ones.
+    ``file_fetcher`` returns a file's content at the reviewed head commit. When
+    given, each finding is shown with a wider window of its file and the prompt
+    includes the project's root manifests.
+
+    Returns a new list preserving the original order.
     """
     if not findings:
         return findings
@@ -272,24 +323,27 @@ def verify_findings(
     to_verify: list[tuple[int, FindingV1]] = []
 
     for idx, f in enumerate(findings):
-        if f.confidence in _VERIFIABLE_CONFIDENCES:
+        if needs_verification(f):
             to_verify.append((idx, f))
         else:
             high.append((idx, f))
 
     if not to_verify:
         logger.info(
-            "Verification: all %d finding(s) have high/unset confidence; skipping",
+            "Verification: all %d finding(s) have high confidence; skipping",
             len(findings),
         )
         return findings
 
     logger.info(
-        "Verification: %d high/unset-confidence finding(s) pass through; "
-        "%d medium/low-confidence finding(s) will be verified",
+        "Verification: %d high-confidence finding(s) pass through; "
+        "%d finding(s) will be verified",
         len(high),
         len(to_verify),
     )
+
+    fetch = _cached_fetcher(file_fetcher)
+    manifests = _project_manifests(fetch)
 
     confirmed: list[tuple[int, FindingV1]] = []
     fail_open_keeps: list[tuple[int, FindingV1]] = []
@@ -300,7 +354,9 @@ def verify_findings(
     # Process in batches to keep prompts manageable
     for batch_start in range(0, len(to_verify), _MAX_FINDINGS_PER_BATCH):
         batch = to_verify[batch_start : batch_start + _MAX_FINDINGS_PER_BATCH]
-        batch_confirmed, batch_fail_open, batch_rejected = _verify_batch(batch, diff_text)
+        batch_confirmed, batch_fail_open, batch_rejected = _verify_batch(
+            batch, diff_text, fetch=fetch, manifests=manifests
+        )
         confirmed.extend(batch_confirmed)
         fail_open_keeps.extend(batch_fail_open)
         total_confirmed += len(batch_confirmed)
@@ -324,6 +380,9 @@ def verify_findings(
 def _verify_batch(
     batch: list[tuple[int, FindingV1]],
     diff_text: str,
+    *,
+    fetch: FileFetcher | None = None,
+    manifests: str = "",
 ) -> tuple[list[tuple[int, FindingV1]], list[tuple[int, FindingV1]], int]:
     """Verify one batch of findings.
 
@@ -332,7 +391,7 @@ def _verify_batch(
     - ``fail_open_keeps``: findings kept because the agent failed or omitted a verdict.
     - ``rejected_count``: number of findings the agent explicitly rejected.
     """
-    prompt = _build_verification_prompt(batch, diff_text)
+    prompt = _build_verification_prompt(batch, diff_text, fetch=fetch, manifests=manifests)
     result = _run_verification_agent(prompt)
 
     if result is None:
@@ -380,9 +439,51 @@ def _verify_batch(
     return confirmed, fail_open, rejected
 
 
+def _project_manifests(fetch: FileFetcher | None) -> str:
+    """Return the root manifest files that exist, each truncated, as one prompt section."""
+    if fetch is None:
+        return ""
+    sections: list[str] = []
+    for name in PROJECT_MANIFESTS:
+        content = fetch(name)
+        if not content:
+            continue
+        lines = content.splitlines()
+        shown = "\n".join(lines[:_MAX_MANIFEST_LINES])
+        if len(lines) > _MAX_MANIFEST_LINES:
+            shown += f"\n... ({len(lines) - _MAX_MANIFEST_LINES} more lines)"
+        sections.append(f"--- {name} ---\n{shown}")
+    return "\n".join(sections)
+
+
+def _file_context(
+    finding: FindingV1,
+    fetch: FileFetcher | None,
+    radius: int = _FILE_CONTEXT_RADIUS,
+) -> str:
+    """Return numbered lines of the finding's file around its line, or ""."""
+    if fetch is None or not finding.path or not finding.line:
+        return ""
+    content = fetch(finding.path)
+    if not content:
+        return ""
+    lines = content.splitlines()
+    end_line = finding.line
+    if finding.end_line and finding.end_line > finding.line:
+        end_line = finding.end_line
+    start = max(1, finding.line - radius)
+    stop = min(len(lines), end_line + radius)
+    if start > len(lines):
+        return ""
+    return "\n".join(f"{n}: {lines[n - 1]}" for n in range(start, stop + 1))
+
+
 def _build_verification_prompt(
     batch: list[tuple[int, FindingV1]],
     diff_text: str,
+    *,
+    fetch: FileFetcher | None = None,
+    manifests: str = "",
 ) -> str:
     """Build the user message for one verification batch.
 
@@ -401,9 +502,13 @@ def _build_verification_prompt(
         annotated = ""
         diff_paths = frozenset()
 
-    blocks: list[str] = [f"Verify the following {len(batch)} finding(s):\n"]
+    blocks: list[str] = []
+    if manifests:
+        blocks.append(f"Project manifests (repository root, reviewed commit):\n{manifests}\n")
+    blocks.append(f"Verify the following {len(batch)} finding(s):\n")
     for local_idx, (_, finding) in enumerate(batch):
         snippet = _extract_snippet_from_annotated(finding, annotated, diff_paths)
+        file_context = _file_context(finding, fetch)
         block = (
             f"--- Finding {local_idx} ---\n"
             f"index: {local_idx}\n"
@@ -414,6 +519,8 @@ def _build_verification_prompt(
             f"evidence: {finding.evidence or '(none provided)'}\n"
             f"code_snippet:\n{snippet or '(not available)'}\n"
         )
+        if file_context:
+            block += f"file_context:\n{file_context}\n"
         blocks.append(block)
     return "\n".join(blocks)
 

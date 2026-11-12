@@ -571,7 +571,14 @@ class StandardReviewHandler:
             from code_review.agent.verification_agent import verify_findings
 
             to_verify = [f for f, _ in to_post]
-            verified_findings = verify_findings(to_verify, env.full_diff)
+            head_sha = self.head_sha
+
+            def fetch_head_file(path: str) -> str | None:
+                return provider.get_file_content(self.owner, self.repo, head_sha, path)
+
+            verified_findings = verify_findings(
+                to_verify, env.full_diff, file_fetcher=fetch_head_file
+            )
             verified_set = set(verified_findings)
             to_post = [item for item in to_post if item[0] in verified_set]
         except Exception as exc:

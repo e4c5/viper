@@ -71,6 +71,20 @@ This is a priority guide, not a stop condition. Analyze all axes for every file.
 have findings at multiple priority levels, surface them all — but ensure higher-priority
 findings appear first and their messages are the most precise and actionable."""
 
+_SHARED_SEVERITY_RUBRIC = """\
+IMPORTANT — Severity (rate what the code can actually do, not the worst case you can imagine):
+- high: only when you can name the concrete path by which normal use, with inputs the code
+  really receives, causes data loss or corruption, a security breach, a crash, or a broken
+  core feature. If the problem needs an unusual input, a misconfiguration, a caller you have
+  not seen, or another file to be wrong, it is not high.
+- medium: a real bug with limited reach (an edge case, a degraded but working path, an error
+  that is reported badly), or a missing check on input that does reach this code.
+- low: defensive hardening, an unlikely edge case, or maintainability with a real cost.
+- nit: style, naming, wording.
+- Before claiming a syntax or language-feature error, consider the language version the
+  project targets; syntax that is new in a recent version is not an error there.
+- When unsure between two levels, choose the lower one."""
+
 _SHARED_ANALYSIS_METHODOLOGY = """\
 IMPORTANT — Analysis methodology (expert-level rigor):
 - For each changed file, first understand what the code DOES: its purpose, inputs, outputs, and side effects.
@@ -120,6 +134,7 @@ CRITICAL - Fix guidance fields:
 - suggested_patch: Optional but highly recommended for fixable issues.
 - agent_fix_prompt: Whenever a patch is provided or a fix is identified, you MUST include a concise but complete natural-language prompt that a downstream AI coding agent can use to implement the fix."""
     + "\n\n" + _SHARED_FINDING_PRIORITY
+    + "\n\n" + _SHARED_SEVERITY_RUBRIC
     + "\n\n" + _SHARED_ANALYSIS_METHODOLOGY
     + "\n\n" + _SHARED_MESSAGE_RULES
     + """
@@ -227,6 +242,7 @@ BATCH MODE — Required and permitted output fields only:
   These inflate response size and will be collected in a later enrichment step.
 - category is optional; omit it to keep responses short."""
     + "\n\n" + _SHARED_FINDING_PRIORITY
+    + "\n\n" + _SHARED_SEVERITY_RUBRIC
     + "\n\n" + _SHARED_ANALYSIS_METHODOLOGY
     + "\n\n" + _SHARED_MESSAGE_RULES
     + """
