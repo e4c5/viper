@@ -379,3 +379,35 @@ def test_verify_findings_fetches_each_file_once_and_tolerates_errors(monkeypatch
     assert set(va.PROJECT_MANIFESTS) <= set(calls)
     assert "requires-python" in prompts[0]
     assert "5: row 5" in prompts[0] and "20: row 20" in prompts[0]
+
+
+def test_file_context_strips_diff_prefix_only_when_path_as_given_fails():
+    files = {"src/a.py": "one\ntwo\nthree", "b/real.py": "real dir"}
+    fetched = []
+
+    def fetch(path):
+        fetched.append(path)
+        return files.get(path)
+
+    assert "2: two" in va._file_context(_finding(path="b/src/a.py", line=2), fetch)
+    assert fetched == ["b/src/a.py", "src/a.py"]
+
+    fetched.clear()
+    assert "1: real dir" in va._file_context(_finding(path="b/real.py", line=1), fetch)
+    assert fetched == ["b/real.py"]  # a real top-level b/ directory is not stripped
+
+    fetched.clear()
+    assert "1: one" in va._file_context(_finding(path="dst:///src/a.py", line=1), fetch)
+    assert fetched == ["src/a.py"]
+
+
+def test_file_context_caps_large_ranges():
+    content = "\n".join(f"row {n}" for n in range(1, 2001))
+    finding = FindingV1(
+        path="src/a.py", line=100, end_line=1900, severity="medium", code="x", message="m"
+    )
+    out = va._file_context(finding, lambda path: content)
+    last = va._FILE_CONTEXT_MAX_SPAN + 100 + va._FILE_CONTEXT_RADIUS
+    assert f"{last}: row {last}" in out
+    assert f"{last + 1}: row {last + 1}" not in out
+    assert "1900: row 1900" not in out

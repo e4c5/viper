@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_FINDINGS_PER_BATCH = 20  # avoid token blow-up on large PRs
 _FILE_CONTEXT_RADIUS = 40  # lines either side of the finding from the head-commit file
+_FILE_CONTEXT_MAX_SPAN = 120  # cap on end_line - line, so a huge range cannot pull in a whole file
 _MAX_MANIFEST_LINES = 60
 _MAX_OUTPUT_TOKENS = 16384  # room for adaptive thinking before the verdict JSON
 
@@ -456,6 +457,25 @@ def _project_manifests(fetch: FileFetcher | None) -> str:
     return "\n".join(sections)
 
 
+def _fetch_finding_file(path: str, fetch: FileFetcher) -> str | None:
+    """Fetch the file a finding names, tolerating diff-style path prefixes.
+
+    Provider prefixes (``dst://``) and leading slashes are always removed. A leading
+    ``a/`` or ``b/`` may be a diff-header prefix or a real top-level directory, so
+    the path is tried as given first and with that prefix removed only if it fails.
+    """
+    from code_review.diff.utils import normalize_path
+
+    as_given = normalize_path(path, strip_git_prefixes=False)
+    content = fetch(as_given)
+    if content:
+        return content
+    stripped = normalize_path(path)
+    if stripped != as_given:
+        return fetch(stripped)
+    return None
+
+
 def _file_context(
     finding: FindingV1,
     fetch: FileFetcher | None,
@@ -464,13 +484,13 @@ def _file_context(
     """Return numbered lines of the finding's file around its line, or ""."""
     if fetch is None or not finding.path or not finding.line:
         return ""
-    content = fetch(finding.path)
+    content = _fetch_finding_file(finding.path, fetch)
     if not content:
         return ""
     lines = content.splitlines()
     end_line = finding.line
     if finding.end_line and finding.end_line > finding.line:
-        end_line = finding.end_line
+        end_line = min(finding.end_line, finding.line + _FILE_CONTEXT_MAX_SPAN)
     start = max(1, finding.line - radius)
     stop = min(len(lines), end_line + radius)
     if start > len(lines):
